@@ -2,7 +2,9 @@
 
 ## Overview
 
-`@memohai/web` is the management UI for Memoh, built with Vue 3 + Vite. It provides a chat interface for interacting with bots, plus visual configuration for bots, models, channels, memory, and more.
+`@memohai/web` is the browser management UI for Memoh, built with Vue 3 + Vite. It provides the chat interface for interacting with bots, plus visual configuration for bots, models, channels, memory, workspace display, and more.
+
+In deploy/server mode this package is served as the standalone Web frontend. The native desktop client reuses many of the same pages, stores, routes, i18n files, API client helpers, and design tokens through `@memohai/web` exports, but desktop owns Electron windows, local server startup, embedded Qdrant, tray behavior, and bundled resources. Keep Web usable as a pure browser app.
 
 ## Tech Stack
 
@@ -105,13 +107,18 @@ src/
 │   ├── login/                 #   Login page
 │   ├── main-section/          #   Chat section layout (bot sidebar + main container)
 │   ├── settings-section/      #   Settings section layout (settings sidebar + KeepAlive)
-│   ├── home/                  #   Chat interface (used by both `/` and `/chat/:botId?/:sessionId?`)
-│   │   ├── index.vue          #     Route ↔ store sync, session sidebar + chat area
+│   ├── home/                  #   Chat interface (used by both `/` and `/chat/:botId?`)
+│   │   ├── index.vue          #     Route ↔ store sync, chat sidebar + workspace area
 │   │   ├── composables/       #     Page-specific composables
 │   │   │   ├── useFileManagerProvider.ts  # File manager context
 │   │   │   └── useMediaGallery.ts         # Media gallery state
-│   │   └── components/        #     Chat UI components (28 files)
+│   │   └── components/        #     Chat UI components
 │   │       ├── chat-area.vue          # Main chat area (messages, input, attachments)
+│   │       ├── chat-sidebar.vue       # Left workspace sidebar (sessions, files, tools)
+│   │       ├── chat-workspace.vue     # Main workspace host (chat, files, terminal, display)
+│   │       ├── workspace-tab-bar.vue  # Workspace tabs and terminal/display actions
+│   │       ├── terminal-pane.vue      # Interactive workspace terminal
+│   │       ├── display-pane.vue       # Workspace desktop/browser display over WebRTC
 │   │       ├── session-sidebar.vue    # Session list sidebar (search, filter, CRUD)
 │   │       ├── session-info-panel.vue # Session info panel
 │   │       ├── chat-header.vue        # Chat top bar (status, step indicator)
@@ -130,12 +137,14 @@ src/
 │   │       ├── tool-call-detail-generic.vue # Generic input/result JSON detail
 │   │       ├── schedule-trigger-block.vue  # Schedule trigger display
 │   │       └── heartbeat-trigger-block.vue # Heartbeat trigger display
-│   ├── bots/                  #   Bot list + detail (tabs: overview, memory, channels, etc.)
-│   │   ├── index.vue          #     Bot grid with create dialog
+│   ├── bots/                  #   Bot list + detail (tabs: overview, desktop, container, memory, channels, etc.)
+│   │   ├── index.vue          #     Bot grid
+│   │   ├── new.vue            #     Create bot flow
 │   │   ├── detail.vue         #     Bot detail with tabbed interface
-│   │   └── components/        #     Bot sub-components (27 files)
+│   │   └── components/        #     Bot sub-components
 │   │       ├── bot-overview.vue       # Bot overview tab
 │   │       ├── bot-settings.vue       # Bot settings tab
+│   │       ├── bot-desktop.vue        # Workspace display/runtime tab
 │   │       ├── bot-channels.vue       # Channel configuration tab
 │   │       ├── bot-memory.vue         # Memory configuration tab
 │   │       ├── bot-mcp.vue            # MCP connections tab
@@ -143,13 +152,12 @@ src/
 │   │       ├── bot-heartbeat.vue      # Heartbeat configuration tab
 │   │       ├── bot-email.vue          # Email configuration tab
 │   │       ├── bot-container.vue      # Container management tab
-│   │       ├── bot-files.vue          # File browser tab
-│   │       ├── bot-terminal.vue       # Terminal tab
+│   │       ├── bot-network.vue        # Workspace network tab
+│   │       ├── bot-tool-approval.vue  # Tool approval settings tab
 │   │       ├── bot-skills.vue         # Skills tab
 │   │       ├── bot-access.vue         # Access control tab
 │   │       ├── bot-compaction.vue     # Compaction settings tab
 │   │       ├── bot-card.vue           # Bot card component
-│   │       ├── create-bot.vue         # Create bot dialog
 │   │       ├── model-select.vue       # Model selection dropdown
 │   │       ├── model-options.vue      # Model options configuration
 │   │       ├── reasoning-effort-select.vue  # Reasoning effort selector
@@ -164,9 +172,11 @@ src/
 │   ├── web-search/            #   Web search provider management
 │   ├── memory/                #   Memory provider management
 │   ├── speech/                #   TTS / speech provider & model management
+│   ├── transcription/         #   Transcription provider & model management
 │   ├── email/                 #   Email provider management
 │   ├── supermarket/           #   Supermarket (template/skill marketplace)
 │   ├── usage/                 #   Token usage statistics
+│   ├── appearance/            #   Theme / language / appearance settings
 │   ├── profile/               #   User profile settings (password)
 │   ├── platform/              #   Platform management
 │   ├── about/                 #   About page
@@ -178,6 +188,8 @@ src/
 │   ├── capabilities.ts        #   Server capabilities (container backend)
 │   ├── chat-selection.ts      #   Current bot/session selection (localStorage persisted)
 │   ├── chat-list.ts           #   Chat messages, streaming state, SSE/WS event processing
+│   ├── workspace-tabs.ts      #   Chat/file/terminal/display tab state
+│   ├── display-snapshots.ts   #   Latest display screenshots keyed by bot/session/tab
 │   └── chat-list.utils.ts     #   Chat list utility functions (+ chat-list.utils.test.ts)
 ├── stores/                    # Additional stores (non-core)
 │   └── supermarket-mcp-draft.ts #  Supermarket MCP draft state
@@ -186,6 +198,8 @@ src/
     ├── date-time.ts           #   Date/time formatting
     ├── date-time.test.ts      #   Date/time tests
     ├── channel-type-label.ts  #   Channel type label utilities
+    ├── bot-workspace.ts       #   Local-vs-container workspace detection helpers
+    ├── display-snapshot.ts    #   Browser-safe display snapshot capture helpers
     ├── key-value-tags.ts      #   Tag ↔ Record conversion
     ├── key-value-tags.test.ts #   Tag conversion tests
     ├── image-ref.ts           #   Image reference URL resolution
@@ -203,23 +217,26 @@ The app uses a two-section layout architecture:
 | Path | Name | Component | Description |
 |------|------|-----------|-------------|
 | `/` | home | `home/index.vue` | Home — empty state when no bot selected |
-| `/chat/:botId?/:sessionId?` | chat | `home/index.vue` | Chat interface with bot + session params |
+| `/chat/:botId?` | chat | `home/index.vue` | Chat interface with optional bot param; active session is stored in Pinia/localStorage |
 
-Both routes render the same `home/index.vue` component. The `home` route shows an empty state; the `chat` route auto-selects a bot and optionally a session based on URL params. URL and store state are bidirectionally synced.
+Both routes render the same `home/index.vue` component. The `home` route shows an empty state; the `chat` route auto-selects a bot based on the URL param. Session selection lives in the chat stores and workspace tabs rather than in the route path.
 
 ### Settings Section (`/settings`)
 
 | Path | Name | Component | Description |
 |------|------|-----------|-------------|
 | `/settings/bots` | bots | `bots/index.vue` | Bot list grid |
+| `/settings/bots/new` | bot-new | `bots/new.vue` | Create bot flow |
 | `/settings/bots/:botId` | bot-detail | `bots/detail.vue` | Bot detail with tabs |
 | `/settings/providers` | providers | `providers/index.vue` | LLM provider & model management |
 | `/settings/web-search` | web-search | `web-search/index.vue` | Web search provider management |
 | `/settings/memory` | memory | `memory/index.vue` | Memory provider management |
 | `/settings/speech` | speech | `speech/index.vue` | TTS / speech provider & model management |
+| `/settings/transcription` | transcription | `transcription/index.vue` | Transcription provider & model management |
 | `/settings/email` | email | `email/index.vue` | Email provider management |
 | `/settings/supermarket` | supermarket | `supermarket/index.vue` | Template/skill marketplace |
 | `/settings/usage` | usage | `usage/index.vue` | Token usage statistics |
+| `/settings/appearance` | appearance | `appearance/index.vue` | Theme, locale, and appearance settings |
 | `/settings/profile` | profile | `profile/index.vue` | User profile settings |
 | `/settings/platform` | platform | `platform/index.vue` | Platform management |
 | `/settings/about` | about | `about/index.vue` | About page |
@@ -250,15 +267,16 @@ Two-section layout architecture, both sharing the same `MainLayout` wrapper:
    - **MainContainer** (`components/main-container/`) — `<KeepAlive>` wrapped `<RouterView>` for chat pages.
 
 3. **Settings Section** (`pages/settings-section/`) — Uses `MainLayout` with:
-   - **SettingsSidebar** (`components/settings-sidebar/`) — Collapsible settings navigation. Top has a "back to chat" button that restores the last selected bot/session. Menu items: Bots, Providers, Web Search, Memory, Speech, Email, Supermarket, Usage, Profile, About.
+   - **SettingsSidebar** (`components/settings-sidebar/`) — Collapsible settings navigation. Top has a "back to chat" button that restores the last selected bot/session. Menu items include Bots, Providers, Web Search, Memory, Speech, Transcription, Email, Supermarket, Usage, Appearance, Profile, Platform, and About.
    - **SidebarInset** — `<KeepAlive>` wrapped `<RouterView>` for settings pages.
 
 4. **Home/Chat Page** (`pages/home/`) — Internal layout:
-   - **SessionSidebar** — Left panel: session search, source filter, new session button, session list.
-   - **ChatArea** — Center panel: message list with scroll, input area with attachments.
+   - **ChatSidebar** — Left panel: session search/filter/CRUD plus file/tool affordances.
+   - **ChatWorkspace** — Main panel: tabbed chat, file viewer/editor, terminal panes, and display panes.
+   - **ChatArea** — Message list with scroll and input area with attachments.
    - **SessionInfoPanel** — Right panel: session info display.
 
-Several settings pages use **MasterDetailSidebarLayout** (`components/master-detail-sidebar-layout/`) for left-sidebar + detail-panel patterns (providers, web search, email, memory, speech).
+Several settings pages use **MasterDetailSidebarLayout** (`components/master-detail-sidebar-layout/`) for left-sidebar + detail-panel patterns (providers, web search, email, memory, speech, transcription).
 
 ## CSS & Theming
 
@@ -410,6 +428,8 @@ SDK also generates colada helpers: `getBotsQuery()`, `postBotsMutation()`, query
 | `capabilities` | `capabilities` | Server feature flags (container backend, snapshot support), loaded once from `getPing()` |
 | `chat-selection` | `chat-selection` | Current bot ID and session ID, persisted via `useStorage` to localStorage |
 | `chat-list` | `chat` | Chat messages, sessions, bots, streaming state, SSE/WS event processing. Depends on `chat-selection` store for current bot/session. Utility functions in `chat-list.utils.ts` |
+| `workspace-tabs` | `workspace-tabs` | Chat/file/terminal/display tabs for the active workspace area |
+| `display-snapshots` | `display-snapshots` | Last display screenshots for previews in chat and bot desktop settings |
 
 Additional stores in `stores/`:
 | Store | Purpose |
@@ -434,6 +454,14 @@ Chat supports two transport modes: **Server-Sent Events (SSE)** and **WebSocket*
 - **State**: `store/chat-list.ts` processes streaming events from either transport into reactive message blocks in real-time
 - **Abort**: Stream cancellation via `AbortSignal` (SSE) or close message (WS)
 
+## Workspace, Display, Browser Use, and Computer Use
+
+- Workspace tabs are managed by `store/workspace-tabs.ts`: chat, draft, file, terminal, and display tabs share the same main workspace region.
+- Terminal and file panes are normal workspace features. Display panes are container-workspace features and are hidden for trusted local bots via `utils/bot-workspace.ts` (`metadata.workspace.backend === 'local'` or API `workspace_backend === 'local'`).
+- `pages/home/components/display-pane.vue` connects to the workspace display service, prepares the display runtime, opens a WebRTC session, forwards keyboard/pointer input, and captures snapshots for previews. It represents a headed container desktop with a browser, not a headless automation runner.
+- `pages/bots/components/bot-desktop.vue` is the settings/runtime surface for enabling display, checking Xvnc/browser/toolkit availability, viewing live sessions, and closing display sessions.
+- Agent Browser Use (`browser_action`, `browser_observe`, `browser_remote_session`) operates the headed workspace Chrome/Chromium instance exposed by the backend display stack. Computer Use (`computer_use`) is the fallback for full desktop screenshots and coordinate/key input, such as native dialogs or GUI states outside CDP. Do not describe these as generic headless Playwright; headless Playwright remains a separate command-line workflow inside a workspace.
+
 ### Error Handling
 
 - **Global**: `utils/api-error.ts` — `resolveApiErrorMessage()` extracts error from `message`, `error`, `detail` fields
@@ -447,7 +475,7 @@ Chat supports two transport modes: **Server-Sent Events (SSE)** and **WebSocket*
 - Locales: `en` (English, default), `zh` (Chinese)
 - Files: `src/i18n/locales/en.json`, `src/i18n/locales/zh.json`
 - Usage: `const { t } = useI18n()` → `t('bots.title')`
-- Key namespaces: `common`, `auth`, `sidebar`, `breadcrumb`, `settings`, `about`, `chat`, `models`, `provider`, `webSearch`, `memory`, `speech`, `email`, `mcp`, `home`, `bots`, `usage`, `supermarket`
+- Key namespaces: `common`, `auth`, `sidebar`, `breadcrumb`, `settings`, `about`, `chat`, `models`, `provider`, `webSearch`, `memory`, `speech`, `transcription`, `email`, `mcp`, `home`, `bots`, `usage`, `appearance`, `supermarket`
 
 ## Vite Configuration
 

@@ -30,6 +30,17 @@
 
 ## Quick Start
 
+Memoh is distributed in two forms:
+
+### Deploy Version
+
+The self-hosted server stack for always-on, multi-user or multi-tenant usage. Use this when you want Memoh running on a server, VM, NAS, or Kubernetes cluster, with bots available through Web UI and external channels such as Telegram, Discord, Lark, WeChat, Email, and more.
+
+<details open>
+<summary><strong>Deploy Memoh Server</strong></summary>
+
+Use the deploy version when Memoh should be reachable by multiple users, run bots continuously, or connect to public/private messaging channels. The default Docker deployment starts the server, Web UI, database migrations, container runtime support, and the services needed for workspace containers.
+
 One-click install (**requires [Docker](https://www.docker.com/get-started/)**):
 
 ```bash
@@ -68,9 +79,28 @@ kubectl apply -k deploy/kubernetes
 > internally if Docker requires it. On macOS or if your user is in the `docker`
 > group, `sudo` is not required for Docker either.
 
-Visit <http://localhost:8082> after startup. Default login: `admin` / `admin123`
+Visit <http://localhost:8082> after startup. Default login: `admin` / `admin123`.
 
 See [DEPLOYMENT.md](DEPLOYMENT.md) for custom configuration and production setup.
+
+</details>
+
+### Desktop Version
+
+The native client for personal/local use. It starts and manages a local Memoh server on your computer, bundles the CLI and local runtime resources, and is the easiest way to try Memoh without maintaining a separate server deployment.
+
+<details>
+<summary><strong>Install Memoh Desktop</strong></summary>
+
+Use the desktop version when you want a local app that manages Memoh for you. It is designed for single-user desktop workflows, local memory, and local/Docker-backed workspaces. The desktop app runs its own local server, so it is separate from the deploy version above.
+
+1. Download the installer for your platform from the [GitHub Releases](https://github.com/memohai/Memoh/releases) page.
+2. Open Memoh. The app starts the local server, prepares local storage, and connects the UI automatically.
+3. Optional: install the bundled `memoh` CLI from the app menu if you want terminal access to the same local server.
+
+Choose the deploy version instead if you need a shared server, remote access, production uptime, or channel integrations that should keep running while your desktop is offline.
+
+</details>
 
 Documentation entry points:
 
@@ -98,7 +128,8 @@ Memoh is built for **always-on continuity** — an AI that stays online, and a m
 ### Core
 
 - 🤖 **Multi-Bot & Multi-User**: Create multiple bots that chat privately, in groups, or with each other. Bots distinguish individual users in group chats and remember each person's context.
-- 📦 **Containerized**: Each bot runs in its own isolated containerd container with a dedicated filesystem and network — like having its own computer. Supports snapshots, data export/import, and versioning.
+- 📦 **Containerized Workspaces**: Each bot can run in its own isolated workspace container with a dedicated filesystem, network, tools, snapshots, data export/import, and versioning.
+- 🖥️ **Desktop Environment in Containers**: Give a bot a full graphical desktop inside its workspace container, including VNC access and a headed browser for sites and workflows that need a real GUI session.
 - 🗂️ **Persistent File System**: Every bot has a writable home directory that survives restarts, upgrades, and migrations. Bots can read, write, and organize files freely; you can browse, upload, download, and edit them visually through the web UI's file manager.
 - 🧠 **Memory Engineering**: LLM-driven fact extraction, hybrid retrieval (dense + sparse + BM25), provider-based long-term memory, memory compaction, and separate session-level context compaction. Pluggable backends: Built-in (off / sparse / dense), [Mem0](https://mem0.ai), OpenViking.
 - 💬 **Broad Channel Coverage**: Telegram, Discord, Lark (Feishu), QQ, Matrix, Misskey, DingTalk, WeCom, WeChat, WeChat Official Account, Email (Mailgun / SMTP / Gmail OAuth), and built-in Web UI.
@@ -106,7 +137,8 @@ Memoh is built for **always-on continuity** — an AI that stays online, and a m
 ### Agent Capabilities
 
 - 🔧 **MCP (Model Context Protocol)**: Full MCP support (HTTP / SSE / Stdio / OAuth). Connect external tool servers for extensibility; each bot manages its own independent MCP connections.
-- 🌐 **Browser Automation**: Headless Chromium/Firefox via Playwright — navigate, click, fill forms, screenshot, read accessibility trees, manage tabs.
+- 🌐 **Browser Use**: Drive Chromium/Firefox through Playwright for navigation, form filling, screenshots, accessibility trees, and tab control. When headless mode is not enough, run a headed browser in the workspace desktop.
+- 🖱️ **Computer Use**: Observe and operate the bot's workspace desktop through visual state and input events, including clicking, typing, scrolling, and recovering from GUI flows that cannot be handled headlessly.
 - 🎭 **Skills, Supermarket & Subagents**: Define bot behavior through modular skills, install curated skills and MCP templates from Supermarket, and delegate complex tasks to sub-agents with independent context.
 - 💭 **Sessions & Discuss Mode**: Use chat, discuss, schedule, heartbeat, and subagent sessions with slash-command control and session status inspection.
 - ⏰ **Automation**: Cron-based scheduled tasks and periodic heartbeat for autonomous bot activity.
@@ -114,10 +146,11 @@ Memoh is built for **always-on continuity** — an AI that stays online, and a m
 ### Management
 
 - 🖥️ **Web UI**: Modern dashboard (Vue 3 + Tailwind CSS) — streaming chat, tool call visualization, file manager, visual configuration for all settings. Dark/light theme, i18n.
+- 💻 **Desktop App**: Native Memoh client for personal/local use, with a self-managed local server, embedded Qdrant, bundled CLI, local workspace support, and system tray lifecycle controls.
 - 🔐 **Access Control**: Priority-based ACL rules with presets, allow/deny effects, and scope by channel identity, channel type, or conversation.
 - 🧪 **Multi-Model**: OpenAI-compatible, Anthropic, Google, OpenAI Codex, GitHub Copilot, and Edge TTS providers. Per-bot model assignment, provider OAuth, and automatic model import.
 - 🎙️ **Speech & Transcription**: Bots can speak through 10+ TTS providers (Edge, OpenAI, ElevenLabs, Deepgram, Azure, Google, MiniMax, Volcengine, Alibaba, OpenRouter) and listen — voice messages received from Telegram, Discord, etc. are auto-transcribed via STT models (OpenAI / OpenRouter), and bots can transcribe any audio file on demand through a built-in tool.
-- 🚀 **One-Click Deploy**: Docker Compose with automatic migration, containerd setup, and CNI networking.
+- 🚀 **Server Deploy**: Docker Compose and Kubernetes deployment paths for always-on server usage, with automatic migration, container runtime setup, and supporting services for workspace containers.
 
 ## Memory System
 

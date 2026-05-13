@@ -7,6 +7,12 @@ re-implement the UI — it reuses Vue components, stores, router pieces, and
 styles from `@memohai/web` and assembles its own multi-window Electron shell
 on top.
 
+Desktop is also the native local-client boundary. The main process manages a
+local `memoh-server` on `127.0.0.1:18731`, prepares SQLite/local-workspace
+configuration, starts embedded Qdrant, owns tray reopen/quit behavior, and
+bundles the CLI, bridge runtime, provider templates, Qdrant, and display media
+runtime resources. Do not describe it as only a Web shell.
+
 The app boots two independent `BrowserWindow`s:
 
 | Window | Renderer entry | HTML | Router routes |
@@ -31,6 +37,8 @@ settings closes itself on 401.
 | Vue ecosystem | Vue 3, Vue Router 4 (`createMemoryHistory`), Pinia 3, `@pinia/colada`, vue-i18n, vue-sonner |
 | Reused workspace packages | `@memohai/web`, `@memohai/ui`, `@memohai/sdk`, `@memohai/icon`, `@memohai/config` |
 | Preload helpers | `@electron-toolkit/preload`, `@electron-toolkit/utils` |
+| Local runtime | Bundled Go `memoh-server`, desktop CLI, bridge runtime/templates, provider templates, SQLite config, embedded Qdrant |
+| Display media runtime | GStreamer bundle where supported (currently macOS universal; optional Windows bundle via `GSTREAMER_ENABLE_WINDOWS_BUNDLE`) |
 | Icon pipeline | `sharp` (PNG / resize) + `png-to-ico` (Windows) + `iconutil` (macOS, system tool) |
 | Type checking | TypeScript ~5.9 strict + `vue-tsc` for the renderer |
 
@@ -49,7 +57,13 @@ apps/desktop/
 │
 ├── src/
 │   ├── main/
-│   │   └── index.ts                # Main process: BrowserWindow factories, IPC, app lifecycle
+│   │   ├── index.ts                # Main process: BrowserWindow factories, tray, IPC, app lifecycle
+│   │   ├── local-server.ts         # Managed local server startup, config, migrations, OAuth callback proxy
+│   │   ├── qdrant.ts               # Embedded Qdrant process, ports, pid, config, storage
+│   │   ├── daemon.ts               # Shared pid/liveness helpers for server and Qdrant
+│   │   ├── cli-integration.ts      # PATH install/uninstall/status for bundled CLI
+│   │   ├── gstreamer.ts            # Packaged display media runtime environment
+│   │   └── paths.ts                # Repo/resource/userData path helpers
 │   ├── preload/
 │   │   ├── index.ts                # Preload bridge — exposes `window.electron` + `window.api`
 │   │   └── global.d.ts             # Window augmentation for renderer typecheck
@@ -73,10 +87,22 @@ apps/desktop/
 │           └── ui-stubs.d.ts       # Path-mapped stub for @memohai/ui (Toaster, SidebarInset)
 │
 ├── scripts/
-│   └── build-icons.mjs             # Regenerates icns / ico / png from apps/web/public/logo.svg
+│   ├── build.mjs                   # Prepares runtime targets, then runs electron-vite/electron-builder
+│   ├── build-icons.mjs             # Regenerates icns / ico / png from apps/web/public/logo.svg
+│   ├── prepare-local-server.mjs    # Builds server/CLI/bridge and copies config/providers
+│   ├── prepare-qdrant.mjs          # Downloads/prepares Qdrant per release target
+│   └── prepare-gstreamer.mjs       # Downloads/prepares display media runtime where supported
 │
 ├── resources/
-│   └── icon.png                    # 512×512 — runtime BrowserWindow.icon + macOS dock.setIcon
+│   ├── icon.png                    # 512×512 — runtime BrowserWindow.icon + macOS dock.setIcon
+│   ├── tray-icon.png               # Runtime tray icon
+│   ├── server/                     # memoh-server binary
+│   ├── cli/                        # memoh CLI binary
+│   ├── runtime/                    # Linux bridge binary + templates for bot workspaces
+│   ├── config/                     # app.local.toml template
+│   ├── providers/                  # Provider registry YAML templates
+│   ├── qdrant/                     # Qdrant binaries by target
+│   └── gstreamer/                  # Display media runtime by target
 │
 ├── build/                          # Packager input assets (gitignored at root, re-included here)
 │   ├── icon.icns                   # macOS bundle icon
@@ -150,6 +176,8 @@ through the wildcard `./*` export.
 - `chatWindow: BrowserWindow | null` is the persistent primary window. `app.on('activate')` recreates it on macOS dock click.
 - `settingsWindow: BrowserWindow | null` is created lazily by IPC and is parented to the chat window (not modal).
 - Both windows share `webPreferences` (sandbox: false, contextIsolation: true, nodeIntegration: false) and the same preload script. The renderer is therefore strictly browser-grade — anything that needs node/Electron APIs must go through IPC.
+- `createAppTray()` installs the system tray. Clicking the tray opens/focuses chat; `Quit Memoh` calls the normal `app.quit()` path.
+- `before-quit` is the authoritative shutdown path: it hides/destroys windows, closes the provider OAuth callback proxy, stops the managed local server, stops embedded Qdrant, destroys the tray, and then exits.
 
 ### IPC surface (`src/preload/index.ts`)
 
@@ -158,6 +186,17 @@ The preload bridge exposes a small, fixed surface to renderers via
 
 ```ts
 window.api = {
+  desktop: {
+    getServerStatus(): Promise<LocalServerStatus>
+    apiBaseUrl(): Promise<string>
+    authToken(): Promise<string>
+    defaultWorkspacePath(displayName: string): Promise<string>
+    getCliStatus(): Promise<CliStatusPayload>
+    installCli(): Promise<CliStatusPayload>
+    uninstallCli(): Promise<CliStatusPayload>
+    broadcastInvalidate(payload: CrossWindowInvalidatePayload): Promise<void>
+    onInvalidate(cb: (payload: CrossWindowInvalidatePayload) => void): void
+  },
   window: {
     openSettings(target?: string): Promise<void>          // ipc → main:'window:open-settings'
     closeSelf(): Promise<void>                            // ipc → main:'window:close-self'
@@ -317,6 +356,48 @@ listens on the port configured in `config.toml` (default 8082) and proxies
 `/api/*` to the backend's `getBaseUrl(config)`. `MEMOH_WEB_PROXY_TARGET` env
 var overrides the proxy target.
 
+## Local Server, Qdrant, and Workspace Runtime
+
+Desktop starts its own local backend instead of depending on an external
+deploy/server stack. `src/main/local-server.ts` is the startup gate:
+
+1. In dev, it builds `./cmd/agent` into `apps/desktop/local-server/bin/`.
+   In packaged apps, it resolves `Resources/server/memoh-server`.
+2. It renders `userData/config.toml` from `resources/config/app.local.toml`,
+   setting SQLite, local workspace, Docker socket, registry providers, and
+   the embedded Qdrant gRPC URL.
+3. It syncs or prepares the bridge runtime/templates, runs `migrate up`,
+   starts `memoh-server serve` on `127.0.0.1:18731`, writes
+   `local-server.pid.json`, and appends to `local-server.log`.
+4. It exposes `desktop:server-status`, `desktop:api-base-url`, and
+   `desktop:auth-token` over IPC so renderer API setup can target the
+   managed local server.
+
+`src/main/qdrant.ts` owns embedded Qdrant. It stores runtime state under
+`userData/qdrant/` (`ports.json`, `qdrant.pid.json`, `config.yaml`,
+`qdrant.log`, `storage/`), probes `/healthz`, reuses a healthy managed
+process when possible, and selects new ports when persisted ports collide.
+
+`scripts/build.mjs` prepares platform-specific resources before
+`electron-builder`: Qdrant for the target platform, GStreamer for supported
+display targets, and local server resources with
+`MEMOH_DESKTOP_BUNDLE_TARGET`. `electron-builder.yml` then packages
+`server`, `cli`, `runtime`, `config`, `providers`, `qdrant`, and
+`gstreamer` through `extraResources`.
+
+Desktop local workspaces are trusted host folders configured through
+`[local]` in `app.local.toml`; they are not container-isolated. Container
+workspaces still use the backend selected by `[container]` (Docker by
+default in local desktop config), and the bridge runtime remains a Linux
+binary because it runs inside bot workspace containers.
+
+Workspace Browser Use and Computer Use are bot/runtime features, not
+Electron UI automation. Browser Use controls the headed workspace
+Chrome/Chromium instance over CDP, while Computer Use drives the workspace
+desktop via screenshots and pointer/keyboard input. Headless Playwright can
+still run as an ordinary workspace command, but it is separate from the
+headed display path.
+
 ## Routing
 
 Both windows use `createMemoryHistory()` — the `file://` runtime makes
@@ -352,9 +433,9 @@ Built from `shared/settings-routes.ts` (the same spec the chat router
 uses for its stubs). Path layout mirrors `@memohai/web/router`'s
 `/settings/*` children so the reused `SettingsSidebar`'s
 `route.path.startsWith('/settings/...')` active-state checks keep
-working. Route names mirror web exactly: `bots`, `bot-detail`,
+working. Route names mirror web exactly: `bots`, `bot-new`, `bot-detail`,
 `providers`, `web-search`, `memory`, `speech`, `transcription`, `email`,
-`browser`, `usage`, `profile`, `platform`, `supermarket`, `about`.
+`usage`, `appearance`, `profile`, `platform`, `supermarket`, `about`.
 Default redirect: `/` → `/settings/bots`.
 
 The settings window has **no auth guard** — by design. If the chat window
@@ -388,10 +469,10 @@ electron-builder so the runtime icon is dereferenceable from disk.
 
 | Command | Output | Notes |
 |---------|--------|-------|
-| `pnpm --filter @memohai/desktop dev` | dev server + main process watch | Renderer hot-reload; main needs window restart on changes |
-| `pnpm --filter @memohai/desktop build` | `dist/` installers (current platform) | Runs electron-vite build, then electron-builder |
+| `pnpm --filter @memohai/desktop dev` | dev server + main process watch | Prepares current Qdrant/GStreamer resources first; renderer hot-reload; main needs window restart on changes |
+| `pnpm --filter @memohai/desktop build` | `dist/` installers (current platform) | Runs `scripts/build.mjs`: prepare Qdrant/GStreamer/local-server resources, electron-vite build, then electron-builder |
 | `pnpm --filter @memohai/desktop build:dir` | `dist/<platform>-unpacked/` | Skip installer; smoke-test packaged app |
-| `pnpm --filter @memohai/desktop build:mac` | DMG + ZIP (arm64 + x64) | Requires darwin |
+| `pnpm --filter @memohai/desktop build:mac` | DMG (arm64 + x64) | Requires darwin |
 | `pnpm --filter @memohai/desktop build:linux` | AppImage + deb + rpm | x64 |
 | `pnpm --filter @memohai/desktop build:win` | NSIS installer | x64 |
 | `pnpm --filter @memohai/desktop typecheck` | (no output) | Runs `typecheck:node` then `typecheck:web` |
@@ -414,6 +495,10 @@ Memoh.app/Contents/Resources/
 ├── server/memoh-server     # backend binary spawned by main process or `memoh start`
 ├── cli/memoh               # CLI binary; PATH symlink resolves here
 ├── runtime/                # bridge binary + templates
+├── config/app.local.toml    # local desktop server config template
+├── providers/               # provider registry YAML templates
+├── qdrant/<target>/qdrant   # embedded Qdrant binary for packaged target
+├── gstreamer/<target>/...   # display media runtime where bundled
 └── …
 ```
 
@@ -422,8 +507,12 @@ Memoh.app/Contents/Resources/
 `scripts/prepare-local-server.mjs` runs three `go build` invocations:
 `./cmd/agent` → `resources/server/memoh-server`, `./cmd/memoh` →
 `resources/cli/memoh`, and `./cmd/bridge` → `resources/runtime/bridge`
-(linux/$arch). `electron-builder.yml`'s `extraResources` block then
-maps each directory into `Contents/Resources/` of the app bundle.
+(`linux/$arch`, because the bridge runs inside workspace containers). The
+server and CLI are built for `MEMOH_DESKTOP_BUNDLE_TARGET`, so Windows
+packages contain `memoh-server.exe` and `memoh.exe`. The script also copies
+`conf/app.local.toml` and `conf/providers/`; `electron-builder.yml`'s
+`extraResources` block then maps each directory into `Contents/Resources/`
+of the app bundle.
 
 ### Shared filesystem contract
 
@@ -436,7 +525,11 @@ macOS — see `productName` pinning below):
 | `config.toml` | desktop main (renders from `resources/config/app.local.toml` on first launch) | both — server's `CONFIG_PATH`, CLI's `[admin]` source |
 | `local-server.pid.json` | whoever spawned the server (desktop or CLI) | both — graceful stop / liveness probe |
 | `local-server.log` | server itself (stdout/stderr append) | both — `memoh logs`, desktop log dump |
+| `qdrant/ports.json` | desktop main | desktop main — persisted HTTP/gRPC ports |
+| `qdrant/config.yaml` | desktop main | embedded Qdrant process |
 | `qdrant/qdrant.pid.json` | desktop main (CLI never spawns qdrant on its own) | desktop main only |
+| `qdrant/qdrant.log` | embedded Qdrant | desktop diagnostics |
+| `qdrant/storage/` | embedded Qdrant | local memory vector storage |
 | `cli-token.json` | CLI (after self-login against `[admin]`) | CLI only |
 | `cli-prefs.json` | desktop main (records `dontAskAgain` for the install prompt) | desktop main only |
 
@@ -531,11 +624,12 @@ list to check.
   `apps/web/package.json` and a matching stub in
   `src/renderer/types/web-stubs.d.ts`. Web should remain shippable as a
   pure browser app.
-- **Path-based navigation in shared components.** Any reusable
-  chat-sidebar (or other web component embedded in the chat window) that
-  navigates to settings must use `router.push('/settings/...')`, never
-  `router.push({ name: '...' })` — the chat router only knows the chat
-  routes.
+- **Keep settings navigation in sync.** Reused web components may navigate
+  to settings with either `/settings/...` paths or named routes such as
+  `{ name: 'bot-detail' }`. The chat router depends on
+  `shared/settings-routes.ts` stubs to resolve named settings routes before
+  forwarding them to the settings window over IPC, so update that list when
+  Web adds or renames a settings page.
 - **Provide `DesktopShellKey` at the renderer App root, not deeper.** Web
   must keep injecting `false` (the default fallback) — never provide it
   from any web component.
