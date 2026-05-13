@@ -595,6 +595,50 @@ func TestChannelInboundProcessorACLReceivesThreadScope(t *testing.T) {
 	}
 }
 
+func TestChannelInboundProcessorQQAndWeixinWriteCommandsBypassChatACL(t *testing.T) {
+	for _, channelType := range []channel.ChannelType{channel.ChannelType("qq"), channel.ChannelType("weixin")} {
+		t.Run(channelType.String(), func(t *testing.T) {
+			channelIdentitySvc := &fakeChannelIdentityService{channelIdentity: identities.ChannelIdentity{ID: "channelIdentity-im-command"}}
+			policySvc := &fakePolicyService{}
+			chatSvc := &fakeChatService{resolveResult: route.ResolveConversationResult{ChatID: "chat-im-command", RouteID: "route-im-command"}}
+			gateway := &fakeChatGateway{}
+			processor := NewChannelInboundProcessor(slog.Default(), nil, chatSvc, chatSvc, gateway, channelIdentitySvc, policySvc, "", 0)
+			aclSvc := &fakeChatACL{allowed: false}
+			processor.SetACLService(aclSvc)
+			processor.SetCommandHandler(command.NewHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil))
+			sender := &fakeReplySender{}
+
+			msg := channel.InboundMessage{
+				BotID:       "bot-1",
+				Channel:     channelType,
+				Message:     channel.Message{Text: "/model set"},
+				ReplyTarget: "target-id",
+				Sender:      channel.Identity{SubjectID: "im-user-1"},
+				Conversation: channel.Conversation{
+					ID:   "im-user-1",
+					Type: channel.ConversationTypePrivate,
+				},
+			}
+
+			if err := processor.HandleInbound(context.Background(), channel.ChannelConfig{ID: "cfg-1", BotID: "bot-1", ChannelType: channelType}, msg, sender); err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if aclSvc.calls != 0 {
+				t.Fatalf("slash command should be handled before chat ACL, got %d ACL calls", aclSvc.calls)
+			}
+			if gateway.gotReq.Query != "" {
+				t.Fatalf("slash command should not trigger chat call, got query %q", gateway.gotReq.Query)
+			}
+			if len(sender.sent) != 1 {
+				t.Fatalf("expected one command reply, got %d", len(sender.sent))
+			}
+			if !strings.Contains(sender.sent[0].Message.Text, "Usage: /model set") {
+				t.Fatalf("expected command usage reply, got %q", sender.sent[0].Message.Text)
+			}
+		})
+	}
+}
+
 func TestChannelInboundProcessorIgnoreEmpty(t *testing.T) {
 	channelIdentitySvc := &fakeChannelIdentityService{channelIdentity: identities.ChannelIdentity{ID: "channelIdentity-3"}}
 	policySvc := &fakePolicyService{}

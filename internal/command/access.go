@@ -15,7 +15,7 @@ func (h *Handler) buildAccessGroup() *CommandGroup {
 		Usage: "show - Show current identity, write access, and chat ACL context",
 		Handler: func(cc CommandContext) (string, error) {
 			writeAccess := "no"
-			if cc.Role == "owner" {
+			if cc.WriteAccess {
 				writeAccess = "yes"
 			}
 

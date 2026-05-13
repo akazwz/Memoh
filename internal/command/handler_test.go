@@ -242,6 +242,48 @@ func TestExecute_WritePermissionAllowedForOwner(t *testing.T) {
 	}
 }
 
+func TestExecute_WritePermissionAllowedForQQAndWeixinWithoutLinkedUser(t *testing.T) {
+	t.Parallel()
+	h := newTestHandler(&fakeRoleResolver{role: ""})
+	for _, channelType := range []string{"qq", "weixin"} {
+		t.Run(channelType, func(t *testing.T) {
+			t.Parallel()
+			result, err := h.ExecuteWithInput(context.Background(), ExecuteInput{
+				BotID:             "bot-1",
+				ChannelIdentityID: "channel-id-1",
+				Text:              "/model set",
+				ChannelType:       channelType,
+			})
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if strings.Contains(result, "Permission denied") {
+				t.Fatalf("%s write command should not require linked owner user, got: %s", channelType, result)
+			}
+			if !strings.Contains(result, "Usage: /model set") {
+				t.Fatalf("expected command to reach handler usage, got: %s", result)
+			}
+		})
+	}
+}
+
+func TestExecute_WritePermissionStillDeniedForOtherUnlinkedChannels(t *testing.T) {
+	t.Parallel()
+	h := newTestHandler(&fakeRoleResolver{role: ""})
+	result, err := h.ExecuteWithInput(context.Background(), ExecuteInput{
+		BotID:             "bot-1",
+		ChannelIdentityID: "channel-id-1",
+		Text:              "/model set",
+		ChannelType:       "discord",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(result, "Permission denied") {
+		t.Fatalf("unlinked discord write command should still be denied, got: %s", result)
+	}
+}
+
 func TestExecute_SettingsDefaultAction(t *testing.T) {
 	t.Parallel()
 	h := newTestHandler(&fakeRoleResolver{role: ""})

@@ -201,11 +201,13 @@ func (h *Handler) ExecuteWithInput(ctx context.Context, input ExecuteInput) (str
 			role = r
 		}
 	}
+	writeAccess := role == "owner" || allowsUnboundWriteCommands(input)
 
 	cc := CommandContext{
 		Ctx:               ctx,
 		BotID:             input.BotID,
 		Role:              role,
+		WriteAccess:       writeAccess,
 		Args:              parsed.Args,
 		ChannelIdentityID: strings.TrimSpace(input.ChannelIdentityID),
 		UserID:            strings.TrimSpace(input.UserID),
@@ -253,7 +255,7 @@ func (h *Handler) ExecuteWithInput(ctx context.Context, input ExecuteInput) (str
 		return fmt.Sprintf("Unknown action \"%s\" for /%s.\n\n%s", parsed.Action, parsed.Resource, group.Usage()), nil
 	}
 
-	if sub.IsWrite && role != "owner" {
+	if sub.IsWrite && !writeAccess {
 		return "Permission denied: only the bot owner can execute this command.", nil
 	}
 
@@ -262,6 +264,23 @@ func (h *Handler) ExecuteWithInput(ctx context.Context, input ExecuteInput) (str
 		return fmt.Sprintf("Error: %s", handlerErr.Error()), nil
 	}
 	return result, nil
+}
+
+func allowsUnboundWriteCommands(input ExecuteInput) bool {
+	if strings.TrimSpace(input.UserID) != "" {
+		return false
+	}
+	if strings.TrimSpace(input.ChannelIdentityID) == "" {
+		return false
+	}
+	// QQ and personal WeChat no longer have a channel-identity bind flow, so
+	// channel-scoped slash commands must not depend on a linked Web user.
+	switch strings.ToLower(strings.TrimSpace(input.ChannelType)) {
+	case "qq", "weixin":
+		return true
+	default:
+		return false
+	}
 }
 
 // safeExecute runs a sub-command handler and recovers from panics.

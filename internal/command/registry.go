@@ -11,6 +11,7 @@ type CommandContext struct {
 	Ctx               context.Context
 	BotID             string
 	Role              string // "owner", "admin", "member", or "" (guest)
+	WriteAccess       bool
 	Args              []string
 	ChannelIdentityID string
 	UserID            string
