@@ -19,6 +19,32 @@ const log = {
   fail: (msg) => console.log(`\x1b[31m[fail]\x1b[0m ${msg}`),
 }
 
+const dryRun = process.argv.includes('--dry-run') || process.env.PUBLISH_PACKAGES_DRY_RUN === '1'
+
+function prereleaseTag(version) {
+  const override = process.env.NPM_PUBLISH_TAG?.trim()
+  if (override) {
+    return override
+  }
+
+  const match = version.match(/^\d+\.\d+\.\d+-([^+]+)(?:\+.+)?$/)
+  if (!match) {
+    return null
+  }
+
+  const [identifier] = match[1].split('.')
+  return /^[a-z][a-z0-9._-]*$/i.test(identifier) ? identifier : 'next'
+}
+
+function publishArgs(version) {
+  const args = ['publish', '--access', 'public', '--no-git-checks']
+  const tag = prereleaseTag(version)
+  if (tag) {
+    args.push('--tag', tag)
+  }
+  return args
+}
+
 function isVersionPublished(name, version) {
   try {
     const out = execFileSync('npm', ['view', `${name}@${version}`, 'version'], {
@@ -31,10 +57,16 @@ function isVersionPublished(name, version) {
   }
 }
 
-function publish(dir) {
+function publish(dir, version) {
+  const args = publishArgs(version)
+  if (dryRun) {
+    log.info(`[dry-run] ${dir}: pnpm ${args.join(' ')}`)
+    return true
+  }
+
   const result = spawnSync(
     'pnpm',
-    ['publish', '--access', 'public', '--no-git-checks'],
+    args,
     { cwd: dir, stdio: 'inherit' },
   )
   return result.status === 0
@@ -69,7 +101,7 @@ for (const dir of CANDIDATE_DIRS) {
   }
 
   log.info(`${name}@${version}`)
-  if (publish(dir)) {
+  if (publish(dir, version)) {
     log.ok(`${name}@${version}`)
     published++
   } else {
