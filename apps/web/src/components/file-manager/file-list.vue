@@ -17,6 +17,7 @@ const props = defineProps<{
   entries: HandlersFsFileInfo[]
   loading?: boolean
   selectedPaths?: Set<string>
+  selectionMode?: boolean
   selectionDisabled?: boolean
 }>()
 
@@ -45,7 +46,7 @@ const sortedEntries = computed(() => {
 
 const selectableEntries = computed(() => sortedEntries.value.filter(entry => !!entry.path))
 
-const selectedCount = computed(() => selectableEntries.value.filter(entry => props.selectedPaths?.has(entry.path ?? '')).length)
+const selectedCount = computed(() => selectableEntries.value.filter(entry => isSelected(entry)).length)
 
 const allSelectedState = computed(() => {
   if (selectableEntries.value.length === 0 || selectedCount.value === 0) return false
@@ -54,6 +55,11 @@ const allSelectedState = computed(() => {
 })
 
 function handleClick(entry: HandlersFsFileInfo) {
+  if (props.selectionMode) {
+    toggleEntry(entry)
+    return
+  }
+
   if (entry.isDir) {
     emit('navigate', entry.path ?? '')
   } else {
@@ -61,8 +67,17 @@ function handleClick(entry: HandlersFsFileInfo) {
   }
 }
 
-function toggleEntry(entry: HandlersFsFileInfo, checked: boolean | 'indeterminate') {
-  emit('toggleSelect', entry, checked === true)
+function isSelected(entry: HandlersFsFileInfo) {
+  return props.selectedPaths?.has(entry.path ?? '') ?? false
+}
+
+function setEntrySelected(entry: HandlersFsFileInfo, selected: boolean) {
+  if (props.selectionDisabled || !entry.path) return
+  emit('toggleSelect', entry, selected)
+}
+
+function toggleEntry(entry: HandlersFsFileInfo) {
+  setEntrySelected(entry, !isSelected(entry))
 }
 
 function toggleAll(checked: boolean | 'indeterminate') {
@@ -95,7 +110,11 @@ function toggleAll(checked: boolean | 'indeterminate') {
     <div v-else>
       <!-- Header row -->
       <div class="flex items-center border-b border-border px-3 py-2 text-xs font-medium text-muted-foreground">
-        <div class="mr-2 flex w-5 shrink-0 items-center justify-center">
+        <div
+          v-if="selectionMode"
+          class="mr-2 flex w-5 shrink-0 items-center justify-center"
+          @click.stop
+        >
           <Checkbox
             :checked="allSelectedState"
             :disabled="selectionDisabled || selectableEntries.length === 0"
@@ -121,18 +140,19 @@ function toggleAll(checked: boolean | 'indeterminate') {
       >
         <ContextMenuTrigger as-child>
           <div
-            class="flex items-center border-b border-border/50 cursor-pointer px-3 py-2 text-xs transition-colors hover:bg-muted/50"
+            class="group flex cursor-pointer items-center border-b border-border/50 px-3 py-2 text-xs transition-colors hover:bg-muted/50"
             @click="handleClick(entry)"
           >
             <div
+              v-if="selectionMode"
               class="mr-2 flex w-5 shrink-0 items-center justify-center"
               @click.stop
             >
               <Checkbox
-                :checked="selectedPaths?.has(entry.path ?? '') ?? false"
+                :checked="isSelected(entry)"
                 :disabled="selectionDisabled || !entry.path"
                 :aria-label="t('bots.files.selectItem', { name: entry.name ?? '' })"
-                @update:checked="checked => toggleEntry(entry, checked)"
+                @update:checked="checked => setEntrySelected(entry, checked === true)"
               />
             </div>
             <div class="flex flex-1 items-center gap-2 min-w-0">

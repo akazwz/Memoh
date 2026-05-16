@@ -1154,6 +1154,8 @@
       "save": "Save",
       "unsaved": "(unsaved)",
       "previewNotAvailable": "Preview not available for this file type",
+      "selectMode": "Select items",
+      "doneSelecting": "Done selecting",
       "selectAll": "Select all",
       "selectItem": "Select {name}",
       "selectedCount": "{count} selected",

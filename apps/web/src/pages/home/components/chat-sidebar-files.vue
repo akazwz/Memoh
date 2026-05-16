@@ -19,7 +19,7 @@
         :title="t('bots.files.uploadFolder')"
         @click="triggerDirectoryUpload"
       >
-        <FolderUp class="size-3.5" />
+        <CloudUpload class="size-3.5" />
       </Button>
       <Button
         variant="ghost"
@@ -34,7 +34,48 @@
       <Button
         variant="ghost"
         size="sm"
-        class="size-7 p-0 ml-auto"
+        class="size-7 p-0"
+        :class="selectionMode ? 'bg-primary/10 text-primary hover:bg-primary/15 hover:text-primary' : ''"
+        :disabled="loading || operationLoading || entries.length === 0"
+        :aria-pressed="selectionMode"
+        :title="selectionMode ? t('bots.files.doneSelecting') : t('bots.files.selectMode')"
+        @click="toggleSelectionMode"
+      >
+        <ListChecks class="size-3.5" />
+      </Button>
+      <span
+        v-if="selectedCount > 0"
+        class="ml-auto truncate text-[11px] text-muted-foreground"
+      >
+        {{ t('bots.files.selectedCount', { count: selectedCount }) }}
+      </span>
+      <Button
+        v-if="selectedCount > 0"
+        variant="ghost"
+        size="sm"
+        class="size-7 p-0"
+        :disabled="operationLoading"
+        :title="t('bots.files.download')"
+        @click="handleBatchDownload"
+      >
+        <Download class="size-3.5" />
+      </Button>
+      <Button
+        v-if="selectedCount > 0"
+        variant="ghost"
+        size="sm"
+        class="size-7 p-0 text-destructive hover:text-destructive"
+        :disabled="operationLoading"
+        :title="t('bots.files.delete')"
+        @click="openBatchDeleteDialog"
+      >
+        <Trash2 class="size-3.5" />
+      </Button>
+      <Button
+        variant="ghost"
+        size="sm"
+        class="size-7 p-0"
+        :class="selectedCount > 0 ? '' : 'ml-auto'"
         :disabled="loading || operationLoading"
         :title="t('common.refresh')"
         @click="reload"
@@ -90,43 +131,14 @@
     >
 
     <div
-      v-if="selectedCount > 0 || uploadStatus"
+      v-if="uploadStatus"
       class="flex shrink-0 items-center gap-1 border-y border-border/60 px-2 py-1.5 text-[11px]"
     >
       <span
-        v-if="selectedCount > 0"
-        class="text-muted-foreground"
-      >
-        {{ t('bots.files.selectedCount', { count: selectedCount }) }}
-      </span>
-      <span
-        v-if="uploadStatus"
         class="min-w-0 truncate text-muted-foreground"
       >
         {{ uploadStatus }}
       </span>
-      <Button
-        v-if="selectedCount > 0"
-        variant="ghost"
-        size="sm"
-        class="ml-auto h-6 px-2 text-[11px]"
-        :disabled="operationLoading"
-        @click="handleBatchDownload"
-      >
-        <Download class="mr-1 size-3" />
-        {{ t('bots.files.download') }}
-      </Button>
-      <Button
-        v-if="selectedCount > 0"
-        variant="ghost"
-        size="sm"
-        class="h-6 px-2 text-[11px] text-destructive hover:text-destructive"
-        :disabled="operationLoading"
-        @click="openBatchDeleteDialog"
-      >
-        <Trash2 class="mr-1 size-3" />
-        {{ t('bots.files.delete') }}
-      </Button>
     </div>
 
     <div class="flex-1 min-h-0 relative">
@@ -136,6 +148,7 @@
             :entries="entries"
             :loading="loading"
             :selected-paths="selectedPaths"
+            :selection-mode="selectionMode"
             :selection-disabled="operationLoading"
             @navigate="navigateTo"
             @open="handleOpenFile"
@@ -284,7 +297,7 @@
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
-import { ChevronRight, Download, Folder, FolderUp, Upload, FolderPlus, RefreshCw, Trash2 } from 'lucide-vue-next'
+import { ChevronRight, CloudUpload, Download, Folder, Upload, FolderPlus, ListChecks, RefreshCw, Trash2 } from 'lucide-vue-next'
 import {
   Button,
   Input,
@@ -330,6 +343,7 @@ const batchArchiveLoading = ref(false)
 const extractLoading = ref(false)
 const batchDeleteDialogOpen = ref(false)
 const batchDeleteLoading = ref(false)
+const selectionMode = ref(false)
 const selectedPaths = ref<Set<string>>(new Set())
 const selectedEntries = computed(() => entries.value.filter(entry => entry.path && selectedPaths.value.has(entry.path)))
 const selectedCount = computed(() => selectedEntries.value.length)
@@ -750,6 +764,16 @@ function toggleSelection(entry: HandlersFsFileInfo, selected: boolean) {
   if (selected) next.add(entry.path)
   else next.delete(entry.path)
   selectedPaths.value = next
+  if (selected || next.size > 0 || selectionMode.value) {
+    selectionMode.value = true
+  }
+}
+
+function toggleSelectionMode() {
+  selectionMode.value = !selectionMode.value
+  if (!selectionMode.value) {
+    selectedPaths.value = new Set()
+  }
 }
 
 function selectAllVisible(selected: boolean) {
@@ -758,6 +782,7 @@ function selectAllVisible(selected: boolean) {
     return
   }
   selectedPaths.value = new Set(entries.value.map(entry => entry.path).filter((value): value is string => !!value))
+  selectionMode.value = selectedPaths.value.size > 0
 }
 
 async function handleBatchDownload() {
