@@ -70,9 +70,8 @@ fn write_to(path: &Path, entries: &[RefEntry]) -> Result<()> {
     let parent = path.parent();
     if let Some(parent) = parent {
         if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent).with_context(|| {
-                format!("create parent directory for {}", path.display())
-            })?;
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("create parent directory for {}", path.display()))?;
         }
     }
     std::fs::write(path, data).with_context(|| format!("write refs index to {}", path.display()))

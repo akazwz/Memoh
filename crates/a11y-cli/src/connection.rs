@@ -59,15 +59,18 @@ pub async fn open() -> Result<AccessibilityConnection> {
         .parse()
         .with_context(|| format!("invalid AT-SPI bus address {raw}"))?;
 
-    AccessibilityConnection::from_address(parsed).await.with_context(|| {
-        let mut detail = format!("failed to connect to the AT-SPI accessibility bus (tried {raw})");
-        let log = discovery_log();
-        if !log.is_empty() {
-            detail.push_str("; discovery: ");
-            detail.push_str(&log.join(" | "));
-        }
-        detail
-    })
+    AccessibilityConnection::from_address(parsed)
+        .await
+        .with_context(|| {
+            let mut detail =
+                format!("failed to connect to the AT-SPI accessibility bus (tried {raw})");
+            let log = discovery_log();
+            if !log.is_empty() {
+                detail.push_str("; discovery: ");
+                detail.push_str(&log.join(" | "));
+            }
+            detail
+        })
 }
 
 fn ensure_bus_address() {
@@ -110,7 +113,10 @@ fn address_socket_alive(addr: &str) -> bool {
     use std::os::unix::net::UnixStream;
     // Abstract sockets are not visible on the filesystem; trust them and let
     // zbus surface any error.
-    let path = match addr.split(',').find_map(|part| part.strip_prefix("unix:path=")) {
+    let path = match addr
+        .split(',')
+        .find_map(|part| part.strip_prefix("unix:path="))
+    {
         Some(p) => p,
         None => return true,
     };
@@ -141,7 +147,12 @@ fn discover_bus_address() -> Option<String> {
 
     let display_id = env::var("DISPLAY")
         .ok()
-        .and_then(|d| d.trim_start_matches(':').split('.').next().map(str::to_string))
+        .and_then(|d| {
+            d.trim_start_matches(':')
+                .split('.')
+                .next()
+                .map(str::to_string)
+        })
         .unwrap_or_else(|| "0".to_string());
     let leaf = format!("at-spi/bus_{}", display_id);
 
@@ -219,10 +230,10 @@ fn owned_endpoints(object: &ObjectRefOwned) -> Result<(BusName<'static>, ObjectP
         .name()
         .context("AT-SPI object reference is missing a bus name (null ref)")?;
     let path = object.path();
-    let name = UniqueName::try_from(name.as_str().to_string())
-        .context("invalid AT-SPI bus name")?;
-    let path = ObjectPath::try_from(path.as_str().to_string())
-        .context("invalid AT-SPI object path")?;
+    let name =
+        UniqueName::try_from(name.as_str().to_string()).context("invalid AT-SPI bus name")?;
+    let path =
+        ObjectPath::try_from(path.as_str().to_string()).context("invalid AT-SPI object path")?;
     Ok((BusName::from(name), path))
 }
 
@@ -241,9 +252,7 @@ pub async fn accessible_for<'a>(
         .context("failed to build accessible proxy")
 }
 
-fn proxy_endpoints(
-    proxy: &AccessibleProxy<'_>,
-) -> (BusName<'static>, ObjectPath<'static>) {
+fn proxy_endpoints(proxy: &AccessibleProxy<'_>) -> (BusName<'static>, ObjectPath<'static>) {
     (
         proxy.inner().destination().to_owned(),
         proxy.inner().path().to_owned(),

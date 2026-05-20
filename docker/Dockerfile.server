@@ -46,12 +46,29 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     -ldflags "-s -w -X github.com/memohai/memoh/internal/version.CommitHash=${COMMIT_HASH}" \
     -o /out/bridge ./cmd/bridge
 
+# ---- Stage 3b: Build a11y-cli (AT-SPI helper, static musl) ----
+# Targets the workspace runtime, so musl-static keeps the helper portable
+# across Debian and Alpine workspace images.
+FROM rust:1.90-alpine AS a11y-cli-builder
+RUN apk add --no-cache musl-dev
+WORKDIR /work
+COPY Cargo.toml Cargo.lock ./
+COPY crates ./crates
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    --mount=type=cache,target=/work/target \
+    set -eux; \
+    cargo build --release -p a11y-cli; \
+    cp target/release/a11y-cli /out-a11y-cli
+
 # ---- Stage 4: Assemble workspace runtime + toolkit ----
 FROM alpine:latest AS toolkit-assembly
 ARG TARGETARCH
 
 RUN apk add --no-cache wget xz
 COPY docker/toolkit/install.sh /tmp/install.sh
+COPY --from=a11y-cli-builder /out-a11y-cli /tmp/a11y-cli
+ENV MEMOH_A11Y_CLI_BINARY=/tmp/a11y-cli
 RUN /tmp/install.sh /assembly/toolkit "${TARGETARCH:-amd64}"
 
 # Assemble runtime directory

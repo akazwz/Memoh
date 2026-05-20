@@ -189,7 +189,6 @@ async fn into_accessible<'a>(
     conn: &'a AccessibilityConnection,
     object: ObjectRefOwned,
 ) -> Result<AccessibleProxy<'a>> {
-    let object = object;
     connection::accessible_for(conn, &object).await
 }
 

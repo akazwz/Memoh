@@ -103,7 +103,12 @@ pub async fn type_text(ref_id: &str, text: &str) -> Result<()> {
     let entry = refs::lookup(ref_id)?;
     let outcome = try_type(&entry, text).await;
     match outcome {
-        Ok(_) => ActionResult::success("type", &entry, format!("inserted {} chars", text.chars().count())).emit(),
+        Ok(_) => ActionResult::success(
+            "type",
+            &entry,
+            format!("inserted {} chars", text.chars().count()),
+        )
+        .emit(),
         Err(err) => ActionResult::failure("type", &entry, format!("{err:#}")).emit(),
     }
 }
@@ -117,9 +122,7 @@ async fn try_type(entry: &RefEntry, text: &str) -> Result<()> {
     let caret = text_proxy.caret_offset().await.unwrap_or(-1);
     let position = if caret < 0 { 0 } else { caret };
     let length = i32::try_from(text.chars().count()).unwrap_or(i32::MAX);
-    let inserted = editable
-        .insert_text(position, text, length)
-        .await?;
+    let inserted = editable.insert_text(position, text, length).await?;
     if !inserted {
         anyhow::bail!("editable text widget refused to insert");
     }
@@ -130,7 +133,12 @@ pub async fn fill_text(ref_id: &str, text: &str) -> Result<()> {
     let entry = refs::lookup(ref_id)?;
     let outcome = try_fill(&entry, text).await;
     match outcome {
-        Ok(_) => ActionResult::success("fill", &entry, format!("set {} chars", text.chars().count())).emit(),
+        Ok(_) => ActionResult::success(
+            "fill",
+            &entry,
+            format!("set {} chars", text.chars().count()),
+        )
+        .emit(),
         Err(err) => ActionResult::failure("fill", &entry, format!("{err:#}")).emit(),
     }
 }
