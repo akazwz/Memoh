@@ -71,7 +71,9 @@
     "categories": "Categories",
     "unsaved": "Unsaved",
     "editJson": "Edit JSON",
-    "actionRequired": "Action Required"
+    "actionRequired": "Action Required",
+    "preview": "Preview",
+    "raw": "Source"
   },
   "auth": {
     "welcome": "Welcome Back",

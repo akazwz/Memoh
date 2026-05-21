@@ -117,6 +117,16 @@ export function isImageFile(filename: string): boolean {
   return IMAGE_EXTENSIONS.has(ext)
 }
 
+export function isMarkdownFile(filename: string): boolean {
+  const ext = getExtension(filename)
+  return ext === 'md' || ext === 'markdown'
+}
+
+export function isHtmlFile(filename: string): boolean {
+  const ext = getExtension(filename)
+  return ext === 'html' || ext === 'htm'
+}
+
 export function isArchiveFile(filename: string | undefined): boolean {
   const lower = (filename ?? '').toLowerCase()
   return lower.endsWith('.zip') || lower.endsWith('.tar.gz') || lower.endsWith('.tgz')

@@ -71,7 +71,9 @@
     "categories": "搜索类别",
     "unsaved": "未保存",
     "editJson": "编辑 JSON",
-    "actionRequired": "需要操作"
+    "actionRequired": "需要操作",
+    "preview": "预览",
+    "raw": "源码"
   },
   "auth": {
     "welcome": "欢迎回来",
