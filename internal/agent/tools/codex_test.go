@@ -40,11 +40,18 @@ func (w stubWorkspaceInfo) WorkspaceInfo(context.Context, string) (bridge.Worksp
 	return w.info, w.err
 }
 
+func enableCodexProvider(provider *CodexProvider) *CodexProvider {
+	provider.SetACPAgentEnabledFunc(func(context.Context, string, string) (bool, error) {
+		return true, nil
+	})
+	return provider
+}
+
 func TestCodexProviderExecDelegatesTask(t *testing.T) {
 	starter := &stubCodexStarter{}
-	provider := newCodexProviderWithStarter(nil, stubWorkspaceInfo{
+	provider := enableCodexProvider(newCodexProviderWithStarter(nil, stubWorkspaceInfo{
 		info: bridge.WorkspaceInfo{Backend: bridge.WorkspaceBackendLocal, DefaultWorkDir: "/workspace"},
-	}, starter)
+	}, starter))
 
 	out, err := provider.exec(context.Background(), SessionContext{BotID: "bot-1"}, map[string]any{
 		"task":         "fix tests",
@@ -73,9 +80,9 @@ func TestCodexProviderExecDelegatesTask(t *testing.T) {
 }
 
 func TestCodexProviderRejectsUnsupportedModeAndWorkspace(t *testing.T) {
-	provider := newCodexProviderWithStarter(nil, stubWorkspaceInfo{
+	provider := enableCodexProvider(newCodexProviderWithStarter(nil, stubWorkspaceInfo{
 		info: bridge.WorkspaceInfo{Backend: bridge.WorkspaceBackendLocal, DefaultWorkDir: "/workspace"},
-	}, &stubCodexStarter{})
+	}, &stubCodexStarter{}))
 	if _, err := provider.exec(context.Background(), SessionContext{BotID: "bot-1"}, map[string]any{
 		"task": "fix tests",
 		"mode": "plan",
@@ -83,19 +90,39 @@ func TestCodexProviderRejectsUnsupportedModeAndWorkspace(t *testing.T) {
 		t.Fatal("expected unsupported mode error")
 	}
 
-	provider = newCodexProviderWithStarter(nil, stubWorkspaceInfo{
+	provider = enableCodexProvider(newCodexProviderWithStarter(nil, stubWorkspaceInfo{
 		info: bridge.WorkspaceInfo{Backend: bridge.WorkspaceBackendContainer, DefaultWorkDir: "/data"},
-	}, &stubCodexStarter{})
+	}, &stubCodexStarter{}))
 	if _, err := provider.exec(context.Background(), SessionContext{BotID: "bot-1"}, map[string]any{"task": "fix tests"}); err == nil {
 		t.Fatal("expected non-local workspace error")
 	}
 }
 
-func TestCodexProviderPropagatesStarterError(t *testing.T) {
-	want := errors.New("missing codex-acp")
+func TestCodexProviderRequiresEnabledACPAgent(t *testing.T) {
 	provider := newCodexProviderWithStarter(nil, stubWorkspaceInfo{
 		info: bridge.WorkspaceInfo{Backend: bridge.WorkspaceBackendLocal, DefaultWorkDir: "/workspace"},
-	}, &stubCodexStarter{err: want})
+	}, &stubCodexStarter{})
+	provider.SetACPAgentEnabledFunc(func(context.Context, string, string) (bool, error) {
+		return false, nil
+	})
+
+	tools, err := provider.Tools(context.Background(), SessionContext{BotID: "bot-1"})
+	if err != nil {
+		t.Fatalf("Tools() error = %v", err)
+	}
+	if len(tools) != 0 {
+		t.Fatalf("Tools() len = %d, want 0", len(tools))
+	}
+	if _, err := provider.exec(context.Background(), SessionContext{BotID: "bot-1"}, map[string]any{"task": "fix tests"}); err == nil {
+		t.Fatal("expected disabled ACP agent error")
+	}
+}
+
+func TestCodexProviderPropagatesStarterError(t *testing.T) {
+	want := errors.New("missing codex-acp")
+	provider := enableCodexProvider(newCodexProviderWithStarter(nil, stubWorkspaceInfo{
+		info: bridge.WorkspaceInfo{Backend: bridge.WorkspaceBackendLocal, DefaultWorkDir: "/workspace"},
+	}, &stubCodexStarter{err: want}))
 	if _, err := provider.exec(context.Background(), SessionContext{BotID: "bot-1"}, map[string]any{"task": "fix tests"}); !errors.Is(err, want) {
 		t.Fatalf("exec() error = %v, want %v", err, want)
 	}

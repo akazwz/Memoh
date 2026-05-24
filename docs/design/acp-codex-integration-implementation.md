@@ -96,19 +96,21 @@ internal/acpagent.Service.runPrompt
 |---|---|
 | `go.mod`, `go.sum` | 增加 `github.com/coder/acp-go-sdk` 依赖。 |
 | `internal/acpclient/` | ACP client 封装层。只在这个包内直接使用 ACP SDK。 |
-| `internal/acpagent/service.go` | 通用 ACP agent 子会话运行时服务，维护 profile、active task、发送 prompt、转换流式事件、回调持久化；当前只内置 `codex` profile。 |
-| `internal/agent/tools/codex.go` | 新增 `codex_delegate` tool，让主 Agent 可以把代码任务交给 Codex。 |
-| `internal/conversation/flow/resolver_acpagent.go` | ACP agent 会话路由、profile slash command 解析、`/codex start`/`/codex stop`、完成消息持久化。 |
+| `internal/acpagent/service.go`, `internal/acpagent/metadata.go` | 通用 ACP agent 子会话运行时服务，维护 profile、active task、发送 prompt、转换流式事件、回调持久化；bot metadata 中的 `acp.agents.<id>.enabled` 控制 profile 是否可用；当前只内置 `codex` profile。 |
+| `internal/command/*`, `internal/handlers/commands.go` | `/commands` manifest API。它会读取 bot metadata，只返回当前 bot 已启用的 ACP agent 命令。 |
+| `internal/agent/tools/codex.go` | 新增 `codex_delegate` tool，让主 Agent 可以把代码任务交给 Codex；该 tool 只在当前 bot 启用 Codex ACP 后暴露。 |
+| `internal/conversation/flow/resolver_acpagent.go` | ACP agent 会话路由、profile slash command 解析、`/codex start`/`/codex stop`、完成消息持久化；显式 start 前也会校验 bot 开关。 |
 | `internal/conversation/flow/resolver.go` | 注入 ACP agent service，连接 stream publisher 和 completion callback。 |
 | `internal/conversation/flow/resolver_stream.go` | WebSocket/streaming 入口调用 Codex 路由。 |
-| `cmd/agent/app.go`, `cmd/agent/module.go` | FX wiring：创建 ACP runner、ACP agent service、注册 Codex tool provider。 |
+| `cmd/agent/app.go`, `cmd/agent/module.go` | FX wiring：创建 ACP runner、ACP agent service、注册 Codex tool provider，并把 bot metadata 开关检查注入 tool provider。 |
 | `internal/toolapproval/policy.go` | 把 `codex_delegate` 纳入敏感工具策略。 |
 | `internal/conversation/uimessage*.go` | UI message 增加 `metadata`，stream/persisted 两条路径都能保留 ACP agent metadata。 |
 | `apps/web/src/store/chat-list.ts` | 读取 UIMessage metadata，给 assistant turn 标记 responder display name，例如 `Codex`。 |
 | `apps/web/src/composables/api/useChat.types.ts` | Web UI message 类型增加 `metadata` 字段。 |
 | `apps/web/src/pages/home/components/message-item.vue` | Codex 回复显示 `Codex` 小标识，流式时显示“正在回复”。 |
 | `apps/web/src/pages/home/components/tool-call-registry.ts` | ACP agent 内部工具事件按 metadata 动态显示，例如“Codex 调用工具”，plan 显示为“Codex 更新计划”。 |
-| `apps/web/src/pages/home/components/chat-pane.vue` | 输入框增加 `/` 命令提示，支持 `/codex start` 和 `/codex stop`。 |
+| `apps/web/src/pages/home/components/chat-pane.vue` | 输入框增加 `/` 命令提示，命令列表来自后端 `/commands` API。 |
+| `apps/web/src/pages/bots/detail.vue`, `bot-acp.vue`, `settings-acp-card.vue` | Bot 详情页增加单独的 `ACP` tab，当前提供 Codex ACP 开关，保存到 `bots.metadata.acp.agents.codex.enabled`。 |
 | `apps/web/src/i18n/locales/*.json` | 增加命令提示、Codex 工具文案、正在回复文案。 |
 
 ## ACP client 层
@@ -376,6 +378,8 @@ Streaming/WebSocket 也走同一逻辑。
 
 这样实现了“Codex ACP 一启动，当前会话后续消息由 Codex 接管”的交互。
 
+`/codex start` 会先检查当前 bot metadata 中的 `acp.agents.codex.enabled`。未开启时，Memoh 只返回一条控制说明，不会启动 Codex 子会话。`/codex stop` 仍可用于停止已经存在的 active task，避免关闭开关后无法退出旧会话。
+
 ## 消息流和持久化
 
 ### 流式展示
@@ -433,12 +437,14 @@ Web 端收到的是已有 `agent_stream` 事件：
 
 ### slash command 提示
 
-`apps/web/src/pages/home/components/chat-pane.vue` 中新增输入框命令建议。
+`apps/web/src/pages/home/components/chat-pane.vue` 中新增输入框命令建议，命令数据来自后端 `/commands?bot_id=...&session_id=...&scope=web`。
 
 当前命令：
 
 - `/codex start`
 - `/codex stop`
+
+这两个命令只会在当前 bot 的 Codex ACP 开关打开时返回。后续增加 Claude/Gemini 等 ACP profile 时，不需要前端硬编码新命令，后端 manifest provider 返回对应 profile 即可。
 
 交互：
 
@@ -449,7 +455,29 @@ Web 端收到的是已有 `agent_stream` 事件：
 - Esc 关闭建议。
 - 鼠标点击也可以选择。
 
-第一阶段只暴露 Codex 命令，没有把现有所有 slash commands 都放进 Web 命令面板，因为 WebSocket chat 当前没有统一接入通用 command handler。
+第一阶段只暴露 Codex ACP 命令，没有把现有所有 slash commands 都放进 Web 命令面板，因为 WebSocket chat 当前没有统一接入通用 command handler。
+
+### Bot ACP 设置
+
+Bot 详情页左侧新增单独的 `ACP` tab。当前页面里只有 `Codex ACP` 一个开关，后续可以继续追加 Claude、Gemini 等 ACP agent。保存后写入 bot profile 的 metadata：
+
+```json
+{
+  "acp": {
+    "agents": {
+      "codex": {
+        "enabled": true
+      }
+    }
+  }
+}
+```
+
+这个开关影响三处入口：
+
+1. `/commands` API：未开启时不返回 `/codex start` / `/codex stop`。
+2. 显式 `/codex start`：未开启时 resolver 拒绝启动并给出说明。
+3. `codex_delegate` tool：未开启时不会出现在主 Agent 的 tool set 中，已存在调用也会在执行前拒绝。
 
 ### Codex 回复标识
 
@@ -484,11 +512,12 @@ Plan update：
 ### 当前已做
 
 1. `codex_delegate` 被纳入工具审批敏感工具。
-2. 只支持 local workspace，container backend 会被拒绝。
-3. 所有文件路径和 terminal cwd 都必须落在 workspace root 内。
-4. `/data` 只作为 local workspace root alias，不是任意宿主机路径。
-5. ACP permission request 会检查 tool locations 和 raw input 中的路径，不合法则 cancel。
-6. adapter 启动命令使用参数转义，避免直接拼接未转义参数。
+2. Bot 必须显式开启对应 ACP agent，才会暴露命令或 `codex_delegate` tool。
+3. 只支持 local workspace，container backend 会被拒绝。
+4. 所有文件路径和 terminal cwd 都必须落在 workspace root 内。
+5. `/data` 只作为 local workspace root alias，不是任意宿主机路径。
+6. ACP permission request 会检查 tool locations 和 raw input 中的路径，不合法则 cancel。
+7. adapter 启动命令使用参数转义，避免直接拼接未转义参数。
 
 ### 当前没有做
 
@@ -517,8 +546,9 @@ IM 侧的基础路径已经存在：
 | 测试 | 覆盖点 |
 |---|---|
 | `internal/acpclient` tests | fake ACP agent、initialize/new session/prompt、fs、terminal、permission、通用 client 缺少 command 时的错误、显式缺失命令错误。 |
-| `internal/acpagent/service_test.go` | Start/Send active session、profile command/args、Codex profile 启动命令、stream 顺序、completion 顺序、ACP agent tool event label、handoff 先于 agent 输出。 |
-| `internal/agent/tools/codex_test.go` | `codex_delegate` 参数校验、local workspace 限制、unsupported mode、starter error 透传。 |
+| `internal/acpagent/service_test.go`, `metadata_test.go` | Start/Send active session、profile command/args、Codex profile 启动命令、stream 顺序、completion 顺序、ACP agent tool event label、handoff 先于 agent 输出、metadata 开关解析。 |
+| `internal/command/manifest_test.go` | `/commands` manifest 只返回已启用 ACP agent 的命令。 |
+| `internal/agent/tools/codex_test.go` | `codex_delegate` 参数校验、bot 开关校验、local workspace 限制、unsupported mode、starter error 透传。 |
 | `internal/conversation/flow/resolver_codex_test.go` | `/codex start`/`/codex stop` 解析，stop phrase，model id 为空。 |
 | `internal/conversation/uimessage_test.go` | UIMessage metadata 在 streaming 和 persisted 两条路径保留。 |
 | `apps/web/src/store/chat-list.test.ts` | Web store 能根据 `metadata.source=acp_agent` 和 `metadata.agent` 标记 assistant turn。 |
@@ -611,7 +641,7 @@ Web store 根据 metadata 中的 `source` 和 `agent` 判断 responder。
 4. 预装的 `codex-acp` 只解决 adapter 可执行文件，不解决 Codex 凭证注入。
 5. 不支持 bridge streaming exec env。
 6. ACP permission request 还没有映射成 Memoh 的逐项审批。
-7. Web 命令面板只支持 Codex 命令，不是通用 slash command palette。
+7. Web 命令面板已接入后端 command manifest，但第一阶段只返回 Codex ACP 命令，不是完整通用 slash command palette。
 8. 同一 session 只允许一个 Codex task。
 9. 不持久化每条 stream delta，只持久化最终 assistant 文本。
 
@@ -623,7 +653,7 @@ Web store 根据 metadata 中的 `source` 和 `agent` 判断 responder。
 2. 做 approval broker，把 ACP `request_permission` 映射到 Memoh tool approval。
 3. 为 bridge streaming exec 增加 env 支持，安全注入 Codex/OpenAI 凭证。
 4. 做 container workspace 支持，并补齐 Codex 凭证注入。
-5. Web 命令面板从硬编码 Codex 扩展为后端命令 manifest。
+5. 将 command manifest 扩展为完整插件/命令入口，覆盖更多 ACP profile 和非 ACP slash command。
 6. IM 平台做 Codex 输出节流、最终文本发送和审批回复体验。
 7. 增加 Codex task 状态 UI，例如 session header 中显示 active project 和停止按钮。
 8. 支持按 project path 管理多个 Codex session，但同一聊天仍需要明确选择当前 active session。

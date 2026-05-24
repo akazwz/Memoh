@@ -29,9 +29,10 @@ type CommandManifest struct {
 // ManifestRequest carries context that providers may use to decide whether a
 // command should be visible or enabled.
 type ManifestRequest struct {
-	BotID     string
-	SessionID string
-	Scope     string
+	BotID       string
+	SessionID   string
+	Scope       string
+	BotMetadata map[string]any
 }
 
 // ManifestProvider contributes UI-facing slash commands.

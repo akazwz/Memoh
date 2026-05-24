@@ -22,7 +22,7 @@ func NewACPAgentManifestProvider(service *acpagent.Service) *ACPAgentManifestPro
 	return &ACPAgentManifestProvider{service: service}
 }
 
-func (p *ACPAgentManifestProvider) Commands(context.Context, ManifestRequest) ([]CommandManifest, error) {
+func (p *ACPAgentManifestProvider) Commands(_ context.Context, req ManifestRequest) ([]CommandManifest, error) {
 	if p == nil || p.service == nil {
 		return nil, nil
 	}
@@ -35,6 +35,9 @@ func (p *ACPAgentManifestProvider) Commands(context.Context, ManifestRequest) ([
 	for _, profile := range profiles {
 		pluginID := strings.TrimSpace(profile.ID)
 		if pluginID == "" {
+			continue
+		}
+		if !acpagent.MetadataAgentEnabled(req.BotMetadata, pluginID) {
 			continue
 		}
 		pluginName := strings.TrimSpace(profile.DisplayName)

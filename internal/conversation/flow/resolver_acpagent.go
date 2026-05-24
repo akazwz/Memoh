@@ -12,6 +12,7 @@ import (
 	"github.com/memohai/memoh/internal/channel"
 	commandpkg "github.com/memohai/memoh/internal/command"
 	"github.com/memohai/memoh/internal/conversation"
+	"github.com/memohai/memoh/internal/db"
 )
 
 // ACP agents are external child agents, not configured Memoh chat model rows.
@@ -96,6 +97,11 @@ func (r *Resolver) startACPAgentFromCommand(ctx context.Context, req conversatio
 	if task == "" {
 		task = fmt.Sprintf("请接管这个会话，等待用户的下一条指令。先简短告诉用户 %s 已准备好。", cmd.AgentName)
 	}
+	if !r.acpAgentEnabled(ctx, req.BotID, cmd.AgentID) {
+		text := fmt.Sprintf("%s ACP 尚未在这个 Bot 中启用。请先在 Bot 设置中打开该 ACP 能力。", cmd.AgentName)
+		r.publishACPAgentControlMessage(ctx, req, sessionID, text)
+		return nil
+	}
 	task = acpAgentPromptWithAttachments(task, req.Attachments)
 	handoff := fmt.Sprintf("已启动 %s ACP 子会话。接下来这个会话将由 %s 和你沟通；发送 /%s stop 可以切回 Memoh。", cmd.AgentName, cmd.AgentName, cmd.AgentID)
 	_, err := r.acpAgentService.Start(ctx, acpagent.StartInput{
@@ -117,6 +123,31 @@ func (r *Resolver) startACPAgentFromCommand(ctx context.Context, req conversatio
 	}
 	r.persistACPAgentControlMessage(ctx, req, handoff)
 	return nil
+}
+
+func (r *Resolver) acpAgentEnabled(ctx context.Context, botID, agentID string) bool {
+	if r == nil || r.queries == nil {
+		return false
+	}
+	botID = strings.TrimSpace(botID)
+	if botID == "" {
+		return false
+	}
+	botUUID, err := db.ParseUUID(botID)
+	if err != nil {
+		if r.logger != nil {
+			r.logger.Warn("check ACP agent setting failed: invalid bot id", slog.String("bot_id", botID), slog.Any("error", err))
+		}
+		return false
+	}
+	row, err := r.queries.GetBotByID(ctx, botUUID)
+	if err != nil {
+		if r.logger != nil {
+			r.logger.Warn("check ACP agent setting failed", slog.String("bot_id", botID), slog.Any("error", err))
+		}
+		return false
+	}
+	return acpagent.MetadataAgentEnabledRaw(row.Metadata, agentID)
 }
 
 func (r *Resolver) publishACPAgentControlMessage(ctx context.Context, req conversation.ChatRequest, sessionID, text string) {

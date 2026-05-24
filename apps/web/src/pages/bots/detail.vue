@@ -232,7 +232,7 @@ import {
 import {
   SquarePen, LoaderCircle, Check, Search, X, LayoutDashboard, Settings, MessageSquare,
   BrainCircuit, ShieldAlert, HeartPulse, Database, Mail, Link, Clock, Server, FileBox, Zap,
-  Monitor, Globe
+  Monitor, Globe, Code2
 } from 'lucide-vue-next'
 import { computed, ref, watch, onMounted, toValue, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
@@ -253,6 +253,7 @@ import type {
 import { useCapabilitiesStore } from '@/store/capabilities'
 
 import BotSettings from './components/bot-settings.vue'
+import BotAcp from './components/bot-acp.vue'
 import BotToolApproval from './components/bot-tool-approval.vue'
 import BotDesktop from './components/bot-desktop.vue'
 import BotNetwork from './components/bot-network.vue'
@@ -305,6 +306,7 @@ const tabList = computed(() => {
   const tabs = [
     { value: 'overview', label: 'bots.tabs.overview', icon: LayoutDashboard, component: BotOverview, params: {} },
     { value: 'general', label: 'bots.tabs.general', icon: Settings, component: BotSettings, params: { 'bot-id': bot_id, 'bot-type': bot.value?.type } },
+    { value: 'acp', label: 'bots.tabs.acp', icon: Code2, component: BotAcp, params: { 'bot-id': bot_id } },
     { value: 'desktop', label: 'bots.tabs.desktop', icon: Monitor, component: BotDesktop, params: { 'bot-id': bot_id } },
     { value: 'container', label: 'bots.tabs.container', icon: Server, component: BotContainer, params: {} },
     { value: 'network', label: 'bots.tabs.network', icon: Globe, component: BotNetwork, params: { 'bot-id': bot_id } },
@@ -331,6 +333,7 @@ const searchIndex = computed(() => {
   return [
     { tab: 'general', key: 'bots.settings.blocks.global', keywords: ['name', 'avatar', 'description', 'timezone'] },
     { tab: 'general', key: 'bots.settings.blocks.interaction', keywords: ['language', 'chat model', 'reasoning'] },
+    { tab: 'acp', key: 'bots.settings.blocks.acp', keywords: ['acp', 'codex', 'agent', 'slash command'] },
     { tab: 'general', key: 'bots.settings.blocks.context', keywords: ['browser', 'search', 'provider'] },
     { tab: 'general', key: 'bots.settings.blocks.multimedia', keywords: ['image', 'tts', 'transcription'] },
     { tab: 'general', key: 'bots.settings.dangerZone', keywords: ['delete', 'remove'] },
@@ -366,7 +369,7 @@ const searchResults = computed(() => {
 
 const groupedTabs = computed(() => {
   const coreKeys = ['overview', 'general', 'channels']
-  const capabilityKeys = ['skills', 'tool-approval', 'mcp', 'memory']
+  const capabilityKeys = ['acp', 'skills', 'tool-approval', 'mcp', 'memory']
   const runtimeKeys = ['desktop', 'container', 'network', 'schedule', 'compaction', 'heartbeat']
   const securityKeys = ['access', 'email']
 

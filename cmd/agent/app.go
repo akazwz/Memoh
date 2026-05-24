@@ -604,6 +604,8 @@ func provideToolProviders(log *slog.Logger, channelManager *channel.Manager, reg
 		assetResolver = &mediaAssetResolverAdapter{media: mediaService}
 	}
 	fedSource := mcpfederation.NewSource(log, fedGateway, mcpConnService)
+	codexProvider := agenttools.NewCodexProvider(log, manager, acpAgentSvc)
+	codexProvider.SetACPAgentEnabledFunc(acpAgentEnabledFunc(log, queries))
 	return []agenttools.ToolProvider{
 		agenttools.NewMessageProvider(log, channelManager, channelManager, registry, assetResolver),
 		agenttools.NewContactsProvider(log, routeService),
@@ -611,7 +613,7 @@ func provideToolProviders(log *slog.Logger, channelManager *channel.Manager, reg
 		agenttools.NewMemoryProvider(log, memoryRegistry, settingsService),
 		agenttools.NewWebProvider(log, settingsService, searchProviderService),
 		agenttools.NewContainerProvider(log, manager, bgManager, config.DefaultDataMount),
-		agenttools.NewCodexProvider(log, manager, acpAgentSvc),
+		codexProvider,
 		agenttools.NewBrowserProvider(log, settingsService, manager, manager, config.DefaultDataMount),
 		agenttools.NewEmailProvider(log, emailService, emailManager),
 		agenttools.NewWebFetchProvider(log),
@@ -622,6 +624,32 @@ func provideToolProviders(log *slog.Logger, channelManager *channel.Manager, reg
 		agenttools.NewImageGenProvider(log, settingsService, modelsService, queries, manager, config.DefaultDataMount),
 		agenttools.NewFederationProvider(log, fedSource),
 		agenttools.NewHistoryProvider(log, sessionService, queries),
+	}
+}
+
+func acpAgentEnabledFunc(log *slog.Logger, queries dbstore.Queries) agenttools.ACPAgentEnabledFunc {
+	if log == nil {
+		log = slog.Default()
+	}
+	return func(ctx context.Context, botID, agentID string) (bool, error) {
+		if queries == nil {
+			return false, nil
+		}
+		botID = strings.TrimSpace(botID)
+		if botID == "" {
+			return false, nil
+		}
+		botUUID, err := db.ParseUUID(botID)
+		if err != nil {
+			log.Warn("check ACP agent setting failed: invalid bot id", slog.String("bot_id", botID), slog.Any("error", err))
+			return false, nil
+		}
+		row, err := queries.GetBotByID(ctx, botUUID)
+		if err != nil {
+			log.Warn("check ACP agent setting failed", slog.String("bot_id", botID), slog.Any("error", err))
+			return false, nil
+		}
+		return acpagent.MetadataAgentEnabledRaw(row.Metadata, agentID), nil
 	}
 }
 

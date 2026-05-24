@@ -17,7 +17,16 @@ func TestACPAgentManifestProviderCodexCommands(t *testing.T) {
 	service := acpagent.NewService(nil, nil)
 	provider := NewACPAgentManifestProvider(service)
 
-	commands, err := provider.Commands(context.Background(), ManifestRequest{Scope: "web"})
+	commands, err := provider.Commands(context.Background(), ManifestRequest{
+		Scope: "web",
+		BotMetadata: map[string]any{
+			acpagent.MetadataKeyACP: map[string]any{
+				"agents": map[string]any{
+					acpagent.CodexAgentID: map[string]any{"enabled": true},
+				},
+			},
+		},
+	})
 	if err != nil {
 		t.Fatalf("Commands() error = %v", err)
 	}
@@ -36,6 +45,19 @@ func TestACPAgentManifestProviderCodexCommands(t *testing.T) {
 	stop := commands[1]
 	if stop.ID != "codex.stop" || stop.Command != "/codex stop" || stop.InsertText != "/codex stop" {
 		t.Fatalf("stop command = %+v", stop)
+	}
+}
+
+func TestACPAgentManifestProviderRequiresEnabledAgent(t *testing.T) {
+	service := acpagent.NewService(nil, nil)
+	provider := NewACPAgentManifestProvider(service)
+
+	commands, err := provider.Commands(context.Background(), ManifestRequest{Scope: "web"})
+	if err != nil {
+		t.Fatalf("Commands() error = %v", err)
+	}
+	if len(commands) != 0 {
+		t.Fatalf("Commands() len = %d, want 0: %+v", len(commands), commands)
 	}
 }
 

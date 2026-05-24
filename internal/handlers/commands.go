@@ -66,19 +66,23 @@ func (h *CommandManifestHandler) ListCommands(c echo.Context) error {
 	if botID == "" && sessionID != "" {
 		return echo.NewHTTPError(http.StatusBadRequest, "bot id is required when session id is provided")
 	}
+	var botMetadata map[string]any
 	if botID != "" {
-		if _, err := AuthorizeBotAccess(c.Request().Context(), h.botService, h.accountService, channelIdentityID, botID); err != nil {
+		bot, err := AuthorizeBotAccess(c.Request().Context(), h.botService, h.accountService, channelIdentityID, botID)
+		if err != nil {
 			return err
 		}
+		botMetadata = bot.Metadata
 	}
 	if h.registry == nil {
 		return c.JSON(http.StatusOK, CommandListResponse{Commands: []command.CommandManifest{}})
 	}
 
 	commands, err := h.registry.Commands(c.Request().Context(), command.ManifestRequest{
-		BotID:     botID,
-		SessionID: sessionID,
-		Scope:     scope,
+		BotID:       botID,
+		SessionID:   sessionID,
+		Scope:       scope,
+		BotMetadata: botMetadata,
 	})
 	if err != nil {
 		h.logger.Error("list command manifests failed", slog.Any("error", err))

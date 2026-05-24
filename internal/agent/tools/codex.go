@@ -25,10 +25,13 @@ type CodexTaskStarter interface {
 	Start(ctx context.Context, input acpagent.StartInput) (acpagent.Snapshot, error)
 }
 
+type ACPAgentEnabledFunc func(ctx context.Context, botID, agentID string) (bool, error)
+
 type CodexProvider struct {
-	logger      *slog.Logger
-	workspace   bridge.WorkspaceInfoProvider
-	taskStarter CodexTaskStarter
+	logger          *slog.Logger
+	workspace       bridge.WorkspaceInfoProvider
+	taskStarter     CodexTaskStarter
+	acpAgentEnabled ACPAgentEnabledFunc
 }
 
 func NewCodexProvider(log *slog.Logger, workspace CodexWorkspace, taskStarter ...CodexTaskStarter) *CodexProvider {
@@ -53,9 +56,20 @@ func newCodexProviderWithStarter(log *slog.Logger, workspace bridge.WorkspaceInf
 	return &CodexProvider{logger: log.With(slog.String("tool", "codex_delegate")), workspace: workspace, taskStarter: starter}
 }
 
-func (p *CodexProvider) Tools(_ context.Context, session SessionContext) ([]sdk.Tool, error) {
+func (p *CodexProvider) SetACPAgentEnabledFunc(fn ACPAgentEnabledFunc) {
+	if p == nil {
+		return
+	}
+	p.acpAgentEnabled = fn
+}
+
+func (p *CodexProvider) Tools(ctx context.Context, session SessionContext) ([]sdk.Tool, error) {
 	if session.IsSubagent || p.taskStarter == nil {
 		return nil, nil
+	}
+	enabled, err := p.codexEnabled(ctx, session.BotID)
+	if err != nil || !enabled {
+		return nil, err
 	}
 	sess := session
 	return []sdk.Tool{{
@@ -95,6 +109,13 @@ func (p *CodexProvider) Tools(_ context.Context, session SessionContext) ([]sdk.
 func (p *CodexProvider) exec(ctx context.Context, session SessionContext, args map[string]any) (any, error) {
 	if strings.TrimSpace(session.BotID) == "" {
 		return nil, errors.New("bot_id is required")
+	}
+	enabled, err := p.codexEnabled(ctx, session.BotID)
+	if err != nil {
+		return nil, err
+	}
+	if !enabled {
+		return nil, errors.New("codex ACP is not enabled for this bot")
 	}
 	if p.workspace != nil {
 		info, err := p.workspace.WorkspaceInfo(ctx, session.BotID)
@@ -147,6 +168,13 @@ func (p *CodexProvider) exec(ctx context.Context, session SessionContext, args m
 		return nil, err
 	}
 	return formatCodexStartResult(result), nil
+}
+
+func (p *CodexProvider) codexEnabled(ctx context.Context, botID string) (bool, error) {
+	if p == nil || p.acpAgentEnabled == nil {
+		return false, nil
+	}
+	return p.acpAgentEnabled(ctx, botID, acpagent.CodexAgentID)
 }
 
 func codexStringSliceArg(args map[string]any, key string) []string {
