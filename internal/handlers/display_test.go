@@ -78,6 +78,9 @@ func TestDisplayPrepareCommandInjectsInstallScript(t *testing.T) {
 	if !strings.Contains(displayPrepareMainCommand, "-localhost -rfbport \"$RFB_PORT\"") {
 		t.Fatal("display prepare must keep VNC on container loopback")
 	}
+	if !strings.Contains(displayPrepareMainCommand, "rfb_none_ready") {
+		t.Fatal("display prepare must verify RFB None security instead of trusting an open TCP port")
+	}
 	if !strings.Contains(displayPrepareMainCommand, `XVNC_GEOMETRY="${MEMOH_DISPLAY_GEOMETRY:-1280x960}"`) {
 		t.Fatal("display prepare must default to the 4:3 desktop geometry")
 	}

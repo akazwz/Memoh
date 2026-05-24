@@ -566,7 +566,53 @@ stop_browsers() {
   done
 }
 display_socket_ready() {
-  xvnc_running && [ -S "$X_SOCKET" ] && awk -v port="$(printf '%04X' "$RFB_PORT")" 'toupper($2) ~ ":" port "$" && $4 == "0A" { found = 1 } END { exit found ? 0 : 1 }' /proc/net/tcp /proc/net/tcp6 2>/dev/null
+  xvnc_running && [ -S "$X_SOCKET" ] && awk -v port="$(printf '%04X' "$RFB_PORT")" 'toupper($2) ~ ":" port "$" && $4 == "0A" { found = 1 } END { exit found ? 0 : 1 }' /proc/net/tcp /proc/net/tcp6 2>/dev/null && rfb_none_ready
+}
+rfb_none_ready() {
+  py="$(command -v python3 || command -v python || true)"
+  [ -n "$py" ] || return 0
+  "$py" - "$RFB_PORT" <<'PY'
+import socket
+import struct
+import sys
+
+sock = None
+try:
+    sock = socket.create_connection(("127.0.0.1", int(sys.argv[1])), timeout=1)
+    sock.settimeout(1)
+    version = sock.recv(12)
+    if len(version) != 12 or not version.startswith(b"RFB "):
+        sys.exit(1)
+    sock.sendall(version)
+    try:
+        minor = int(version[8:11])
+    except Exception:
+        minor = 8
+    if minor <= 3:
+        security_type = sock.recv(4)
+        if len(security_type) != 4:
+            sys.exit(1)
+        sys.exit(0 if struct.unpack(">I", security_type)[0] == 1 else 1)
+    count = sock.recv(1)
+    if len(count) != 1 or count[0] == 0:
+        sys.exit(1)
+    security_types = sock.recv(count[0])
+    if len(security_types) != count[0] or 1 not in security_types:
+        sys.exit(1)
+    sock.sendall(b"\x01")
+    result = sock.recv(4)
+    if len(result) != 4 or struct.unpack(">I", result)[0] != 0:
+        sys.exit(1)
+    sys.exit(0)
+except Exception:
+    sys.exit(1)
+finally:
+    if sock is not None:
+        try:
+            sock.close()
+        except Exception:
+            pass
+PY
 }
 display_ready() {
   display_socket_ready && find_browser >/dev/null 2>&1 && has_desktop

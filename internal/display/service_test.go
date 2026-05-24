@@ -3,13 +3,19 @@ package display
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
+	"errors"
 	"image"
 	"image/color"
 	"image/jpeg"
+	"io"
+	"log/slog"
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 )
 
 func TestReadRTCSettings(t *testing.T) {
@@ -49,12 +55,138 @@ func TestIsSocketReadyRequiresListener(t *testing.T) {
 	}
 }
 
+func TestRemoveLastTrackStopsSessionSynchronously(t *testing.T) {
+	service := &Service{
+		logger:   slog.Default(),
+		sessions: map[string]*session{},
+	}
+	sess := newSession(service, "bot-1", "gst-launch-1.0", CodecVP8)
+	sess.tracks["viewer-1"] = nil
+	service.sessions[sess.botID] = sess
+
+	sess.removeTrack("viewer-1")
+
+	if !sess.closed() {
+		t.Fatal("session should be closed before removeTrack returns")
+	}
+	service.mu.Lock()
+	_, exists := service.sessions[sess.botID]
+	service.mu.Unlock()
+	if exists {
+		t.Fatal("closed session should be removed from service map before removeTrack returns")
+	}
+}
+
+func TestSessionStopClosesPeers(t *testing.T) {
+	service := &Service{
+		logger:   slog.Default(),
+		sessions: map[string]*session{},
+	}
+	sess := newSession(service, "bot-1", "gst-launch-1.0", CodecVP8)
+	sess.tracks["viewer-1"] = nil
+	service.sessions[sess.botID] = sess
+
+	closed := false
+	sess.addPeer(&peerSession{
+		id:    "viewer-1",
+		state: "connected",
+		close: func() {
+			sess.removeTrack("viewer-1")
+			closed = true
+		},
+	})
+
+	done := make(chan struct{})
+	go func() {
+		sess.stop()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("session stop deadlocked while closing peers")
+	}
+
+	if !closed {
+		t.Fatal("session stop should close active peers")
+	}
+}
+
+func TestGStreamerFailureDetailIncludesExitAndOutput(t *testing.T) {
+	detail := gstreamerFailureDetail(errors.New("exit status 1"), "missing plugin: x264enc\n")
+	if !strings.Contains(detail, "exit=exit status 1") {
+		t.Fatalf("detail should include exit status: %q", detail)
+	}
+	if !strings.Contains(detail, "stderr=missing plugin: x264enc") {
+		t.Fatalf("detail should include stderr tail: %q", detail)
+	}
+}
+
+func TestProcessOutputTailKeepsRecentOutput(t *testing.T) {
+	tail := &processOutputTail{maxBytes: 8}
+	tail.Write([]byte("first line\n"))
+	tail.Write([]byte("second"))
+	if got := tail.String(); got != "e\nsecond" {
+		t.Fatalf("tail = %q, want %q", got, "e\nsecond")
+	}
+}
+
+func TestNegotiateRFBNoneSecurityAcceptsRFB33None(t *testing.T) {
+	client, server := net.Pipe()
+	defer func() { _ = client.Close() }()
+	defer func() { _ = server.Close() }()
+
+	errCh := serveRFB33Security(t, server, 1)
+	if err := negotiateRFBNoneSecurity(client); err != nil {
+		t.Fatalf("negotiateRFBNoneSecurity returned error: %v", err)
+	}
+	if err := <-errCh; err != nil {
+		t.Fatalf("fake RFB server failed: %v", err)
+	}
+}
+
+func TestNegotiateRFBNoneSecurityRejectsRFB33VNCAuth(t *testing.T) {
+	client, server := net.Pipe()
+	defer func() { _ = client.Close() }()
+	defer func() { _ = server.Close() }()
+
+	errCh := serveRFB33Security(t, server, 2)
+	if err := negotiateRFBNoneSecurity(client); err == nil || !strings.Contains(err.Error(), "security type 2") {
+		t.Fatalf("expected RFB 3.3 VNC auth to be rejected, got %v", err)
+	}
+	if err := <-errCh; err != nil {
+		t.Fatalf("fake RFB server failed: %v", err)
+	}
+}
+
 func TestReadRTCSettingsRejectsPartialPortRange(t *testing.T) {
 	t.Setenv(rtcUDPPortMinEnv, "30000")
 
 	if _, err := readRTCSettings(nil); err == nil {
 		t.Fatal("expected partial port range to fail")
 	}
+}
+
+func serveRFB33Security(t *testing.T, conn net.Conn, securityType uint32) <-chan error {
+	t.Helper()
+	errCh := make(chan error, 1)
+	go func() {
+		if _, err := conn.Write([]byte("RFB 003.003\n")); err != nil {
+			errCh <- err
+			return
+		}
+		version := make([]byte, 12)
+		if _, err := io.ReadFull(conn, version); err != nil {
+			errCh <- err
+			return
+		}
+		response := make([]byte, 4)
+		binary.BigEndian.PutUint32(response, securityType)
+		_, err := conn.Write(response)
+		errCh <- err
+	}()
+	return errCh
 }
 
 func TestReadRTCSettingsRejectsInvalidNATIP(t *testing.T) {
@@ -78,7 +210,7 @@ func TestReadRTCSettingsUsesInferredNATIPs(t *testing.T) {
 func TestGStreamerArgsH264UsesX264AndH264Pay(t *testing.T) {
 	args := gstreamerArgs(CodecH264, 5901, 5004)
 	if !containsString(args, "incremental=true") {
-		t.Fatal("live rfbsrc must request incremental updates")
+		t.Fatal("live rfbsrc must keep incremental updates enabled for long-running streams")
 	}
 	if !containsString(args, "use-copyrect=true") {
 		t.Fatal("live rfbsrc must allow copyrect updates")

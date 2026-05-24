@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"encoding/binary"
+	"io"
 	"log/slog"
 	"net"
 	"os"
@@ -175,8 +177,72 @@ func displayTCPReady(ctx context.Context, addr string) bool {
 	if err != nil {
 		return false
 	}
-	_ = conn.Close()
-	return true
+	defer func() { _ = conn.Close() }()
+	if err := conn.SetDeadline(time.Now().Add(300 * time.Millisecond)); err != nil {
+		return false
+	}
+	return rfbNoneSecurityReady(conn)
+}
+
+func rfbNoneSecurityReady(conn net.Conn) bool {
+	version := make([]byte, 12)
+	if _, err := io.ReadFull(conn, version); err != nil {
+		return false
+	}
+	if _, err := conn.Write(version); err != nil {
+		return false
+	}
+
+	if rfbProtocolMinor(version) <= 3 {
+		securityType := make([]byte, 4)
+		if _, err := io.ReadFull(conn, securityType); err != nil {
+			return false
+		}
+		return binary.BigEndian.Uint32(securityType) == 1
+	}
+
+	count := []byte{0}
+	if _, err := io.ReadFull(conn, count); err != nil {
+		return false
+	}
+	if count[0] == 0 {
+		return false
+	}
+	types := make([]byte, int(count[0]))
+	if _, err := io.ReadFull(conn, types); err != nil {
+		return false
+	}
+	if !containsSecurityType(types, 1) {
+		return false
+	}
+	if _, err := conn.Write([]byte{1}); err != nil {
+		return false
+	}
+	result := make([]byte, 4)
+	if _, err := io.ReadFull(conn, result); err != nil {
+		return false
+	}
+	return binary.BigEndian.Uint32(result) == 0
+}
+
+func rfbProtocolMinor(version []byte) int {
+	if len(version) < 11 {
+		return 8
+	}
+	minor, err := strconv.Atoi(string(version[8:11]))
+	if err != nil {
+		return 8
+	}
+	return minor
+}
+
+func containsSecurityType(values []byte, target byte) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
 }
 
 func displayRFBTCPAddr() string {

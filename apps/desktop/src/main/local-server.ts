@@ -1,6 +1,6 @@
 import { app, dialog } from 'electron'
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
-import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { closeSync, cpSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer, request, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { join } from 'node:path'
 import { ensureEmbeddedQdrant, getEmbeddedQdrantStatus } from './qdrant'
@@ -437,13 +437,22 @@ function spawnServer(command: ServerCommand): ChildProcess {
     throw new Error(`Bundled server binary not found: ${command.command}`)
   }
   runMigrations(command)
-  const child = spawn(command.command, command.args, {
-    cwd: command.cwd,
-    detached: true,
-    stdio: 'ignore',
-    windowsHide: process.platform === 'win32',
-    env: serverEnv(command),
-  })
+  const stdoutLogFd = openSync(logPath(), 'a')
+  const stderrLogFd = openSync(logPath(), 'a')
+  let child: ChildProcess
+  try {
+    appendLog(`starting managed local server: ${command.command} ${command.args.join(' ')}`)
+    child = spawn(command.command, command.args, {
+      cwd: command.cwd,
+      detached: true,
+      stdio: ['ignore', stdoutLogFd, stderrLogFd],
+      windowsHide: process.platform === 'win32',
+      env: serverEnv(command),
+    })
+  } finally {
+    closeSync(stdoutLogFd)
+    closeSync(stderrLogFd)
+  }
   child.unref()
   child.once('error', (error) => {
     appendLog(`managed local server process error: ${error.message}`)

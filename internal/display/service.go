@@ -40,7 +40,7 @@ const (
 	videoPayloadTypeH264 = 102
 	videoPayloadTypeVP8  = 96
 	videoClockRate       = 90000
-	videoFrameRate       = 15
+	videoFrameRate       = 30
 	h264FmtpLine         = "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f"
 	displayProbePeriod   = 5 * time.Second
 	socketProbeTimeout   = 300 * time.Millisecond
@@ -156,14 +156,21 @@ func (s *Service) displayTarget(botID string) string {
 }
 
 func (s *Service) displayReachable(ctx context.Context, botID string) bool {
-	probeCtx, cancel := context.WithTimeout(ctx, socketProbeTimeout)
+	return s.displayReadyError(ctx, botID) == nil
+}
+
+func (s *Service) displayReadyError(ctx context.Context, botID string) error {
+	probeCtx, cancel := context.WithTimeout(ctx, displayProbePeriod)
 	defer cancel()
 	conn, err := s.dialRFB(probeCtx, botID)
 	if err != nil {
-		return false
+		return err
 	}
-	_ = conn.Close()
-	return true
+	defer func() { _ = conn.Close() }()
+	if err := conn.SetDeadline(time.Now().Add(displayProbePeriod)); err != nil {
+		return err
+	}
+	return negotiateRFBNoneSecurity(conn)
 }
 
 func (s *Service) dialRFB(ctx context.Context, botID string) (net.Conn, error) {
@@ -206,13 +213,19 @@ func (s *Service) Status(ctx context.Context, botID string) Status {
 	status.EncoderAvailable = gstErr == nil && strings.TrimSpace(gstLaunch) != ""
 
 	if status.Enabled {
-		status.Running = s.displayReachable(ctx, botID)
+		if err := s.displayReadyError(ctx, botID); err == nil {
+			status.Running = true
+		} else {
+			status.UnavailableReason = "display server not reachable: " + err.Error()
+		}
 	}
 	status.Available = status.Enabled && status.Running && status.EncoderAvailable
 	switch {
 	case !status.Enabled:
 	case !status.Running:
-		status.UnavailableReason = "display server not reachable"
+		if status.UnavailableReason == "" {
+			status.UnavailableReason = "display server not reachable"
+		}
 	case !status.EncoderAvailable:
 		status.UnavailableReason = "gstreamer unavailable"
 	}
@@ -442,6 +455,9 @@ type session struct {
 	udp   *net.UDPConn
 	cmd   *exec.Cmd
 
+	gstOutput *processOutputTail
+	gstExited chan error
+
 	tracksMu sync.RWMutex
 	tracks   map[string]*webrtc.TrackLocalStaticRTP
 	input    *rfbInputClient
@@ -475,6 +491,7 @@ func newSession(service *Service, botID, gstLaunch, codec string) *session {
 		cancel:    cancel,
 		tracks:    make(map[string]*webrtc.TrackLocalStaticRTP),
 		peers:     make(map[string]*peerSession),
+		gstExited: make(chan error, 1),
 	}
 }
 
@@ -488,8 +505,8 @@ func (s *session) closed() bool {
 }
 
 func (s *session) start(ctx context.Context) error {
-	if !s.service.displayReachable(ctx, s.botID) {
-		return fmt.Errorf("%w: %s", ErrDisplayUnavailable, s.service.displayTarget(s.botID))
+	if err := s.service.displayReadyError(ctx, s.botID); err != nil {
+		return fmt.Errorf("%w: %s: %w", ErrDisplayUnavailable, s.service.displayTarget(s.botID), err)
 	}
 
 	runCtx, runCtxCancel := context.WithCancel(context.WithoutCancel(ctx))
@@ -526,8 +543,10 @@ func (s *session) start(ctx context.Context) error {
 	args := gstreamerArgs(s.codec, proxyPort, rtpPort)
 	cmd := exec.CommandContext(runCtx, s.gstLaunch, args...) //nolint:gosec // executable is resolved from PATH or explicit admin env.
 	hideCommandWindow(cmd)
-	cmd.Stdout = processLogWriter{logger: s.service.logger, botID: s.botID}
-	cmd.Stderr = processLogWriter{logger: s.service.logger, botID: s.botID}
+	outputTail := &processOutputTail{maxBytes: processOutputMaxBytes}
+	s.gstOutput = outputTail
+	cmd.Stdout = processLogWriter{logger: s.service.logger, botID: s.botID, tail: outputTail}
+	cmd.Stderr = processLogWriter{logger: s.service.logger, botID: s.botID, tail: outputTail}
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("start gstreamer display pipeline: %w", err)
 	}
@@ -564,9 +583,11 @@ func (s *session) start(ctx context.Context) error {
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
+	case err := <-s.gstExited:
+		return fmt.Errorf("%w: display pipeline exited during startup%s", ErrEncoderUnavailable, gstreamerFailureDetail(err, outputTail.String()))
 	case <-time.After(150 * time.Millisecond):
 		if s.closed() {
-			return fmt.Errorf("%w: display pipeline exited during startup", ErrEncoderUnavailable)
+			return fmt.Errorf("%w: display pipeline exited during startup%s", ErrEncoderUnavailable, gstreamerFailureDetail(nil, outputTail.String()))
 		}
 		return nil
 	}
@@ -751,8 +772,8 @@ func (s *session) removeTrack(id string) {
 	delete(s.tracks, id)
 	empty := len(s.tracks) == 0
 	s.tracksMu.Unlock()
-	if empty {
-		go s.stop()
+	if empty && !s.closed() {
+		s.stop()
 	}
 }
 
@@ -791,6 +812,18 @@ func (s *session) closePeer(id string) bool {
 	}
 	peer.closeNow()
 	return true
+}
+
+func (s *session) closePeers() {
+	s.peersMu.RLock()
+	peers := make([]*peerSession, 0, len(s.peers))
+	for _, peer := range s.peers {
+		peers = append(peers, peer)
+	}
+	s.peersMu.RUnlock()
+	for _, peer := range peers {
+		peer.closeNow()
+	}
 }
 
 func (p *peerSession) setState(state string) {
@@ -837,6 +870,7 @@ func (s *session) stop() {
 		if s.input != nil {
 			_ = s.input.Close()
 		}
+		s.closePeers()
 		s.service.removeSession(s.botID, s)
 		s.service.logger.Info("display encoder stopped", slog.String("bot_id", s.botID))
 	})
@@ -926,6 +960,10 @@ func (s *session) forwardRTP() {
 
 func (s *session) waitGStreamer() {
 	err := s.cmd.Wait()
+	select {
+	case s.gstExited <- err:
+	default:
+	}
 	if s.ctx.Err() == nil {
 		s.service.logger.Warn("display gstreamer pipeline exited", slog.String("bot_id", s.botID), slog.Any("error", err))
 		s.stop()
@@ -1275,14 +1313,66 @@ func isSocketReady(ctx context.Context, path string) bool {
 type processLogWriter struct {
 	logger *slog.Logger
 	botID  string
+	tail   *processOutputTail
 }
 
 func (w processLogWriter) Write(p []byte) (int, error) {
+	if w.tail != nil {
+		w.tail.Write(p)
+	}
 	text := strings.TrimSpace(string(p))
 	if text != "" {
 		w.logger.Warn("display gstreamer output", slog.String("bot_id", w.botID), slog.String("message", text))
 	}
 	return len(p), nil
+}
+
+const processOutputMaxBytes = 8192
+
+type processOutputTail struct {
+	mu       sync.Mutex
+	maxBytes int
+	data     []byte
+}
+
+func (t *processOutputTail) Write(p []byte) {
+	if t == nil || len(p) == 0 {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.data = append(t.data, p...)
+	maxBytes := t.maxBytes
+	if maxBytes <= 0 {
+		maxBytes = processOutputMaxBytes
+	}
+	if len(t.data) > maxBytes {
+		t.data = append([]byte(nil), t.data[len(t.data)-maxBytes:]...)
+	}
+}
+
+func (t *processOutputTail) String() string {
+	if t == nil {
+		return ""
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return strings.TrimSpace(string(t.data))
+}
+
+func gstreamerFailureDetail(err error, output string) string {
+	var parts []string
+	if err != nil {
+		parts = append(parts, "exit="+err.Error())
+	}
+	output = strings.TrimSpace(output)
+	if output != "" {
+		parts = append(parts, "stderr="+output)
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return " (" + strings.Join(parts, "; ") + ")"
 }
 
 type rfbInputClient struct {
@@ -1344,45 +1434,8 @@ func (c *rfbInputClient) handshake() error {
 	}
 	defer func() { _ = c.conn.SetDeadline(time.Time{}) }()
 
-	version := make([]byte, 12)
-	if _, err := io.ReadFull(c.conn, version); err != nil {
-		return fmt.Errorf("read RFB version: %w", err)
-	}
-	if _, err := c.conn.Write(version); err != nil {
-		return fmt.Errorf("write RFB version: %w", err)
-	}
-
-	count := []byte{0}
-	if _, err := io.ReadFull(c.conn, count); err != nil {
-		return fmt.Errorf("read RFB security types: %w", err)
-	}
-	if count[0] == 0 {
-		reason, err := readRFBString(c.conn)
-		if err != nil {
-			return err
-		}
-		return fmt.Errorf("RFB security negotiation failed: %s", reason)
-	}
-	types := make([]byte, int(count[0]))
-	if _, err := io.ReadFull(c.conn, types); err != nil {
-		return fmt.Errorf("read RFB security type list: %w", err)
-	}
-	if !containsByte(types, 1) {
-		return errors.New("RFB server does not allow None security")
-	}
-	if _, err := c.conn.Write([]byte{1}); err != nil {
-		return fmt.Errorf("write RFB security type: %w", err)
-	}
-	result := make([]byte, 4)
-	if _, err := io.ReadFull(c.conn, result); err != nil {
-		return fmt.Errorf("read RFB security result: %w", err)
-	}
-	if binary.BigEndian.Uint32(result) != 0 {
-		reason, err := readRFBString(c.conn)
-		if err != nil {
-			return err
-		}
-		return fmt.Errorf("RFB security rejected: %s", reason)
+	if err := negotiateRFBNoneSecurity(c.conn); err != nil {
+		return err
 	}
 
 	if _, err := c.conn.Write([]byte{1}); err != nil {
@@ -1399,6 +1452,83 @@ func (c *rfbInputClient) handshake() error {
 		}
 	}
 	return nil
+}
+
+func negotiateRFBNoneSecurity(conn net.Conn) error {
+	version := make([]byte, 12)
+	if _, err := io.ReadFull(conn, version); err != nil {
+		return fmt.Errorf("read RFB version: %w", err)
+	}
+	if _, err := conn.Write(version); err != nil {
+		return fmt.Errorf("write RFB version: %w", err)
+	}
+
+	if rfbProtocolMinor(version) <= 3 {
+		return negotiateRFB33NoneSecurity(conn)
+	}
+	return negotiateRFB37NoneSecurity(conn)
+}
+
+func negotiateRFB33NoneSecurity(conn net.Conn) error {
+	securityType := make([]byte, 4)
+	if _, err := io.ReadFull(conn, securityType); err != nil {
+		return fmt.Errorf("read RFB security type: %w", err)
+	}
+	switch value := binary.BigEndian.Uint32(securityType); value {
+	case 0:
+		return errors.New("RFB security negotiation failed")
+	case 1:
+		return nil
+	default:
+		return fmt.Errorf("RFB server does not allow None security (security type %d)", value)
+	}
+}
+
+func negotiateRFB37NoneSecurity(conn net.Conn) error {
+	count := []byte{0}
+	if _, err := io.ReadFull(conn, count); err != nil {
+		return fmt.Errorf("read RFB security types: %w", err)
+	}
+	if count[0] == 0 {
+		reason, err := readRFBString(conn)
+		if err != nil {
+			return err
+		}
+		return fmt.Errorf("RFB security negotiation failed: %s", reason)
+	}
+	types := make([]byte, int(count[0]))
+	if _, err := io.ReadFull(conn, types); err != nil {
+		return fmt.Errorf("read RFB security type list: %w", err)
+	}
+	if !containsByte(types, 1) {
+		return errors.New("RFB server does not allow None security")
+	}
+	if _, err := conn.Write([]byte{1}); err != nil {
+		return fmt.Errorf("write RFB security type: %w", err)
+	}
+	result := make([]byte, 4)
+	if _, err := io.ReadFull(conn, result); err != nil {
+		return fmt.Errorf("read RFB security result: %w", err)
+	}
+	if binary.BigEndian.Uint32(result) != 0 {
+		reason, err := readRFBString(conn)
+		if err != nil {
+			return err
+		}
+		return fmt.Errorf("RFB security rejected: %s", reason)
+	}
+	return nil
+}
+
+func rfbProtocolMinor(version []byte) int {
+	if len(version) < 11 {
+		return 8
+	}
+	minor, err := strconv.Atoi(string(version[8:11]))
+	if err != nil {
+		return 8
+	}
+	return minor
 }
 
 func readRFBString(r io.Reader) (string, error) {

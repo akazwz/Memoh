@@ -368,7 +368,8 @@
         "connecting": "正在连接桌面...",
         "connected": "桌面已连接",
         "disconnected": "桌面连接已断开",
-        "unavailable": "桌面不可用"
+        "unavailable": "桌面不可用",
+        "noVideoFrames": "已连接，但没有解码到视频帧（{detail}）"
       },
       "unavailable": {
         "disabled": "工作区桌面未启用",

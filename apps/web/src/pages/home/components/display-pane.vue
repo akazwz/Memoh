@@ -195,12 +195,18 @@
       </div>
     </div>
     <div
-      v-else-if="status !== 'connected'"
-      class="shrink-0 flex items-center justify-end gap-2 px-3 py-1.5 text-xs text-muted-foreground border-t border-border bg-background"
+      v-else-if="status !== 'connected' || videoWarning"
+      class="shrink-0 flex items-start justify-end gap-2 px-3 py-1.5 text-xs text-muted-foreground border-t border-border bg-background"
     >
-      <span>{{ statusLabel }}</span>
+      <span
+        class="min-w-0 whitespace-pre-wrap break-words text-right"
+        :title="videoWarning || statusLabel"
+      >
+        {{ videoWarning || statusLabel }}
+      </span>
       <Button
-        v-if="status === 'disconnected' || status === 'unavailable'"
+        v-if="status === 'disconnected' || status === 'unavailable' || videoWarning"
+        class="shrink-0"
         size="sm"
         variant="outline"
         @click="connect"
@@ -347,6 +353,7 @@ type VideoWithFrameCallback = HTMLVideoElement & {
 const ACTIVE_SNAPSHOT_INTERVAL_MS = 10000
 const INACTIVE_SNAPSHOT_INTERVAL_MS = 5000
 const FIRST_SNAPSHOT_DELAY_MS = 350
+const FIRST_VIDEO_FRAME_TIMEOUT_MS = 5000
 const BITRATE_SAMPLE_LIMIT = 60
 const BITRATE_AXIS_MIN_KBPS = 100
 const BITRATE_CHART_WIDTH = 320
@@ -361,6 +368,7 @@ const rootRef = ref<HTMLElement | null>(null)
 const videoRef = ref<HTMLVideoElement | null>(null)
 const status = ref<DisplayStatus>('idle')
 const unavailableReason = ref('')
+const videoWarning = ref('')
 const prepareProgress = ref<PrepareProgress | null>(null)
 const displaySessionId = ref('')
 const statsVisible = ref(false)
@@ -378,6 +386,10 @@ let pointerMask = 0
 let lastPointerPoint: { x: number; y: number } | null = null
 let snapshotTimer: ReturnType<typeof window.setTimeout> | null = null
 let snapshotFrameRequest: number | null = null
+let firstFrameTimer: ReturnType<typeof window.setTimeout> | null = null
+let firstFrameRequest: number | null = null
+let firstFrameCleanup: (() => void) | null = null
+let firstFrameWatchToken = 0
 let statsTimer: ReturnType<typeof window.setInterval> | null = null
 let lastStatsSample: StatsSample | null = null
 
@@ -497,6 +509,8 @@ function formatUnavailableReason(reason: string): string {
 }
 
 function cleanupLocal() {
+  stopFirstFrameWatch()
+  videoWarning.value = ''
   stopSnapshotCapture()
   stopStatsPolling()
   closeStatsMenu()
@@ -546,6 +560,7 @@ function setPeerStatus(next: RTCPeerConnectionState) {
   switch (next) {
     case 'connected':
       status.value = 'connected'
+      videoWarning.value = ''
       startSnapshotCapture()
       if (statsVisible.value) {
         startStatsPolling()
@@ -555,6 +570,7 @@ function setPeerStatus(next: RTCPeerConnectionState) {
     case 'closed':
     case 'disconnected':
       status.value = 'disconnected'
+      stopFirstFrameWatch()
       stopSnapshotCapture()
       stopStatsPolling()
       break
@@ -672,6 +688,93 @@ function resetStatsState() {
   statsUpdatedAt.value = null
   lastStatsSample = null
   bitrateSamples.value = []
+}
+
+function stopFirstFrameWatch() {
+  firstFrameWatchToken += 1
+  if (firstFrameTimer) {
+    window.clearTimeout(firstFrameTimer)
+    firstFrameTimer = null
+  }
+  const video = videoRef.value as VideoWithFrameCallback | null
+  if (firstFrameRequest !== null && video?.cancelVideoFrameCallback) {
+    video.cancelVideoFrameCallback(firstFrameRequest)
+  }
+  firstFrameRequest = null
+  firstFrameCleanup?.()
+  firstFrameCleanup = null
+}
+
+function startFirstFrameWatch() {
+  const video = videoRef.value as VideoWithFrameCallback | null
+  stopFirstFrameWatch()
+  videoWarning.value = ''
+  const token = ++firstFrameWatchToken
+
+  const markFrame = () => {
+    if (token !== firstFrameWatchToken) return
+    videoWarning.value = ''
+    stopFirstFrameWatch()
+  }
+
+  if (video?.requestVideoFrameCallback) {
+    firstFrameRequest = video.requestVideoFrameCallback(() => markFrame())
+  } else if (video) {
+    const onReady = () => markFrame()
+    video.addEventListener('loadeddata', onReady, { once: true })
+    video.addEventListener('playing', onReady, { once: true })
+    firstFrameCleanup = () => {
+      video.removeEventListener('loadeddata', onReady)
+      video.removeEventListener('playing', onReady)
+    }
+  }
+
+  firstFrameTimer = window.setTimeout(() => {
+    firstFrameTimer = null
+    if (token !== firstFrameWatchToken) return
+    void reportMissingFirstFrame()
+  }, FIRST_VIDEO_FRAME_TIMEOUT_MS)
+}
+
+async function reportMissingFirstFrame() {
+  const diagnostics = await collectVideoDiagnostics()
+  videoWarning.value = t('chat.display.status.noVideoFrames', { detail: diagnostics.summary })
+  console.warn('Display connected but no video frames decoded:', diagnostics)
+}
+
+async function collectVideoDiagnostics() {
+  const video = videoRef.value
+  const diagnostics: Record<string, unknown> = {
+    peer: peer?.connectionState ?? '-',
+    ice: peer?.iceConnectionState ?? '-',
+    signaling: peer?.signalingState ?? '-',
+    video_ready_state: video?.readyState ?? null,
+    video_size: video?.videoWidth && video.videoHeight ? `${video.videoWidth}x${video.videoHeight}` : '-',
+  }
+
+  if (peer) {
+    try {
+      const report = await peer.getStats()
+      const inbound = findStats(report, item =>
+        item.type === 'inbound-rtp'
+        && (item.kind === 'video' || item.mediaType === 'video')
+        && item.isRemote !== true,
+      )
+      const codec = inbound ? report.get(String(inbound.codecId || '')) as StatsRecord | undefined : undefined
+      diagnostics.codec = stringStat(codec, 'mimeType') || stringStat(inbound, 'codecId') || '-'
+      diagnostics.bytes_received = numberStat(inbound, 'bytesReceived')
+      diagnostics.frames_decoded = numberStat(inbound, 'framesDecoded')
+      diagnostics.packets_received = numberStat(inbound, 'packetsReceived')
+      diagnostics.packets_lost = numberStat(inbound, 'packetsLost')
+    } catch (error) {
+      diagnostics.stats_error = error instanceof Error ? error.message : String(error)
+    }
+  }
+
+  const frames = typeof diagnostics.frames_decoded === 'number' ? diagnostics.frames_decoded : 0
+  const bytes = typeof diagnostics.bytes_received === 'number' ? diagnostics.bytes_received : 0
+  diagnostics.summary = `peer=${diagnostics.peer}, ice=${diagnostics.ice}, frames=${frames}, bytes=${bytes}, video=${diagnostics.video_size}`
+  return diagnostics as Record<string, unknown> & { summary: string }
 }
 
 async function updateDisplayStats() {
@@ -1136,6 +1239,7 @@ async function connect() {
       return
     }
   } catch (error) {
+    console.error('Display availability check failed:', error)
     status.value = 'unavailable'
     unavailableReason.value = resolveApiErrorMessage(error, t('chat.display.status.unavailable'))
     prepareProgress.value = null
@@ -1151,6 +1255,7 @@ async function connect() {
     const video = videoRef.value
     if (!video) return
     video.srcObject = event.streams[0] ?? new MediaStream([event.track])
+    startFirstFrameWatch()
     void video.play()
   })
 
@@ -1163,6 +1268,7 @@ async function connect() {
     await next.setRemoteDescription(new RTCSessionDescription(answer))
     prepareProgress.value = null
   } catch (error) {
+    console.error('Display WebRTC connection failed:', error)
     cleanupLocal()
     closeRemoteSession()
     status.value = 'unavailable'
