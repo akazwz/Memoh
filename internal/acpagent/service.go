@@ -16,8 +16,10 @@ import (
 const (
 	SourceACPAgent = "acp_agent"
 
-	CodexAgentID   = "codex"
-	CodexAgentName = "Codex"
+	CodexAgentID    = "codex"
+	CodexAgentName  = "Codex"
+	codexACPCommand = "sh"
+	codexACPShell   = "if command -v codex-acp >/dev/null 2>&1; then exec codex-acp; fi; exec npx -y @zed-industries/codex-acp"
 
 	acpAgentToolName = "acp_agent_tool"
 	acpAgentPlanName = "acp_agent_plan"
@@ -34,8 +36,8 @@ func CodexProfile() Profile {
 	return Profile{
 		ID:          CodexAgentID,
 		DisplayName: CodexAgentName,
-		Command:     acpclient.DefaultCodexACPCommand,
-		Args:        append([]string(nil), acpclient.DefaultCodexACPArgs...),
+		Command:     codexACPCommand,
+		Args:        []string{"-lc", codexACPShell},
 	}
 }
 

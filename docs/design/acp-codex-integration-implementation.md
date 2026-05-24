@@ -7,7 +7,7 @@
 
 这次实现把 Memoh 接成了一个最小可用的 ACP client，并把上层运行时抽成了通用 ACP agent profile。当前只注册内置 `codex` profile，Memoh 会在 bot 的 trusted local workspace 里启动 `codex-acp`，把 Codex 当成一个子会话接入同一个聊天线程：用户可以让主 Agent 通过 `codex_delegate` 委派任务，也可以在 Web 输入框显式发送 `/codex start`。Codex 的流式回复、内部工具活动和最终结果都会进入原聊天流；Web 会根据 ACP metadata 标记当前回复方。
 
-当前实现只覆盖第一阶段：local workspace、内存态 active task、内置 `codex` profile 使用 `npx -y @zed-industries/codex-acp` 启动 adapter、不新增数据库表、不做容器镜像和完整 approval broker。后续增加 Claude/Gemini 等 ACP CLI 时，不需要再复制一套 Codex runtime，只需要增加 profile、命令入口和产品文案。
+当前实现只覆盖第一阶段：local workspace、内存态 active task、内置 `codex` profile 默认启动预装的 `codex-acp` adapter，并在本地环境缺少该命令时回退到 `npx -y @zed-industries/codex-acp`；不新增数据库表、不做完整 approval broker。`internal/acpclient` 保持通用 ACP client，只负责协议和 stdio 桥接；Codex 只是 `acpagent` 中的一个具体 profile。
 
 ## 设计目标
 
@@ -22,8 +22,7 @@
 第一阶段依赖：
 
 - bot workspace backend 必须是 `local`。
-- `memoh-server` 进程 PATH 中必须能找到 `npx`。
-- 默认启动命令是 `npx -y @zed-industries/codex-acp`。
+- Codex profile 默认启动预装的 `codex-acp`。生产 server 镜像会把 `codex-acp` 预装进 workspace toolkit；本地 trusted workspace 如果 PATH 中没有 `codex-acp`，会回退到 `npx -y @zed-industries/codex-acp`。
 - 用户需要自己完成 Codex 登录或本机环境配置；Memoh 当前不注入 Codex 凭证。
 - Codex 操作的 `project_path` 必须落在 local workspace root 内。
 
@@ -56,7 +55,7 @@ internal/acpclient.Runner
     |
     | 4. workspace bridge ExecStream 启动 adapter stdio
     v
-npx -y @zed-industries/codex-acp
+codex-acp
     |
     | 5. ACP callbacks: fs / terminal / permission / session update
     v
@@ -128,12 +127,14 @@ internal/acpagent.Service.runPrompt
 - `Session.Prompt(ctx, prompt)`
 - `Session.Close()`
 
-默认启动配置：
+`internal/acpclient` 不内置 Codex 命令，调用方必须传入 ACP agent 的 `command` / `args`。内置 Codex profile 的启动配置在 `internal/acpagent`：
 
 ```go
-DefaultCodexACPCommand = "npx"
-DefaultCodexACPArgs = []string{"-y", "@zed-industries/codex-acp"}
-DefaultRunTimeout = 20 * time.Minute
+Command = "sh"
+Args = []string{
+    "-lc",
+    "if command -v codex-acp >/dev/null 2>&1; then exec codex-acp; fi; exec npx -y @zed-industries/codex-acp",
+}
 ```
 
 启动流程：
@@ -142,7 +143,7 @@ DefaultRunTimeout = 20 * time.Minute
 2. 只允许 `bridge.WorkspaceBackendLocal`。
 3. 用 `ResolvePathUnderRoot(root, project_path)` 校验项目路径。
 4. 通过 `MCPClient(botID)` 获取 workspace bridge client。
-5. 用 `bridge.ExecStream` 启动 `npx -y @zed-industries/codex-acp`。
+5. 用 `bridge.ExecStream` 启动调用方传入的 ACP agent 命令。Codex profile 会优先执行 `codex-acp`，缺失时回退到 `npx -y @zed-industries/codex-acp`。
 6. 把 `ExecStream` 包装成 stdio reader/writer，交给 ACP SDK 的 `NewClientSideConnection`。
 7. 调用 ACP `initialize`，声明 Memoh client 支持：
    - `fs.readTextFile`
@@ -157,13 +158,13 @@ DefaultRunTimeout = 20 * time.Minute
 
 关键点：
 
-- 启动前用 `command -v <command>` 检查 `npx` 是否可用。
+- 启动前用 `command -v <command>` 检查调用方传入的 ACP command 是否可用。Codex 的 `codex-acp` / `npx` fallback 属于 Codex profile，不放在通用 acpclient 中。
 - stdout 作为 ACP JSON-RPC 输入读回。
 - stdin 通过 `ExecStream.SendStdin` 写给 adapter。
 - stderr 不参与 JSON-RPC，保留最后 8 KiB 作为错误上下文。
 - 关闭时关闭 stdin/stdout/exec stream，并等待最多 2 秒。
 
-如果启动失败，错误会包含 adapter stderr tail，方便定位缺少 `npx`、Codex 未登录、adapter 崩溃等问题。
+如果启动失败，错误会包含 adapter stderr tail，方便定位缺少 `codex-acp` / `npx`、Codex 未登录、adapter 崩溃等问题。
 
 ### 路径安全
 
@@ -225,8 +226,8 @@ type Profile struct {
 ```text
 id: codex
 display_name: Codex
-command: npx
-args: -y @zed-industries/codex-acp
+command: sh
+args: -lc "if command -v codex-acp >/dev/null 2>&1; then exec codex-acp; fi; exec npx -y @zed-industries/codex-acp"
 ```
 
 后续要支持 Claude/Gemini，不需要新增一套 runtime；增加对应 profile，再把 slash command resource 映射到 profile 即可。例如 `/gemini start` 可以映射到 `id=gemini, command=gemini, args=["--acp"]`。
@@ -515,8 +516,8 @@ IM 侧的基础路径已经存在：
 
 | 测试 | 覆盖点 |
 |---|---|
-| `internal/acpclient` tests | fake ACP agent、initialize/new session/prompt、fs、terminal、permission、默认 npx 命令、缺失命令错误。 |
-| `internal/acpagent/service_test.go` | Start/Send active session、profile command/args、stream 顺序、completion 顺序、ACP agent tool event label、handoff 先于 agent 输出。 |
+| `internal/acpclient` tests | fake ACP agent、initialize/new session/prompt、fs、terminal、permission、通用 client 缺少 command 时的错误、显式缺失命令错误。 |
+| `internal/acpagent/service_test.go` | Start/Send active session、profile command/args、Codex profile 启动命令、stream 顺序、completion 顺序、ACP agent tool event label、handoff 先于 agent 输出。 |
 | `internal/agent/tools/codex_test.go` | `codex_delegate` 参数校验、local workspace 限制、unsupported mode、starter error 透传。 |
 | `internal/conversation/flow/resolver_codex_test.go` | `/codex start`/`/codex stop` 解析，stop phrase，model id 为空。 |
 | `internal/conversation/uimessage_test.go` | UIMessage metadata 在 streaming 和 persisted 两条路径保留。 |
@@ -573,8 +574,8 @@ pnpm --filter @memohai/web exec vitest run src/store/chat-list.test.ts
 
 排查：
 
-1. `memoh-server` 的 PATH 是否能找到 `npx`。
-2. 用户是否能在同一环境手动运行 `npx -y @zed-industries/codex-acp`。
+1. `memoh-server` 或 workspace bridge 的 PATH 是否能找到 `codex-acp`；本地 trusted workspace 可检查 `npx` fallback。
+2. 用户是否能在同一环境手动运行 `codex-acp`，或运行 `npx -y @zed-industries/codex-acp`。
 3. Codex 是否已登录或配置好凭证。
 4. stderr tail 是否有更明确的 adapter 错误。
 
@@ -607,7 +608,7 @@ Web store 根据 metadata 中的 `source` 和 `agent` 判断 responder。
 1. active task 只存在内存里，server 重启会丢失。
 2. Codex session 没有 DB task 记录，不支持状态页和恢复。
 3. 不支持 container workspace。
-4. 不支持预装二进制，仍依赖 `npx`。
+4. 预装的 `codex-acp` 只解决 adapter 可执行文件，不解决 Codex 凭证注入。
 5. 不支持 bridge streaming exec env。
 6. ACP permission request 还没有映射成 Memoh 的逐项审批。
 7. Web 命令面板只支持 Codex 命令，不是通用 slash command palette。
@@ -621,7 +622,7 @@ Web store 根据 metadata 中的 `source` 和 `agent` 判断 responder。
 1. 增加 `codex_tasks` 表，持久化 active task 状态、project path、ACP session id、last error。
 2. 做 approval broker，把 ACP `request_permission` 映射到 Memoh tool approval。
 3. 为 bridge streaming exec 增加 env 支持，安全注入 Codex/OpenAI 凭证。
-4. 做 container workspace 支持，预装 `codex` 和 `codex-acp`。
+4. 做 container workspace 支持，并补齐 Codex 凭证注入。
 5. Web 命令面板从硬编码 Codex 扩展为后端命令 manifest。
 6. IM 平台做 Codex 输出节流、最终文本发送和审批回复体验。
 7. 增加 Codex task 状态 UI，例如 session header 中显示 active project 和停止按钮。

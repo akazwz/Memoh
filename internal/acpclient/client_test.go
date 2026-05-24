@@ -80,12 +80,24 @@ func TestRunnerRunLocalWorkspaceFakeAgent(t *testing.T) {
 	}
 }
 
-func TestDefaultCodexACPCommandUsesNPX(t *testing.T) {
-	if DefaultCodexACPCommand != "npx" {
-		t.Fatalf("DefaultCodexACPCommand = %q, want npx", DefaultCodexACPCommand)
-	}
-	if got := buildShellCommand(DefaultCodexACPCommand, DefaultCodexACPArgs); got != "npx -y @zed-industries/codex-acp" {
-		t.Fatalf("default shell command = %q", got)
+func TestRunnerRequiresACPCommand(t *testing.T) {
+	root := t.TempDir()
+	client := newTestBridgeClient(t, root)
+	runner := NewRunner(nil, testWorkspace{
+		client: client,
+		info: bridge.WorkspaceInfo{
+			Backend:        bridge.WorkspaceBackendLocal,
+			DefaultWorkDir: root,
+		},
+	})
+
+	_, err := runner.Run(context.Background(), RunRequest{
+		BotID:   "bot-1",
+		Task:    "fix tests",
+		Timeout: 2 * time.Second,
+	})
+	if err == nil || !strings.Contains(err.Error(), "ACP command is required") {
+		t.Fatalf("Run() error = %v, want missing command error", err)
 	}
 }
 

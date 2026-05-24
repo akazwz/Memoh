@@ -14,14 +14,7 @@ import (
 )
 
 const (
-	DefaultACPCommand      = "npx"
-	DefaultCodexACPCommand = DefaultACPCommand
-	DefaultRunTimeout      = 20 * time.Minute
-)
-
-var (
-	DefaultACPArgs      = []string{"-y", "@zed-industries/codex-acp"}
-	DefaultCodexACPArgs = append([]string(nil), DefaultACPArgs...)
+	DefaultRunTimeout = 20 * time.Minute
 )
 
 var ErrUnsupportedWorkspace = errors.New("ACP agent requires a local workspace")
@@ -64,8 +57,6 @@ func NewRunner(log *slog.Logger, workspace Workspace) *Runner {
 	return &Runner{
 		logger:    log.With(slog.String("component", "acpclient")),
 		workspace: workspace,
-		command:   DefaultACPCommand,
-		args:      append([]string(nil), DefaultACPArgs...),
 		timeout:   DefaultRunTimeout,
 	}
 }
@@ -120,13 +111,6 @@ func (r *Runner) Run(ctx context.Context, req RunRequest) (RunResult, error) {
 			args = append(args, r.args...)
 		}
 	}
-	if command == "" {
-		command = DefaultACPCommand
-		if len(args) == 0 {
-			args = append(args, DefaultACPArgs...)
-		}
-	}
-
 	proc, err := startBridgeProcess(runCtx, client, command, args, projectPath, timeout)
 	if err != nil {
 		return RunResult{}, fmt.Errorf("start %s: %w", buildShellCommand(command, args), err)

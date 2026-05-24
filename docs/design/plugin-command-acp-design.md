@@ -66,8 +66,8 @@ type Profile struct {
 ```text
 id: codex
 display_name: Codex
-command: npx
-args: -y @zed-industries/codex-acp
+command: sh
+args: -lc "if command -v codex-acp >/dev/null 2>&1; then exec codex-acp; fi; exec npx -y @zed-industries/codex-acp"
 ```
 
 ## 命名原则
@@ -172,10 +172,10 @@ mcps: []
 acp_agents:
   - id: codex
     display_name: Codex
-    command: npx
+    command: sh
     args:
-      - -y
-      - "@zed-industries/codex-acp"
+      - -lc
+      - "if command -v codex-acp >/dev/null 2>&1; then exec codex-acp; fi; exec npx -y @zed-industries/codex-acp"
     workspace_backend:
       - local
 
@@ -375,7 +375,7 @@ Web submit message
     -> acpagent.Service.Start
     -> acpclient.Runner.StartSession
     -> workspace bridge ExecStream
-    -> npx -y @zed-industries/codex-acp
+    -> Codex profile command: codex-acp or npx fallback
     -> ACP session/new + prompt
 ```
 
@@ -454,7 +454,7 @@ POST /bots/:bot_id/supermarket/install-plugin
 
 当前已具备：
 
-- `internal/acpclient`：通用 ACP client。
+- `internal/acpclient`：通用 ACP client，不内置 Codex 命令。
 - `internal/acpagent`：profile 化 ACP agent runtime。
 - `internal/conversation/flow/resolver_acpagent.go`：`/codex start`/`stop` 路由。
 - `internal/command/manifest.go`：UI command manifest registry。

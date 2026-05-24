@@ -16,6 +16,7 @@
 #   NPM_MIRROR          Default: https://registry.npmjs.org
 #   ALPINE_MIRROR       Default: https://dl-cdn.alpinelinux.org/alpine
 #   UV_MIRROR           Default: https://github.com/astral-sh/uv/releases/latest/download
+#   CODEX_ACP_VERSION   Default: 0.15.0
 #   MEMOH_DISPLAY_OUTDIR
 #                       Optional override for display_output_dir.
 #
@@ -24,6 +25,7 @@ set -eu
 ALPINE_VERSION=3.23
 NODE_VERSION=24.14.0
 NPM_VERSION=10.9.2
+CODEX_ACP_VERSION="${CODEX_ACP_VERSION:-0.15.0}"
 
 OUTDIR="${1:-.toolkit}"
 ARCH="${2:-}"
@@ -315,6 +317,36 @@ install_uv() {
   chmod +x "$OUTDIR/uv"
 }
 
+install_codex_acp() {
+  dest_dir="$OUTDIR/codex-acp"
+  binary_path="$dest_dir/bin/codex-acp"
+  if [ -x "$binary_path" ]; then
+    current_version="$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$dest_dir/package.json" 2>/dev/null | head -n 1)"
+    if [ "$current_version" = "$CODEX_ACP_VERSION" ]; then
+      echo "codex-acp v${CODEX_ACP_VERSION} already installed; skipping download."
+      return
+    fi
+    echo "Replacing codex-acp v${current_version:-unknown} with v${CODEX_ACP_VERSION}."
+  fi
+
+  case "$NODE_ARCH" in
+    x64|arm64) codex_acp_arch="$NODE_ARCH" ;;
+    *) echo "ERROR: unsupported codex-acp arch: $NODE_ARCH" >&2; exit 1 ;;
+  esac
+
+  package_basename="codex-acp-linux-${codex_acp_arch}"
+  package_name="@zed-industries/${package_basename}"
+  package_archive="$TMPDIR/${package_basename}.tgz"
+  package_url="${NPM_MIRROR%/}/${package_name}/-/${package_basename}-${CODEX_ACP_VERSION}.tgz"
+
+  echo "Downloading codex-acp v${CODEX_ACP_VERSION} (${codex_acp_arch})..."
+  wget -qO "$package_archive" "$package_url"
+  rm -rf "$dest_dir"
+  mkdir -p "$dest_dir"
+  tar -xzf "$package_archive" --strip-components=1 -C "$dest_dir"
+  chmod +x "$binary_path"
+}
+
 write_display_wrappers() {
   mkdir -p "$DISPLAY_OUTDIR/bin"
 
@@ -561,6 +593,7 @@ install_pinned_npm node-glibc
 install_pinned_npm node-musl
 
 install_uv
+install_codex_acp
 
 echo "Toolkit installed to $OUTDIR"
 install_display_bundle

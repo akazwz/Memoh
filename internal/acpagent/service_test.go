@@ -202,6 +202,16 @@ func TestServiceStartUsesRequestedProfile(t *testing.T) {
 	}
 }
 
+func TestCodexProfileOwnsAdapterCommand(t *testing.T) {
+	profile := CodexProfile()
+	if profile.Command != codexACPCommand {
+		t.Fatalf("CodexProfile command = %q, want %q", profile.Command, codexACPCommand)
+	}
+	if strings.Join(profile.Args, " ") != "-lc "+codexACPShell {
+		t.Fatalf("CodexProfile args = %q", strings.Join(profile.Args, " "))
+	}
+}
+
 func TestConvertACPEventLabelsAgentToolActivity(t *testing.T) {
 	run := &promptRun{
 		converter: conversation.NewUIMessageStreamConverter(),

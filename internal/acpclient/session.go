@@ -85,12 +85,6 @@ func (r *Runner) StartSession(ctx context.Context, req StartRequest, sink EventS
 			args = append(args, r.args...)
 		}
 	}
-	if command == "" {
-		command = DefaultACPCommand
-		if len(args) == 0 {
-			args = append(args, DefaultACPArgs...)
-		}
-	}
 
 	proc, err := startBridgeProcess(lifecycleCtx, client, command, args, projectPath, timeout)
 	if err != nil {

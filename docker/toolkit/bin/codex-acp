@@ -1,0 +1,8 @@
+#!/bin/sh
+TOOLKIT=/opt/memoh/toolkit
+CODEX_ACP="$TOOLKIT/codex-acp/bin/codex-acp"
+if [ ! -x "$CODEX_ACP" ]; then
+  echo "codex-acp is not installed in the Memoh workspace toolkit: $CODEX_ACP" >&2
+  exit 127
+fi
+exec "$CODEX_ACP" "$@"
