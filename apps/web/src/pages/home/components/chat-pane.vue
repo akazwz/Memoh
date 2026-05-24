@@ -137,6 +137,28 @@
               <CircleAlert class="mt-0.5 size-3.5 shrink-0" />
               <span class="min-w-0 break-words">{{ composerError }}</span>
             </div>
+            <div
+              v-if="commandMenuOpen"
+              class="mb-2 overflow-hidden rounded-md border border-border bg-popover text-popover-foreground shadow-sm"
+            >
+              <button
+                v-for="(command, index) in filteredCommands"
+                :key="command.value"
+                type="button"
+                class="flex w-full items-start gap-2 px-3 py-2 text-left text-xs transition-colors"
+                :class="index === selectedCommandIndex ? 'bg-accent text-accent-foreground' : 'hover:bg-accent/70'"
+                @mousedown.prevent="applyCommand(command)"
+              >
+                <component
+                  :is="command.icon"
+                  class="mt-0.5 size-3.5 shrink-0 text-muted-foreground"
+                />
+                <span class="min-w-0 flex-1">
+                  <span class="block font-mono text-foreground">{{ command.value }}</span>
+                  <span class="mt-0.5 block truncate text-muted-foreground">{{ command.description }}</span>
+                </span>
+              </button>
+            </div>
             <InputGroup class="bg-transparent overflow-hidden shadow-none! ring-0! border-border!">
               <InputGroupTextarea
                 v-model="inputText"
@@ -145,6 +167,10 @@
                 :disabled="!currentBotId || activeChatReadOnly"
                 style="scrollbar-width: none;"
                 @keydown.enter.exact="handleKeydown"
+                @keydown.down="selectNextCommand"
+                @keydown.up="selectPreviousCommand"
+                @keydown.tab="acceptSelectedCommand"
+                @keydown.esc="closeCommandMenu"
                 @paste="handlePaste"
               />
               <InputGroupAddon
@@ -258,7 +284,8 @@
 
 <script setup lang="ts">
 import { ref, computed, onBeforeUnmount, useTemplateRef, watchEffect, watch, nextTick, onActivated, onDeactivated } from 'vue'
-import { LoaderCircle, Image as ImageIcon, File as FileIcon, X, Paperclip, Send, ChevronDown, Lightbulb, CircleAlert } from 'lucide-vue-next'
+import type { Component } from 'vue'
+import { LoaderCircle, Image as ImageIcon, File as FileIcon, X, Paperclip, Send, ChevronDown, Lightbulb, CircleAlert, Code2 } from 'lucide-vue-next'
 import { ScrollArea, Button, InputGroup, InputGroupAddon, InputGroupTextarea, Popover, PopoverContent, PopoverTrigger } from '@memohai/ui'
 import { useChatStore } from '@/store/chat-list'
 import { storeToRefs } from 'pinia'
@@ -274,7 +301,8 @@ import ModelOptions from '@/pages/bots/components/model-options.vue'
 import ReasoningEffortSelect from '@/pages/bots/components/reasoning-effort-select.vue'
 import { EFFORT_LABELS, EFFORT_OPACITY } from '@/pages/bots/components/reasoning-effort'
 import { useMediaGallery } from '../composables/useMediaGallery'
-import type { ChatAttachment } from '@/composables/api/useChat'
+import { fetchCommandManifests } from '@/composables/api/useChat'
+import type { ChatAttachment, CommandManifest } from '@/composables/api/useChat'
 
 const props = withDefaults(defineProps<{
   tabId?: string
@@ -412,6 +440,94 @@ const {
 } = useMediaGallery(messages)
 
 const inputText = ref('')
+const selectedCommandIndex = ref(0)
+const commandMenuDismissed = ref(false)
+let applyingSlashCommand = false
+
+interface SlashCommandOption {
+  value: string
+  insertText: string
+  description: string
+  title: string
+  pluginName?: string
+  icon: Component
+}
+
+const commandManifests = ref<CommandManifest[]>([])
+let commandManifestLoadSeq = 0
+
+function commandIcon(icon?: string): Component {
+  switch (icon) {
+    case 'code':
+    default:
+      return Code2
+  }
+}
+
+const slashCommands = computed<SlashCommandOption[]>(() =>
+  commandManifests.value
+    .filter(command => command.enabled && command.command.trim())
+    .map((command): SlashCommandOption => ({
+      value: command.command.trim(),
+      insertText: command.insert_text || command.command,
+      title: command.title || command.command,
+      description: command.description || command.title || command.command,
+      pluginName: command.plugin_name,
+      icon: commandIcon(command.icon),
+    })),
+)
+
+async function loadCommandManifests() {
+  const botId = currentBotId.value?.trim()
+  const loadSeq = ++commandManifestLoadSeq
+  if (!botId) {
+    commandManifests.value = []
+    return
+  }
+  try {
+    const commands = await fetchCommandManifests(botId, chatStore.sessionId, 'web')
+    if (loadSeq === commandManifestLoadSeq) {
+      commandManifests.value = commands
+    }
+  } catch (error) {
+    console.warn('Failed to load command manifests:', error)
+    if (loadSeq === commandManifestLoadSeq) {
+      commandManifests.value = []
+    }
+  }
+}
+
+watch([currentBotId, () => chatStore.sessionId], () => {
+  void loadCommandManifests()
+}, { immediate: true })
+
+const commandQuery = computed(() => {
+  const text = inputText.value
+  if (!text.startsWith('/') || text.includes('\n')) return ''
+  const normalized = text.toLowerCase()
+  const hasTrailingSpace = /\s$/.test(normalized)
+  const parts = normalized.trim().split(/\s+/).filter(Boolean)
+  if (parts.length > 2 || (parts.length === 2 && hasTrailingSpace)) return ''
+  return normalized
+})
+
+const filteredCommands = computed(() => {
+  const query = commandQuery.value
+  if (!query) return []
+  return slashCommands.value.filter(command =>
+    command.value.toLowerCase().startsWith(query)
+    || command.title.toLowerCase().includes(query.slice(1))
+    || command.description.toLowerCase().includes(query.slice(1))
+    || command.pluginName?.toLowerCase().includes(query.slice(1)),
+  )
+})
+
+const commandMenuOpen = computed(() =>
+  !activeChatReadOnly.value
+  && !streaming.value
+  && !commandMenuDismissed.value
+  && filteredCommands.value.length > 0,
+)
 const inputDraftKey = computed(() => {
   const botId = (currentBotId.value ?? '').trim()
   const tabId = props.tabId.trim()
@@ -439,6 +555,10 @@ watch(inputDraftKey, (nextKey, previousKey) => {
 
 watch(inputText, (text) => {
   saveInputDraft(inputDraftKey.value, text)
+  selectedCommandIndex.value = 0
+  if (!applyingSlashCommand) {
+    commandMenuDismissed.value = false
+  }
 })
 
 watch([
@@ -710,8 +830,49 @@ async function handleReplyJump(messageId: string) {
   }
 }
 
+function applyCommand(command: SlashCommandOption) {
+  applyingSlashCommand = true
+  inputText.value = command.insertText
+  selectedCommandIndex.value = 0
+  commandMenuDismissed.value = true
+  void nextTick(() => {
+    applyingSlashCommand = false
+  })
+}
+
+function acceptSelectedCommand(event?: KeyboardEvent): boolean {
+  if (!commandMenuOpen.value) return false
+  event?.preventDefault()
+  const command = filteredCommands.value[selectedCommandIndex.value]
+  if (!command) return false
+  applyCommand(command)
+  return true
+}
+
+function selectNextCommand(event?: KeyboardEvent) {
+  if (!commandMenuOpen.value) return
+  event?.preventDefault()
+  selectedCommandIndex.value = (selectedCommandIndex.value + 1) % filteredCommands.value.length
+}
+
+function selectPreviousCommand(event?: KeyboardEvent) {
+  if (!commandMenuOpen.value) return
+  event?.preventDefault()
+  selectedCommandIndex.value = (selectedCommandIndex.value - 1 + filteredCommands.value.length) % filteredCommands.value.length
+}
+
+function closeCommandMenu() {
+  if (!commandMenuOpen.value) return
+  selectedCommandIndex.value = 0
+  commandMenuDismissed.value = true
+}
+
 function handleKeydown(e: KeyboardEvent) {
   if (e.isComposing || e.keyCode === 229) return
+  if (acceptSelectedCommand()) {
+    e.preventDefault()
+    return
+  }
   e.preventDefault()
   isAutoScroll.value = true
   handleSend()

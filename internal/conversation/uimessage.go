@@ -60,6 +60,7 @@ type UIMessage struct {
 	Approval    *UIToolApproval   `json:"approval,omitempty"`
 	Attachments []UIAttachment    `json:"attachments,omitempty"`
 	Background  *UIBackgroundTask `json:"background_task,omitempty"`
+	Metadata    map[string]any    `json:"metadata,omitempty"`
 }
 
 type UIToolApproval struct {

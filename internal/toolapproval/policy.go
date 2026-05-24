@@ -17,6 +17,8 @@ func needsApproval(cfg settings.ToolApprovalConfig, toolName string, input any) 
 
 	args := inputMap(input)
 	switch strings.ToLower(strings.TrimSpace(toolName)) {
+	case "codex_delegate":
+		return true
 	case "write":
 		target := normalizeContainerPath(readString(args, "path"))
 		if matchesAnyGlob(target, cfg.Write.ForceReviewGlobs) {

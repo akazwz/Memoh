@@ -85,6 +85,13 @@ func (r *Resolver) StreamChat(ctx context.Context, req conversation.ChatRequest)
 		doneTurn := r.enterSessionTurn(ctx, streamReq.BotID, streamReq.SessionID)
 		defer doneTurn()
 
+		if routed, err := r.routeACPAgentMessage(ctx, streamReq); routed {
+			if err != nil {
+				errCh <- err
+			}
+			return
+		}
+
 		rc, err := r.resolve(ctx, streamReq)
 		if err != nil {
 			r.logger.Error("agent stream resolve failed",
@@ -222,6 +229,10 @@ func (r *Resolver) StreamChatWS(
 ) error {
 	doneTurn := r.enterSessionTurn(ctx, req.BotID, req.SessionID)
 	defer doneTurn()
+
+	if routed, err := r.routeACPAgentMessage(ctx, req); routed {
+		return err
+	}
 
 	rc, err := r.resolve(ctx, req)
 	if err != nil {

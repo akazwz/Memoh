@@ -1175,6 +1175,37 @@ definitions:
       verified_at:
         type: string
     type: object
+  command.CommandManifest:
+    properties:
+      action:
+        type: string
+      capability:
+        type: string
+      command:
+        type: string
+      description:
+        type: string
+      enabled:
+        type: boolean
+      icon:
+        type: string
+      id:
+        type: string
+      insert_text:
+        type: string
+      plugin_id:
+        type: string
+      plugin_name:
+        type: string
+      scopes:
+        items:
+          type: string
+        type: array
+      source:
+        type: string
+      title:
+        type: string
+    type: object
   compaction.ListLogsResponse:
     properties:
       items:
@@ -1443,6 +1474,13 @@ definitions:
         type: string
       user_config_schema:
         $ref: '#/definitions/channel.ConfigSchema'
+    type: object
+  handlers.CommandListResponse:
+    properties:
+      commands:
+        items:
+          $ref: '#/definitions/command.CommandManifest'
+        type: array
     type: object
   handlers.ContainerCPUMetricsResponse:
     properties:
@@ -2146,6 +2184,8 @@ definitions:
     type: object
   handlers.displayInfoResponse:
     properties:
+      a11y_available:
+        type: boolean
       available:
         type: boolean
       browser_available:
@@ -7322,6 +7362,42 @@ paths:
       summary: Get channel capabilities and schemas
       tags:
       - channel
+  /commands:
+    get:
+      description: Returns UI-facing slash command manifests for the current bot/session/scope.
+      parameters:
+      - description: Bot ID
+        in: query
+        name: bot_id
+        type: string
+      - description: Session ID
+        in: query
+        name: session_id
+        type: string
+      - description: Client scope, e.g. web, desktop, im, local_chat
+        in: query
+        name: scope
+        type: string
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.CommandListResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      summary: List available slash commands
+      tags:
+      - commands
   /email-providers:
     get:
       parameters:

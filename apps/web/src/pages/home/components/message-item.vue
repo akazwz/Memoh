@@ -233,6 +233,19 @@
         v-else
         class="space-y-3"
       >
+        <div
+          v-if="assistantResponderLabel"
+          class="flex items-center gap-1.5 text-[11px] leading-none text-muted-foreground"
+        >
+          <span class="inline-flex items-center gap-1 rounded-sm border border-border bg-muted/35 px-1.5 py-1 font-medium text-foreground/80">
+            <Code2 class="size-3" />
+            {{ assistantResponderLabel }}
+          </span>
+          <span v-if="message.streaming">
+            {{ t('chat.responding') }}
+          </span>
+        </div>
+
         <!-- Bot name label -->
         <!-- <p
           v-if="botName"
@@ -309,7 +322,7 @@
 
 <script setup lang="ts">
 import { computed, toRef, useTemplateRef, watch } from 'vue'
-import { CircleAlert, LoaderCircle } from 'lucide-vue-next'
+import { CircleAlert, Code2, LoaderCircle } from 'lucide-vue-next'
 import { formatRelativeTime, formatDateTime } from '@/utils/date-time'
 import { Avatar, AvatarImage, AvatarFallback } from '@memohai/ui'
 import MarkdownRender, { enableKatex, enableMermaid } from 'markstream-vue'
@@ -470,6 +483,11 @@ const hasVisibleAssistantBlocks = computed(() =>
   props.message.role === 'assistant'
   && props.message.messages.length > 0,
 )
+
+const assistantResponderLabel = computed(() => {
+  if (props.message.role !== 'assistant') return ''
+  return props.message.responder ?? ''
+})
 
 const relativeTimestamp = computed(() =>
   formatRelativeTime(props.message.timestamp, { locale: locale.value }),

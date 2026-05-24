@@ -699,6 +699,22 @@ export type ChannelUpsertConfigRequest = {
     verified_at?: string;
 };
 
+export type CommandCommandManifest = {
+    action?: string;
+    capability?: string;
+    command?: string;
+    description?: string;
+    enabled?: boolean;
+    icon?: string;
+    id?: string;
+    insert_text?: string;
+    plugin_id?: string;
+    plugin_name?: string;
+    scopes?: Array<string>;
+    source?: string;
+    title?: string;
+};
+
 export type CompactionListLogsResponse = {
     items?: Array<CompactionLog>;
     total_count?: number;
@@ -862,6 +878,10 @@ export type HandlersChannelMeta = {
     target_spec?: ChannelTargetSpec;
     type?: string;
     user_config_schema?: ChannelConfigSchema;
+};
+
+export type HandlersCommandListResponse = {
+    commands?: Array<CommandCommandManifest>;
 };
 
 export type HandlersContainerCpuMetricsResponse = {
@@ -1284,6 +1304,7 @@ export type HandlersCreateSessionRequest = {
 };
 
 export type HandlersDisplayInfoResponse = {
+    a11y_available?: boolean;
     available?: boolean;
     browser_available?: boolean;
     desktop_available?: boolean;
@@ -6972,6 +6993,52 @@ export type GetChannelsByPlatformResponses = {
 };
 
 export type GetChannelsByPlatformResponse = GetChannelsByPlatformResponses[keyof GetChannelsByPlatformResponses];
+
+export type GetCommandsData = {
+    body?: never;
+    path?: never;
+    query?: {
+        /**
+         * Bot ID
+         */
+        bot_id?: string;
+        /**
+         * Session ID
+         */
+        session_id?: string;
+        /**
+         * Client scope, e.g. web, desktop, im, local_chat
+         */
+        scope?: string;
+    };
+    url: '/commands';
+};
+
+export type GetCommandsErrors = {
+    /**
+     * Bad Request
+     */
+    400: HandlersErrorResponse;
+    /**
+     * Forbidden
+     */
+    403: HandlersErrorResponse;
+    /**
+     * Internal Server Error
+     */
+    500: HandlersErrorResponse;
+};
+
+export type GetCommandsError = GetCommandsErrors[keyof GetCommandsErrors];
+
+export type GetCommandsResponses = {
+    /**
+     * OK
+     */
+    200: HandlersCommandListResponse;
+};
+
+export type GetCommandsResponse = GetCommandsResponses[keyof GetCommandsResponses];
 
 export type GetEmailProvidersData = {
     body?: never;

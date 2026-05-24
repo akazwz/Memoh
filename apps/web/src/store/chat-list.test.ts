@@ -147,4 +147,34 @@ describe('chat-list store', () => {
       streaming: false,
     })
   })
+
+  it('marks assistant turns with the ACP agent name from UI metadata', async () => {
+    api.fetchSessions.mockResolvedValueOnce([{
+      id: 'session-1',
+      bot_id: 'bot-1',
+      title: 'Existing session',
+      type: 'chat',
+    }])
+    api.fetchMessagesUI.mockResolvedValueOnce([{
+      role: 'assistant',
+      id: 'assistant-1',
+      timestamp: '2026-05-23T08:00:00.000Z',
+      messages: [{
+        id: 0,
+        type: 'text',
+        content: 'done',
+        metadata: { source: 'acp_agent', agent_id: 'codex', agent: 'Codex' },
+      }],
+    }])
+    const store = useChatStore()
+
+    await store.selectBot('bot-1')
+
+    expect(store.messages).toHaveLength(1)
+    expect(store.messages[0]).toMatchObject({
+      role: 'assistant',
+      responder: 'Codex',
+      messages: [{ type: 'text', content: 'done' }],
+    })
+  })
 })

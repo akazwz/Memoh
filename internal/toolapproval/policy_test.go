@@ -55,3 +55,17 @@ func TestNeedsApprovalExecForceReview(t *testing.T) {
 		t.Fatal("expected force-review command to require approval")
 	}
 }
+
+func TestNeedsApprovalCodexDelegate(t *testing.T) {
+	cfg := settings.DefaultToolApprovalConfig()
+	cfg.Enabled = true
+
+	if !needsApproval(cfg, "codex_delegate", map[string]any{"task": "fix tests"}) {
+		t.Fatal("expected codex_delegate to require approval when tool approval is enabled")
+	}
+
+	cfg.Enabled = false
+	if needsApproval(cfg, "codex_delegate", map[string]any{"task": "fix tests"}) {
+		t.Fatal("expected disabled tool approval config to bypass codex_delegate")
+	}
+}

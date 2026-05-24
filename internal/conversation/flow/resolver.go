@@ -20,6 +20,7 @@ import (
 	sdk "github.com/memohai/twilight-ai/sdk"
 
 	"github.com/memohai/memoh/internal/accounts"
+	acpagent "github.com/memohai/memoh/internal/acpagent"
 	agentpkg "github.com/memohai/memoh/internal/agent"
 	"github.com/memohai/memoh/internal/agent/background"
 	"github.com/memohai/memoh/internal/channel"
@@ -90,6 +91,7 @@ type Resolver struct {
 	pipeline          *pipelinepkg.Pipeline
 	streamHTTPClient  *http.Client
 	bgManager         *background.Manager
+	acpAgentService   *acpagent.Service
 	toolApproval      *toolapproval.Service
 	outboundFn        func(ctx context.Context, botID, channelType, target, text string) error
 	bgNotifDeferred   sync.Map // key: "botID:sessionID" → wake arrived while a session turn was active
@@ -189,6 +191,19 @@ func (r *Resolver) SetBackgroundManager(m *background.Manager) {
 
 func (r *Resolver) SetToolApprovalService(s *toolapproval.Service) {
 	r.toolApproval = s
+}
+
+func (r *Resolver) SetACPAgentService(s *acpagent.Service) {
+	r.acpAgentService = s
+	if s == nil {
+		return
+	}
+	s.SetStreamPublisher(func(out acpagent.StreamOutput) {
+		r.publishBackgroundAgentStream(out.BotID, out.SessionID, out.Stream)
+	})
+	s.SetCompleteFunc(func(ctx context.Context, event acpagent.Completion) {
+		r.persistACPAgentCompletion(ctx, event)
+	})
 }
 
 // SetOutboundFn configures the function used to deliver background notification
@@ -457,6 +472,10 @@ func (r *Resolver) resolve(ctx context.Context, req conversation.ChatRequest) (r
 func (r *Resolver) Chat(ctx context.Context, req conversation.ChatRequest) (conversation.ChatResponse, error) {
 	doneTurn := r.enterSessionTurn(ctx, req.BotID, req.SessionID)
 	defer doneTurn()
+
+	if routed, err := r.routeACPAgentMessage(ctx, req); routed {
+		return conversation.ChatResponse{}, err
+	}
 
 	rc, err := r.resolve(ctx, req)
 	if err != nil {

@@ -162,6 +162,15 @@ func NewTextContent(text string) json.RawMessage {
 	return data
 }
 
+// NewPartsContent creates a json.RawMessage from structured content parts.
+func NewPartsContent(parts []ContentPart) json.RawMessage {
+	data, err := json.Marshal(parts)
+	if err != nil {
+		return nil
+	}
+	return data
+}
+
 // ContentPart represents one element of a multi-part message content.
 type ContentPart struct {
 	Type              string         `json:"type"`

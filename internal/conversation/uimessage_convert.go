@@ -24,6 +24,7 @@ type uiContentPart struct {
 	Text             string         `json:"text,omitempty"`
 	URL              string         `json:"url,omitempty"`
 	Emoji            string         `json:"emoji,omitempty"`
+	Metadata         map[string]any `json:"metadata,omitempty"`
 	ToolCallID       string         `json:"toolCallId,omitempty"`
 	ToolName         string         `json:"toolName,omitempty"`
 	Input            any            `json:"input,omitempty"`
@@ -88,8 +89,9 @@ func ConvertModelMessagesToUIAssistantMessages(messages []ModelMessage) []UIMess
 
 			if text := extractAssistantStreamMessageText(modelMessage); text != "" {
 				appendPendingAssistantMessage(pending, UIMessage{
-					Type:    UIMessageText,
-					Content: text,
+					Type:     UIMessageText,
+					Content:  text,
+					Metadata: extractPersistedContentMetadata(modelMessage.Content),
 				})
 			}
 
@@ -246,6 +248,7 @@ func ConvertMessagesToUITurns(messages []messagepkg.Message) []UITurn {
 			toolCalls := extractPersistedToolCalls(modelMessage)
 			text := extractPersistedMessageText(raw, modelMessage)
 			reasonings := extractPersistedReasoning(modelMessage)
+			textMetadata := extractPersistedContentMetadata(modelMessage.Content)
 			attachments := uiAttachmentsFromMessageAssets(raw)
 
 			if len(toolCalls) > 0 {
@@ -263,9 +266,10 @@ func ConvertMessagesToUITurns(messages []messagepkg.Message) []UITurn {
 
 				if text != "" {
 					appendPendingAssistantMessage(pending, UIMessage{
-						ID:      pending.NextID,
-						Type:    UIMessageText,
-						Content: text,
+						ID:       pending.NextID,
+						Type:     UIMessageText,
+						Content:  text,
+						Metadata: textMetadata,
 					})
 				}
 
@@ -305,9 +309,10 @@ func ConvertMessagesToUITurns(messages []messagepkg.Message) []UITurn {
 				}
 				if text != "" {
 					appendPendingAssistantMessage(pending, UIMessage{
-						ID:      pending.NextID,
-						Type:    UIMessageText,
-						Content: text,
+						ID:       pending.NextID,
+						Type:     UIMessageText,
+						Content:  text,
+						Metadata: textMetadata,
 					})
 				}
 				if len(attachments) > 0 {
@@ -323,7 +328,7 @@ func ConvertMessagesToUITurns(messages []messagepkg.Message) []UITurn {
 
 			flushPending()
 
-			assistantMessages := buildStandaloneAssistantMessages(text, reasonings, attachments)
+			assistantMessages := buildStandaloneAssistantMessages(text, reasonings, attachments, textMetadata)
 			if len(assistantMessages) == 0 {
 				continue
 			}
@@ -402,7 +407,7 @@ func removePendingAssistantMessage(pending *uiPendingAssistantTurn, idx int) {
 	}
 }
 
-func buildStandaloneAssistantMessages(text string, reasonings []string, attachments []UIAttachment) []UIMessage {
+func buildStandaloneAssistantMessages(text string, reasonings []string, attachments []UIAttachment, textMetadata map[string]any) []UIMessage {
 	messages := make([]UIMessage, 0, len(reasonings)+2)
 	nextID := 0
 	for _, reasoning := range reasonings {
@@ -415,9 +420,10 @@ func buildStandaloneAssistantMessages(text string, reasonings []string, attachme
 	}
 	if text != "" {
 		messages = append(messages, UIMessage{
-			ID:      nextID,
-			Type:    UIMessageText,
-			Content: text,
+			ID:       nextID,
+			Type:     UIMessageText,
+			Content:  text,
+			Metadata: cloneUIMetadata(textMetadata),
 		})
 		nextID++
 	}
@@ -558,6 +564,27 @@ func extractTextFromPersistedContent(raw json.RawMessage) string {
 	}
 
 	return ""
+}
+
+func extractPersistedContentMetadata(raw json.RawMessage) map[string]any {
+	parts := extractPersistedContentParts(raw)
+	for _, part := range parts {
+		partType := strings.ToLower(strings.TrimSpace(part.Type))
+		switch partType {
+		case "reasoning", "tool-call", "tool-result":
+			continue
+		}
+		if len(part.Metadata) == 0 {
+			continue
+		}
+		if strings.TrimSpace(part.Text) != "" ||
+			strings.TrimSpace(part.URL) != "" ||
+			strings.TrimSpace(part.Emoji) != "" ||
+			partType == "text" {
+			return cloneUIMetadata(part.Metadata)
+		}
+	}
+	return nil
 }
 
 func extractPersistedReasoning(message ModelMessage) []string {

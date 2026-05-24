@@ -195,6 +195,7 @@
     "thinking": "Thinking…",
     "thinkingInProgress": "Thinking…",
     "thinkingDone": "Thinking complete",
+    "responding": "replying",
     "currentBot": "Current Bot",
     "inputPlaceholder": "Type your question…",
     "readonlyHint": "This chat is read-only",
@@ -214,6 +215,10 @@
       "stalled": "Background task needs attention",
       "killed": "Background task killed",
       "updated": "Background task updated"
+    },
+    "commands": {
+      "codexStart": "Start a Codex ACP child session; add the task after it",
+      "codexStop": "Stop the Codex session and return to Memoh Agent"
     },
     "readonly": "Read-only",
     "replyTo": "Reply to {sender}",
@@ -250,6 +255,10 @@
       "generate_image": "Generate image",
       "spawn": "Spawn {count} subagents",
       "use_skill": "Use skill",
+      "codex_tool": "Codex tool",
+      "codex_plan": "Codex plan update",
+      "acp_agent_tool": "{agent} tool",
+      "acp_agent_plan": "{agent} plan update",
       "generic": "Tool",
       "approve": "Allow",
       "reject": "Reject",

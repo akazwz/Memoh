@@ -21,6 +21,8 @@ import (
 
 	"github.com/memohai/memoh/internal/accounts"
 	"github.com/memohai/memoh/internal/acl"
+	acpagent "github.com/memohai/memoh/internal/acpagent"
+	"github.com/memohai/memoh/internal/acpclient"
 	agentpkg "github.com/memohai/memoh/internal/agent"
 	"github.com/memohai/memoh/internal/agent/background"
 	agenttools "github.com/memohai/memoh/internal/agent/tools"
@@ -368,7 +370,23 @@ func injectToolProviders(a *agentpkg.Agent, msgService *message.DBService, provi
 	}
 }
 
-func provideChatResolver(log *slog.Logger, a *agentpkg.Agent, modelsService *models.Service, queries dbstore.Queries, chatService *conversation.Service, msgService *message.DBService, settingsService *settings.Service, accountService *accounts.Service, mediaService *media.Service, containerdHandler *handlers.ContainerdHandler, memoryRegistry *memprovider.Registry, channelStore *channel.Store, routeService *route.DBService, sessionService *sessionpkg.Service, eventHub *event.Hub, compactionService *compaction.Service, pipeline *pipelinepkg.Pipeline, rc *boot.RuntimeConfig, bgManager *background.Manager, toolApproval *toolapproval.Service) *flow.Resolver {
+type acpAgentSessionStarter struct {
+	runner *acpclient.Runner
+}
+
+func (s acpAgentSessionStarter) StartSession(ctx context.Context, req acpclient.StartRequest, sink acpclient.EventSink) (acpagent.ACPSession, error) {
+	return s.runner.StartSession(ctx, req, sink)
+}
+
+func provideACPAgentService(log *slog.Logger, manager *workspace.Manager) *acpagent.Service {
+	return acpagent.NewService(log, acpAgentSessionStarter{runner: acpclient.NewRunner(log, manager)})
+}
+
+func provideCommandManifestRegistry(acpAgentSvc *acpagent.Service) *command.ManifestRegistry {
+	return command.NewManifestRegistry(command.NewACPAgentManifestProvider(acpAgentSvc))
+}
+
+func provideChatResolver(log *slog.Logger, a *agentpkg.Agent, modelsService *models.Service, queries dbstore.Queries, chatService *conversation.Service, msgService *message.DBService, settingsService *settings.Service, accountService *accounts.Service, mediaService *media.Service, containerdHandler *handlers.ContainerdHandler, memoryRegistry *memprovider.Registry, channelStore *channel.Store, routeService *route.DBService, sessionService *sessionpkg.Service, eventHub *event.Hub, compactionService *compaction.Service, pipeline *pipelinepkg.Pipeline, rc *boot.RuntimeConfig, bgManager *background.Manager, toolApproval *toolapproval.Service, acpAgentSvc *acpagent.Service) *flow.Resolver {
 	resolver := flow.NewResolver(log, modelsService, queries, chatService, msgService, settingsService, accountService, a, rc.TimezoneLocation, 120*time.Second)
 	resolver.SetMemoryRegistry(memoryRegistry)
 	resolver.SetSkillLoader(&skillLoaderAdapter{handler: containerdHandler})
@@ -381,6 +399,7 @@ func provideChatResolver(log *slog.Logger, a *agentpkg.Agent, modelsService *mod
 	resolver.SetPipeline(pipeline)
 	resolver.SetBackgroundManager(bgManager)
 	resolver.SetToolApprovalService(toolApproval)
+	resolver.SetACPAgentService(acpAgentSvc)
 	if bgManager != nil {
 		bgManager.SetWakeFunc(func(botID, sessionID string) {
 			resolver.TriggerBackgroundNotification(context.Background(), botID, sessionID)
@@ -579,7 +598,7 @@ func provideBackgroundManager(log *slog.Logger) *background.Manager {
 	return background.New(log)
 }
 
-func provideToolProviders(log *slog.Logger, channelManager *channel.Manager, registry *channel.Registry, routeService *route.DBService, scheduleService *schedule.Service, settingsService *settings.Service, searchProviderService *searchproviders.Service, manager *workspace.Manager, mediaService *media.Service, memoryRegistry *memprovider.Registry, emailService *emailpkg.Service, emailManager *emailpkg.Manager, fedGateway *handlers.MCPFederationGateway, mcpConnService *mcp.ConnectionService, modelsService *models.Service, queries dbstore.Queries, audioService *audiopkg.Service, sessionService *sessionpkg.Service, bgManager *background.Manager) []agenttools.ToolProvider {
+func provideToolProviders(log *slog.Logger, channelManager *channel.Manager, registry *channel.Registry, routeService *route.DBService, scheduleService *schedule.Service, settingsService *settings.Service, searchProviderService *searchproviders.Service, manager *workspace.Manager, mediaService *media.Service, memoryRegistry *memprovider.Registry, emailService *emailpkg.Service, emailManager *emailpkg.Manager, fedGateway *handlers.MCPFederationGateway, mcpConnService *mcp.ConnectionService, modelsService *models.Service, queries dbstore.Queries, audioService *audiopkg.Service, sessionService *sessionpkg.Service, bgManager *background.Manager, acpAgentSvc *acpagent.Service) []agenttools.ToolProvider {
 	var assetResolver messaging.AssetResolver
 	if mediaService != nil {
 		assetResolver = &mediaAssetResolverAdapter{media: mediaService}
@@ -592,6 +611,7 @@ func provideToolProviders(log *slog.Logger, channelManager *channel.Manager, reg
 		agenttools.NewMemoryProvider(log, memoryRegistry, settingsService),
 		agenttools.NewWebProvider(log, settingsService, searchProviderService),
 		agenttools.NewContainerProvider(log, manager, bgManager, config.DefaultDataMount),
+		agenttools.NewCodexProvider(log, manager, acpAgentSvc),
 		agenttools.NewBrowserProvider(log, settingsService, manager, manager, config.DefaultDataMount),
 		agenttools.NewEmailProvider(log, emailService, emailManager),
 		agenttools.NewWebFetchProvider(log),

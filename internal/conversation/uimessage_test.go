@@ -551,6 +551,58 @@ func TestUIMessageStreamConverterStartsNewTextBlockAfterTool(t *testing.T) {
 	}
 }
 
+func TestUIMessageStreamConverterPreservesMetadata(t *testing.T) {
+	converter := NewUIMessageStreamConverter()
+	metadata := map[string]any{"source": "codex", "agent": "Codex"}
+
+	text := converter.HandleEvent(UIMessageStreamEvent{
+		Type:     "text_delta",
+		Delta:    "hello",
+		Metadata: metadata,
+	})
+	if len(text) != 1 || text[0].Metadata["source"] != "codex" {
+		t.Fatalf("expected text metadata, got %#v", text)
+	}
+
+	start := converter.HandleEvent(UIMessageStreamEvent{
+		Type:       "tool_call_start",
+		ToolName:   "codex_tool",
+		ToolCallID: "tool-1",
+		Metadata:   metadata,
+	})
+	if len(start) != 1 || start[0].Metadata["agent"] != "Codex" {
+		t.Fatalf("expected tool metadata, got %#v", start)
+	}
+}
+
+func TestConvertMessagesToUITurnsPreservesAssistantContentMetadata(t *testing.T) {
+	baseTime := time.Date(2026, 5, 23, 10, 0, 0, 0, time.UTC)
+	messages := []messagepkg.Message{{
+		ID:        "assistant-1",
+		BotID:     "bot-1",
+		SessionID: "session-1",
+		Role:      "assistant",
+		Content: mustUIMessageJSON(t, ModelMessage{
+			Role: "assistant",
+			Content: NewPartsContent([]ContentPart{{
+				Type:     "text",
+				Text:     "done",
+				Metadata: map[string]any{"source": "codex", "agent": "Codex"},
+			}}),
+		}),
+		CreatedAt: baseTime,
+	}}
+
+	turns := ConvertMessagesToUITurns(messages)
+	if len(turns) != 1 || len(turns[0].Messages) != 1 {
+		t.Fatalf("unexpected turns: %#v", turns)
+	}
+	message := turns[0].Messages[0]
+	if message.Metadata["source"] != "codex" || message.Metadata["agent"] != "Codex" {
+		t.Fatalf("expected assistant metadata, got %#v", message.Metadata)
+	}
+}
+
 func TestConvertRawModelMessagesToUIAssistantMessagesBuildsTerminalSnapshots(t *testing.T) {
 	raw := mustUIRawJSON(t, []ModelMessage{
 		{

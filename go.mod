@@ -10,6 +10,7 @@ require (
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/glamour v1.0.0
 	github.com/charmbracelet/lipgloss v1.1.1-0.20250404203927-76690c660834
+	github.com/coder/acp-go-sdk v0.13.0
 	github.com/coder/websocket v1.8.14
 	github.com/containerd/cgroups/v3 v3.1.2
 	github.com/containerd/containerd/api v1.10.0
@@ -54,7 +55,6 @@ require (
 	go.uber.org/fx v1.24.0
 	golang.org/x/crypto v0.48.0
 	golang.org/x/oauth2 v0.36.0
-	golang.org/x/term v0.40.0
 	golang.org/x/time v0.14.0
 	google.golang.org/grpc v1.78.0
 	google.golang.org/protobuf v1.36.11
@@ -229,6 +229,7 @@ require (
 	golang.org/x/net v0.50.0 // indirect
 	golang.org/x/sync v0.19.0 // indirect
 	golang.org/x/sys v0.42.0 // indirect
+	golang.org/x/term v0.40.0 // indirect
 	golang.org/x/text v0.34.0 // indirect
 	golang.org/x/tools v0.42.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260209200024-4cfbd4190f57 // indirect

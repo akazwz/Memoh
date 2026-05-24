@@ -3,8 +3,9 @@ package conversation
 import "strings"
 
 type uiTextStreamState struct {
-	ID      int
-	Content string
+	ID       int
+	Content  string
+	Metadata map[string]any
 }
 
 type uiToolStreamState struct {
@@ -37,11 +38,15 @@ func (c *UIMessageStreamConverter) HandleEvent(event UIMessageStreamEvent) []UIM
 		if c.text == nil {
 			c.text = &uiTextStreamState{ID: c.nextMessageID()}
 		}
+		if len(event.Metadata) > 0 {
+			c.text.Metadata = cloneUIMetadata(event.Metadata)
+		}
 		c.text.Content += event.Delta
 		return []UIMessage{{
-			ID:      c.text.ID,
-			Type:    UIMessageText,
-			Content: c.text.Content,
+			ID:       c.text.ID,
+			Type:     UIMessageText,
+			Content:  c.text.Content,
+			Metadata: cloneUIMetadata(c.text.Metadata),
 		}}
 
 	case "text_end":
@@ -56,11 +61,15 @@ func (c *UIMessageStreamConverter) HandleEvent(event UIMessageStreamEvent) []UIM
 		if c.reasoning == nil {
 			c.reasoning = &uiTextStreamState{ID: c.nextMessageID()}
 		}
+		if len(event.Metadata) > 0 {
+			c.reasoning.Metadata = cloneUIMetadata(event.Metadata)
+		}
 		c.reasoning.Content += event.Delta
 		return []UIMessage{{
-			ID:      c.reasoning.ID,
-			Type:    UIMessageReasoning,
-			Content: c.reasoning.Content,
+			ID:       c.reasoning.ID,
+			Type:     UIMessageReasoning,
+			Content:  c.reasoning.Content,
+			Metadata: cloneUIMetadata(c.reasoning.Metadata),
 		}}
 
 	case "reasoning_end":
@@ -86,6 +95,9 @@ func (c *UIMessageStreamConverter) HandleEvent(event UIMessageStreamEvent) []UIM
 		}
 		if event.Input != nil {
 			state.Message.Input = event.Input
+		}
+		if len(event.Metadata) > 0 {
+			state.Message.Metadata = cloneUIMetadata(event.Metadata)
 		}
 		if trimmed := strings.TrimSpace(event.ToolCallID); trimmed != "" {
 			state.Message.ToolCallID = trimmed
@@ -116,6 +128,9 @@ func (c *UIMessageStreamConverter) HandleEvent(event UIMessageStreamEvent) []UIM
 		if event.Input != nil {
 			state.Message.Input = event.Input
 		}
+		if len(event.Metadata) > 0 {
+			state.Message.Metadata = cloneUIMetadata(event.Metadata)
+		}
 		return []UIMessage{cloneToolStreamMessage(state.Message)}
 
 	case "tool_approval_request":
@@ -136,6 +151,9 @@ func (c *UIMessageStreamConverter) HandleEvent(event UIMessageStreamEvent) []UIM
 		}
 		if event.Input != nil {
 			state.Message.Input = event.Input
+		}
+		if len(event.Metadata) > 0 {
+			state.Message.Metadata = cloneUIMetadata(event.Metadata)
 		}
 		if trimmed := strings.TrimSpace(event.ToolName); trimmed != "" {
 			state.Message.Name = trimmed
@@ -172,6 +190,9 @@ func (c *UIMessageStreamConverter) HandleEvent(event UIMessageStreamEvent) []UIM
 		}
 		if event.Input != nil {
 			state.Message.Input = event.Input
+		}
+		if len(event.Metadata) > 0 {
+			state.Message.Metadata = cloneUIMetadata(event.Metadata)
 		}
 		applyToolResultToUIMessage(&state.Message, event.Output)
 		if state.Message.ToolCallID != "" && !isBackgroundToolStillRunning(state.Message) {
@@ -226,6 +247,20 @@ func cloneToolStreamMessage(message UIMessage) UIMessage {
 	clone := message
 	if len(message.Progress) > 0 {
 		clone.Progress = append([]any(nil), message.Progress...)
+	}
+	if len(message.Metadata) > 0 {
+		clone.Metadata = cloneUIMetadata(message.Metadata)
+	}
+	return clone
+}
+
+func cloneUIMetadata(metadata map[string]any) map[string]any {
+	if len(metadata) == 0 {
+		return nil
+	}
+	clone := make(map[string]any, len(metadata))
+	for key, value := range metadata {
+		clone[key] = value
 	}
 	return clone
 }

@@ -6,6 +6,7 @@ import {
   CalendarCog,
   CalendarMinus,
   CalendarPlus,
+  Code2,
   FilePen,
   FilePlus2,
   FileText,
@@ -81,6 +82,11 @@ function pickString(obj: Record<string, unknown>, ...keys: string[]): string {
     if (typeof v === 'string' && v.length > 0) return v
   }
   return ''
+}
+
+function agentName(block: ToolCallBlock): string {
+  const metadata = asObject(block.metadata)
+  return pickString(metadata, 'agent', 'agent_name', 'responder') || pickString(metadata, 'agent_id') || 'Agent'
 }
 
 function truncate(s: string, max = 60): string {
@@ -375,6 +381,29 @@ export function getToolDisplay(block: ToolCallBlock): ToolDisplay {
         icon: Sparkles,
         actionKey: 'use_skill',
         target: pickString(input, 'skillName'),
+      }
+    case 'codex':
+    case 'codex_tool':
+    case 'acp_agent_tool': {
+      const output = asObject(block.result)
+      const title = pickString(input, 'title', 'name') || pickString(output, 'title', 'name')
+      const status = pickString(input, 'status') || pickString(output, 'status')
+      return {
+        icon: Code2,
+        actionKey: 'acp_agent_tool',
+        actionParams: { agent: agentName(block) },
+        target: truncate(title || status, 80),
+        fullTarget: title || status,
+        expandable: true,
+      }
+    }
+    case 'codex_plan':
+    case 'acp_agent_plan':
+      return {
+        icon: ListChecks,
+        actionKey: 'acp_agent_plan',
+        actionParams: { agent: agentName(block) },
+        target: '',
       }
     default:
       return {

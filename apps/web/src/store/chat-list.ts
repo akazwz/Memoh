@@ -78,6 +78,7 @@ export interface ChatAssistantTurn {
   timestamp: string
   platform?: string
   externalMessageId?: string
+  responder?: string
   streaming: boolean
 }
 
@@ -298,6 +299,35 @@ export const useChatStore = defineStore('chat', () => {
     return ''
   }
 
+  function blockMetadata(block: ContentBlock): Record<string, unknown> | undefined {
+    const metadata = asRecord((block as { metadata?: unknown }).metadata)
+    return Object.keys(metadata).length > 0 ? metadata : undefined
+  }
+
+  function assistantResponderFromMetadata(metadata?: Record<string, unknown>): string | undefined {
+    if (!metadata) return undefined
+    const source = pickString(metadata, 'source').toLowerCase()
+    const agent = pickString(metadata, 'agent', 'agent_name', 'responder')
+    const agentId = pickString(metadata, 'agent_id')
+    const agentLower = agent.toLowerCase()
+    if (source === 'acp_agent') return agent || agentId || undefined
+    if (source === 'codex' || agentLower === 'codex' || agentId.toLowerCase() === 'codex') return agent || 'Codex'
+    return undefined
+  }
+
+  function inferAssistantResponder(blocks: ContentBlock[]): string | undefined {
+    for (const block of blocks) {
+      const responder = assistantResponderFromMetadata(blockMetadata(block))
+      if (responder) return responder
+    }
+    return undefined
+  }
+
+  function applyAssistantResponderMetadata(turn: ChatAssistantTurn, metadata?: Record<string, unknown>) {
+    const responder = assistantResponderFromMetadata(metadata)
+    if (responder) turn.responder = responder
+  }
+
   function normalizeBackgroundStatus(status?: string, event?: string): string {
     const token = (status || event || '').trim().toLowerCase()
     switch (token) {
@@ -496,13 +526,15 @@ export const useChatStore = defineStore('chat', () => {
       }
     }
 
+    const assistantMessages = (turn.messages ?? []).map(normalizeUIMessage)
     return {
       id: String(turn.id ?? nextId()),
       role: 'assistant',
-      messages: (turn.messages ?? []).map(normalizeUIMessage),
+      messages: assistantMessages,
       timestamp: normalizeTimestamp(turn.timestamp),
       platform: (turn.platform ?? '').trim() || undefined,
       externalMessageId: (turn.external_message_id ?? '').trim() || undefined,
+      responder: inferAssistantResponder(assistantMessages),
       streaming: false,
     }
   }
@@ -824,6 +856,7 @@ export const useChatStore = defineStore('chat', () => {
   function upsertAssistantUIMessage(turn: ChatAssistantTurn, message: UIMessage) {
     const normalized = normalizeUIMessage(message)
     turn.messages = upsertById(turn.messages, normalized)
+    applyAssistantResponderMetadata(turn, blockMetadata(normalized))
     bumpFsChangedAtIfFsMutation(message)
   }
 
@@ -888,8 +921,11 @@ export const useChatStore = defineStore('chat', () => {
       case 'start':
         if (suppressNextStartPlaceholder) {
           suppressNextStartPlaceholder = false
+          if (pendingAssistantStream) {
+            applyAssistantResponderMetadata(pendingAssistantStream.assistantTurn, event.metadata)
+          }
         } else {
-          ensureDiscussStream()
+          applyAssistantResponderMetadata(ensureDiscussStream().assistantTurn, event.metadata)
         }
         break
       case 'message':
@@ -907,6 +943,7 @@ export const useChatStore = defineStore('chat', () => {
         break
       case 'error': {
         const session = ensureDiscussStream()
+        applyAssistantResponderMetadata(session.assistantTurn, event.metadata)
         const message = event.message || 'stream error'
         const stage: SendMessageStage = hasVisibleAssistantBlocks(session.assistantTurn) ? 'stream' : 'startup'
         if (stage === 'stream') {

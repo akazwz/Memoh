@@ -93,6 +93,22 @@ export interface ChatAttachment {
   name?: string
 }
 
+export interface CommandManifest {
+  id: string
+  command: string
+  insert_text: string
+  title: string
+  description?: string
+  source: string
+  plugin_id?: string
+  plugin_name?: string
+  capability: string
+  action: string
+  icon?: string
+  enabled: boolean
+  scopes?: string[]
+}
+
 export interface UIAttachment {
   id?: string
   type: string
@@ -127,12 +143,14 @@ export interface UITextMessage {
   id: number
   type: 'text'
   content: string
+  metadata?: Record<string, unknown>
 }
 
 export interface UIReasoningMessage {
   id: number
   type: 'reasoning'
   content: string
+  metadata?: Record<string, unknown>
 }
 
 export interface UIToolMessage {
@@ -146,6 +164,7 @@ export interface UIToolMessage {
   progress?: unknown[]
   approval?: UIToolApproval
   background_task?: UIBackgroundTask
+  metadata?: Record<string, unknown>
 }
 
 export interface UIBackgroundTask {
@@ -183,6 +202,7 @@ export interface UIErrorMessage {
   id: number
   type: 'error'
   content: string
+  metadata?: Record<string, unknown>
 }
 
 export type UIMessage = UITextMessage | UIReasoningMessage | UIToolMessage | UIAttachmentsMessage | UIErrorMessage
@@ -224,6 +244,7 @@ export type UITurn = UIUserTurn | UIAssistantTurn | UISystemTurn
 
 export interface UIStreamStartEvent {
   type: 'start'
+  metadata?: Record<string, unknown>
 }
 
 export interface UIStreamMessageEvent {
@@ -233,11 +254,13 @@ export interface UIStreamMessageEvent {
 
 export interface UIStreamEndEvent {
   type: 'end'
+  metadata?: Record<string, unknown>
 }
 
 export interface UIStreamErrorEvent {
   type: 'error'
   message: string
+  metadata?: Record<string, unknown>
 }
 
 export type UIStreamEvent =

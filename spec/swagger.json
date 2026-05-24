@@ -6222,6 +6222,61 @@
                 }
             }
         },
+        "/commands": {
+            "get": {
+                "description": "Returns UI-facing slash command manifests for the current bot/session/scope.",
+                "tags": [
+                    "commands"
+                ],
+                "summary": "List available slash commands",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Session ID",
+                        "name": "session_id",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Client scope, e.g. web, desktop, im, local_chat",
+                        "name": "scope",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.CommandListResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/email-providers": {
             "get": {
                 "produces": [
@@ -11449,6 +11504,53 @@
                 }
             }
         },
+        "command.CommandManifest": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string"
+                },
+                "capability": {
+                    "type": "string"
+                },
+                "command": {
+                    "type": "string"
+                },
+                "description": {
+                    "type": "string"
+                },
+                "enabled": {
+                    "type": "boolean"
+                },
+                "icon": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "insert_text": {
+                    "type": "string"
+                },
+                "plugin_id": {
+                    "type": "string"
+                },
+                "plugin_name": {
+                    "type": "string"
+                },
+                "scopes": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "source": {
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
+                }
+            }
+        },
         "compaction.ListLogsResponse": {
             "type": "object",
             "properties": {
@@ -11853,6 +11955,17 @@
                 },
                 "user_config_schema": {
                     "$ref": "#/definitions/channel.ConfigSchema"
+                }
+            }
+        },
+        "handlers.CommandListResponse": {
+            "type": "object",
+            "properties": {
+                "commands": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/command.CommandManifest"
+                    }
                 }
             }
         },
@@ -12938,6 +13051,9 @@
         "handlers.displayInfoResponse": {
             "type": "object",
             "properties": {
+                "a11y_available": {
+                    "type": "boolean"
+                },
                 "available": {
                     "type": "boolean"
                 },

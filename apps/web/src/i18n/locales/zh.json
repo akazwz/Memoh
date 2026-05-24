@@ -191,6 +191,7 @@
     "thinking": "思考中…",
     "thinkingInProgress": "思考中…",
     "thinkingDone": "思考完成",
+    "responding": "正在回复",
     "currentBot": "当前 Bot",
     "inputPlaceholder": "输入你的问题…",
     "readonlyHint": "该聊天为只读",
@@ -210,6 +211,10 @@
       "stalled": "后台任务需要处理",
       "killed": "后台任务已终止",
       "updated": "后台任务已更新"
+    },
+    "commands": {
+      "codexStart": "启动 Codex ACP 子会话，可在后面直接写任务",
+      "codexStop": "停止 Codex 子会话，切回 Memoh Agent"
     },
     "readonly": "只读",
     "replyTo": "回复 {sender}",
@@ -246,6 +251,10 @@
       "generate_image": "生成图像",
       "spawn": "派遣 {count} 个子代理",
       "use_skill": "使用技能",
+      "codex_tool": "Codex 调用工具",
+      "codex_plan": "Codex 更新计划",
+      "acp_agent_tool": "{agent} 调用工具",
+      "acp_agent_plan": "{agent} 更新计划",
       "generic": "调用工具",
       "approve": "允许",
       "reject": "拒绝",
