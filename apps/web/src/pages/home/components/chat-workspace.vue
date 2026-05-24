@@ -4,7 +4,7 @@
 
     <div class="flex-1 min-h-0 relative">
       <template v-if="activeTab">
-        <KeepAlive>
+        <KeepAlive v-if="activeTab.type !== 'display'">
           <component
             :is="currentChat?.component"
             v-if="activeTab.type === 'chat' || activeTab.type === 'draft'"
@@ -28,20 +28,19 @@
             :tab-id="currentTerminal?.id"
             :active="activeTab.id === currentTerminal?.id"  
           />
-
-          <component
-            :is="currentDisplay?.component"
-            v-else-if="activeTab.type==='display'"
-            :key="`display-pane:${currentDisplay?.id}:${currentBotId}`"
-            :bot-id="currentBotId || ''"
-            :tab-id="currentDisplay?.id"
-            :title="currentDisplay?.title"
-            :active="activeTab?.id === currentDisplay?.id"
-            :class="{ 'pointer-events-none': activeTab?.id !== currentDisplay?.id }"
-            @close="store.closeTab(currentDisplay?.id as string)"
-            @snapshot="handleDisplaySnapshot"
-          />
         </KeepAlive>
+        <component
+          :is="currentDisplay?.component"
+          v-else-if="activeTab.type==='display'"
+          :key="`display-pane:${currentDisplay?.id}:${currentBotId}`"
+          :bot-id="currentBotId || ''"
+          :tab-id="currentDisplay?.id"
+          :title="currentDisplay?.title"
+          :active="activeTab?.id === currentDisplay?.id"
+          :class="{ 'pointer-events-none': activeTab?.id !== currentDisplay?.id }"
+          @close="store.closeTab(currentDisplay?.id as string)"
+          @snapshot="handleDisplaySnapshot"
+        />
       </template>
       <div
         v-if="!activeTab"

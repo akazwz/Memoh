@@ -17,6 +17,7 @@ export type WorkspaceTab =
   | { id: string; type: 'draft'; title: string }
 
 const DRAFT_TAB_ID = 'draft'
+const DISPLAY_TAB_TITLE = 'Desktop'
 
 interface BotTabState {
   tabs: WorkspaceTab[]
@@ -256,18 +257,31 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
   function openDisplay() {
     const state = ensureBot(currentBotId.value)
     if (!state) return
-    const nextCounter = state.displayCounter + 1
-    const id = displayTabId(nextCounter)
+    const displayIndex = state.tabs.findIndex((tab) => tab.type === 'display')
+    if (displayIndex >= 0) {
+      const primary = state.tabs[displayIndex] as Extract<WorkspaceTab, { type: 'display' }>
+      const nextTabs = state.tabs.filter((tab, index) => tab.type !== 'display' || index === displayIndex)
+      const primaryIndex = nextTabs.findIndex((tab) => tab.id === primary.id)
+      nextTabs[primaryIndex] = { ...primary, title: DISPLAY_TAB_TITLE }
+      commit({
+        ...state,
+        tabs: nextTabs,
+        activeId: primary.id,
+        displayCounter: Math.max(state.displayCounter, 1),
+      })
+      return
+    }
+    const id = displayTabId(1)
     const tab: WorkspaceTab = {
       id,
       type: 'display',
-      title: `Desktop ${nextCounter}`,
+      title: DISPLAY_TAB_TITLE,
     }
     commit({
       ...state,
       tabs: [...state.tabs, tab],
       activeId: id,
-      displayCounter: nextCounter,
+      displayCounter: Math.max(state.displayCounter, 1),
     })
   }
 
