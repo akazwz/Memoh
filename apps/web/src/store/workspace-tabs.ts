@@ -325,7 +325,7 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
   function isTabBusy(tab: WorkspaceTab, dirty: Record<string, boolean>): boolean {
     switch (tab.type) {
       case 'chat':
-        return chatStore.streamingSessionId === tab.sessionId
+        return chatStore.isSessionStreaming(tab.sessionId)
       case 'file':
         return dirty[tab.id] === true
       case 'terminal':
