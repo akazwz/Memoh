@@ -3,6 +3,8 @@
 
 PRAGMA foreign_keys = OFF;
 
+BEGIN;
+
 ALTER TABLE bot_acl_rules RENAME TO bot_acl_rules_old;
 
 CREATE TABLE bot_acl_rules (
@@ -66,5 +68,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_bot_acl_rules_unique_target ON bot_acl_rul
   COALESCE(source_conversation_id, ''),
   COALESCE(source_thread_id, '')
 );
+
+COMMIT;
 
 PRAGMA foreign_keys = ON;

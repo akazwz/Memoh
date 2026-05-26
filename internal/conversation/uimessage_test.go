@@ -129,6 +129,172 @@ func TestConvertMessagesToUITurnsGroupsAssistantToolAndFiltersCurrentConversatio
 	}
 }
 
+func TestConvertMessagesToUITurnsRestoresACPMetadataBlocks(t *testing.T) {
+	baseTime := time.Date(2026, 5, 26, 10, 0, 0, 0, time.UTC)
+	messages := []messagepkg.Message{
+		{
+			ID:             "user-1",
+			BotID:          "bot-1",
+			SessionID:      "session-1",
+			Role:           "user",
+			DisplayContent: "change the docs",
+			Content: mustUIMessageJSON(t, ModelMessage{
+				Role:    "user",
+				Content: mustUIRawJSON(t, "change the docs"),
+			}),
+			CreatedAt: baseTime,
+		},
+		{
+			ID:        "assistant-1",
+			BotID:     "bot-1",
+			SessionID: "session-1",
+			Role:      "assistant",
+			Content: mustUIMessageJSON(t, ModelMessage{
+				Role:    "assistant",
+				Content: mustUIRawJSON(t, ""),
+			}),
+			Metadata: map[string]any{
+				"acp_actions": []map[string]any{{
+					"id":     "act-1",
+					"title":  "Edited README.md",
+					"kind":   "edit",
+					"status": "completed",
+				}},
+				"acp_plan": []map[string]any{{
+					"content":  "Update implementation plan",
+					"status":   "completed",
+					"priority": "medium",
+				}},
+			},
+			CreatedAt: baseTime.Add(time.Second),
+		},
+	}
+
+	turns := ConvertMessagesToUITurns(messages)
+	if len(turns) != 2 {
+		t.Fatalf("expected 2 turns, got %d", len(turns))
+	}
+
+	assistantTurn := turns[1]
+	if assistantTurn.Role != "assistant" || len(assistantTurn.Messages) != 2 {
+		t.Fatalf("unexpected assistant turn: %#v", assistantTurn)
+	}
+
+	action := assistantTurn.Messages[0]
+	if action.Type != UIMessageTool || action.Name != "acp_action" || action.ToolCallID != "act-1" {
+		t.Fatalf("unexpected ACP action block: %#v", action)
+	}
+	if action.Running == nil || *action.Running {
+		t.Fatalf("expected ACP action to be completed: %#v", action)
+	}
+	if stringFromMap(action.Output, "status") != "completed" {
+		t.Fatalf("unexpected ACP action output: %#v", action.Output)
+	}
+
+	plan := assistantTurn.Messages[1]
+	if plan.Type != UIMessageTool || plan.Name != "acp_plan" || plan.ToolCallID != "acp_plan" {
+		t.Fatalf("unexpected ACP plan block: %#v", plan)
+	}
+	output, ok := plan.Output.(map[string]any)
+	if !ok {
+		t.Fatalf("unexpected ACP plan output: %#v", plan.Output)
+	}
+	items, ok := output["plan"].([]any)
+	if !ok || len(items) != 1 {
+		t.Fatalf("unexpected ACP plan items: %#v", output["plan"])
+	}
+}
+
+func TestConvertMessagesToUITurnsRestoresACPEventOrder(t *testing.T) {
+	baseTime := time.Date(2026, 5, 26, 10, 0, 0, 0, time.UTC)
+	messages := []messagepkg.Message{
+		{
+			ID:             "user-1",
+			BotID:          "bot-1",
+			SessionID:      "session-1",
+			Role:           "user",
+			DisplayContent: "change the docs",
+			Content: mustUIMessageJSON(t, ModelMessage{
+				Role:    "user",
+				Content: mustUIRawJSON(t, "change the docs"),
+			}),
+			CreatedAt: baseTime,
+		},
+		{
+			ID:        "assistant-1",
+			BotID:     "bot-1",
+			SessionID: "session-1",
+			Role:      "assistant",
+			Content: mustUIMessageJSON(t, ModelMessage{
+				Role:    "assistant",
+				Content: mustUIRawJSON(t, "Done."),
+			}),
+			Metadata: map[string]any{
+				"acp_actions": []map[string]any{{
+					"id":     "act-1",
+					"title":  "Edited README.md",
+					"kind":   "edit",
+					"status": "completed",
+				}},
+				"acp_plan": []map[string]any{{
+					"content": "Update implementation plan",
+					"status":  "completed",
+				}},
+				"acp_events": []map[string]any{
+					{
+						"type": "tool_start",
+						"tool": map[string]any{
+							"id":     "act-1",
+							"title":  "Editing README.md",
+							"kind":   "edit",
+							"status": "pending",
+						},
+					},
+					{
+						"type": "tool_update",
+						"tool": map[string]any{
+							"id":     "act-1",
+							"title":  "Edited README.md",
+							"kind":   "edit",
+							"status": "completed",
+						},
+					},
+					{
+						"type": "plan",
+						"plan": []map[string]any{{
+							"content": "Update implementation plan",
+							"status":  "completed",
+						}},
+					},
+					{
+						"type":  "text_delta",
+						"delta": "Done.",
+					},
+				},
+			},
+			CreatedAt: baseTime.Add(time.Second),
+		},
+	}
+
+	turns := ConvertMessagesToUITurns(messages)
+	if len(turns) != 2 {
+		t.Fatalf("expected 2 turns, got %d", len(turns))
+	}
+	got := turns[1].Messages
+	if len(got) != 3 {
+		t.Fatalf("expected 3 assistant blocks, got %#v", got)
+	}
+	if got[0].Type != UIMessageTool || got[0].Name != "acp_action" || got[0].ToolCallID != "act-1" {
+		t.Fatalf("first block = %#v, want ACP action", got[0])
+	}
+	if got[1].Type != UIMessageTool || got[1].Name != "acp_plan" {
+		t.Fatalf("second block = %#v, want ACP plan", got[1])
+	}
+	if got[2].Type != UIMessageText || got[2].Content != "Done." {
+		t.Fatalf("third block = %#v, want final text", got[2])
+	}
+}
+
 func TestConvertMessagesToUITurnsStripsUserYAMLHeaderFallback(t *testing.T) {
 	now := time.Now().UTC()
 	turns := ConvertMessagesToUITurns([]messagepkg.Message{{

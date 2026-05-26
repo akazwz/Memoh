@@ -277,6 +277,7 @@ type Queries interface {
 	UpdateSearchProvider(ctx context.Context, arg dbsqlc.UpdateSearchProviderParams) (dbsqlc.SearchProvider, error)
 	UpdateSessionMetadata(ctx context.Context, arg dbsqlc.UpdateSessionMetadataParams) (dbsqlc.BotSession, error)
 	UpdateSessionTitle(ctx context.Context, arg dbsqlc.UpdateSessionTitleParams) (dbsqlc.BotSession, error)
+	UpdateSessionTypeAndMetadata(ctx context.Context, arg dbsqlc.UpdateSessionTypeAndMetadataParams) (dbsqlc.BotSession, error)
 	UpdateToolApprovalPromptMessage(ctx context.Context, arg dbsqlc.UpdateToolApprovalPromptMessageParams) (dbsqlc.ToolApprovalRequest, error)
 	UpdateUserProviderOAuthState(ctx context.Context, arg dbsqlc.UpdateUserProviderOAuthStateParams) error
 	UpsertAccountByUsername(ctx context.Context, arg dbsqlc.UpsertAccountByUsernameParams) (dbsqlc.User, error)

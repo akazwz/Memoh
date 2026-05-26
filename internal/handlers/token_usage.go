@@ -15,6 +15,7 @@ import (
 	"github.com/memohai/memoh/internal/db"
 	"github.com/memohai/memoh/internal/db/postgres/sqlc"
 	dbstore "github.com/memohai/memoh/internal/db/store"
+	"github.com/memohai/memoh/internal/session"
 )
 
 type TokenUsageHandler struct {
@@ -252,7 +253,7 @@ const (
 // @Param from query string true "Start date (YYYY-MM-DD)"
 // @Param to query string true "End date exclusive (YYYY-MM-DD)"
 // @Param model_id query string false "Optional model UUID to filter by"
-// @Param session_type query string false "Optional session type: chat, heartbeat, or schedule"
+// @Param session_type query string false "Optional session type: chat, heartbeat, schedule, or acp_agent"
 // @Param limit query int false "Page size (default 20, max 100)"
 // @Param offset query int false "Offset" default(0)
 // @Success 200 {object} TokenUsageRecordsResponse
@@ -306,10 +307,10 @@ func (h *TokenUsageHandler) ListTokenUsageRecords(c echo.Context) error {
 	var pgSessionType pgtype.Text
 	switch sessionType := strings.TrimSpace(c.QueryParam("session_type")); sessionType {
 	case "":
-	case "chat", "heartbeat", "schedule":
+	case session.TypeChat, session.TypeHeartbeat, session.TypeSchedule, session.TypeACPAgent:
 		pgSessionType = pgtype.Text{String: sessionType, Valid: true}
 	default:
-		return echo.NewHTTPError(http.StatusBadRequest, "invalid session_type, expected one of: chat, heartbeat, schedule")
+		return echo.NewHTTPError(http.StatusBadRequest, "invalid session_type, expected one of: chat, heartbeat, schedule, acp_agent")
 	}
 
 	limit, err := parseInt32Query(c.QueryParam("limit"), tokenUsageRecordsDefaultLimit)

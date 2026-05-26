@@ -220,6 +220,17 @@ func (r *Resolver) StreamChatWS(
 	eventCh chan<- WSStreamEvent,
 	abortCh <-chan struct{},
 ) error {
+	if ok, err := r.isACPAgentSession(ctx, req); err != nil {
+		r.logger.Error("StreamChatWS: ACP session check failed",
+			slog.String("bot_id", req.BotID),
+			slog.String("session_id", req.SessionID),
+			slog.Any("error", err),
+		)
+		return err
+	} else if ok {
+		return r.streamACPAgentWS(ctx, req, eventCh, abortCh)
+	}
+
 	doneTurn := r.enterSessionTurn(ctx, req.BotID, req.SessionID)
 	defer doneTurn()
 

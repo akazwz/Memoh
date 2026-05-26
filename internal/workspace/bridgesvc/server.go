@@ -365,6 +365,7 @@ func (s *Server) execPTY(stream pb.ContainerService_ExecServer, firstMsg *pb.Exe
 	} else {
 		cmd = exec.CommandContext(ctx, "/bin/sh", "-c", command) //nolint:gosec // G204: intentional agent command execution.
 	}
+	configureCommandCancellation(cmd)
 	cmd.Dir = workDir
 	cmd.Env = append(os.Environ(), firstMsg.GetEnv()...)
 	cmd.Env = append(cmd.Env, "TERM=xterm-256color")
@@ -414,14 +415,21 @@ func (s *Server) execPipe(stream pb.ContainerService_ExecServer, firstMsg *pb.Ex
 	workDir := s.resolveExecWorkDir(firstMsg.GetWorkDir())
 
 	timeout := int(firstMsg.GetTimeoutSeconds())
-	if timeout <= 0 {
-		timeout = defaultTimeout
+	noTimeout := timeout < 0
+	var procCtx context.Context
+	var procCancel context.CancelFunc
+	if noTimeout {
+		procCtx, procCancel = context.WithCancel(context.Background())
+	} else {
+		if timeout == 0 {
+			timeout = defaultTimeout
+		}
+		procCtx, procCancel = context.WithTimeout(context.Background(), time.Duration(timeout)*time.Second)
 	}
-
-	procCtx, procCancel := context.WithTimeout(context.Background(), time.Duration(timeout)*time.Second)
 	defer procCancel()
 
 	cmd := exec.CommandContext(procCtx, "/bin/sh", "-c", command) //nolint:gosec // G204: intentional agent command execution.
+	configureCommandCancellation(cmd)
 	cmd.Dir = workDir
 	if len(firstMsg.GetEnv()) > 0 {
 		cmd.Env = append(os.Environ(), firstMsg.GetEnv()...)
@@ -448,6 +456,9 @@ func (s *Server) execPipe(stream pb.ContainerService_ExecServer, firstMsg *pb.Ex
 		select {
 		case <-procCtx.Done():
 		case <-stream.Context().Done():
+			if noTimeout {
+				procCancel()
+			}
 		}
 		_ = stdoutPipe.Close()
 		_ = stderrPipe.Close()

@@ -3,6 +3,8 @@
 
 PRAGMA foreign_keys = OFF;
 
+BEGIN;
+
 CREATE TABLE containers_new (
   id TEXT PRIMARY KEY,
   bot_id TEXT NOT NULL REFERENCES bots(id) ON DELETE CASCADE,
@@ -33,5 +35,7 @@ FROM containers;
 DROP TABLE containers;
 ALTER TABLE containers_new RENAME TO containers;
 CREATE INDEX IF NOT EXISTS idx_containers_bot_id ON containers(bot_id);
+
+COMMIT;
 
 PRAGMA foreign_keys = ON;

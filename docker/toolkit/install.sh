@@ -14,6 +14,8 @@
 #   NODEJS_MIRROR       Default: https://nodejs.org/dist
 #   NODEJS_MUSL_MIRROR  Default: https://unofficial-builds.nodejs.org/download/release
 #   NPM_MIRROR          Default: https://registry.npmjs.org
+#   CODEX_VERSION       Default: pinned @openai/codex version below
+#   CODEX_ACP_VERSION   Default: pinned @zed-industries/codex-acp version below
 #   ALPINE_MIRROR       Default: https://dl-cdn.alpinelinux.org/alpine
 #   UV_MIRROR           Default: https://github.com/astral-sh/uv/releases/latest/download
 #   MEMOH_DISPLAY_OUTDIR
@@ -24,6 +26,8 @@ set -eu
 ALPINE_VERSION=3.23
 NODE_VERSION=24.14.0
 NPM_VERSION=10.9.2
+CODEX_VERSION="${CODEX_VERSION:-0.133.0}"
+CODEX_ACP_VERSION="${CODEX_ACP_VERSION:-0.15.0}"
 
 OUTDIR="${1:-.toolkit}"
 ARCH="${2:-}"
@@ -45,8 +49,8 @@ ALPINE_MIRROR="${ALPINE_MIRROR:-https://dl-cdn.alpinelinux.org/alpine}"
 UV_MIRROR="${UV_MIRROR:-https://github.com/astral-sh/uv/releases/latest/download}"
 
 case "$ARCH" in
-  amd64) NODE_ARCH=x64;  UV_ARCH=x86_64;  APK_ARCH=x86_64 ;;
-  arm64) NODE_ARCH=arm64; UV_ARCH=aarch64; APK_ARCH=aarch64 ;;
+  amd64) NODE_ARCH=x64;  UV_ARCH=x86_64;  APK_ARCH=x86_64;  NPM_CPU=x64 ;;
+  arm64) NODE_ARCH=arm64; UV_ARCH=aarch64; APK_ARCH=aarch64; NPM_CPU=arm64 ;;
   *) echo "ERROR: unsupported arch: $ARCH" >&2; exit 1 ;;
 esac
 
@@ -197,6 +201,28 @@ install_apk_package() {
   INSTALLED_APK_PACKAGES="$INSTALLED_APK_PACKAGES $pkg"
 }
 
+install_ca_bundle() {
+  dest_dir="$OUTDIR/certs"
+  dest_path="$dest_dir/ca-certificates.crt"
+
+  mkdir -p "$dest_dir"
+  for candidate in \
+    /etc/ssl/certs/ca-certificates.crt \
+    /etc/ssl/cert.pem \
+    /opt/homebrew/etc/ca-certificates/cert.pem \
+    /usr/local/etc/openssl@3/cert.pem \
+    /usr/local/etc/openssl/cert.pem; do
+    if [ -f "$candidate" ]; then
+      cp "$candidate" "$dest_path"
+      chmod 0644 "$dest_path"
+      echo "CA bundle installed from $candidate"
+      return
+    fi
+  done
+
+  echo "warning: no host CA bundle found; Codex may fail HTTPS requests in minimal workspace images." >&2
+}
+
 apk_package_filename_from_index() {
   pkg="$1"
   index_text="$2"
@@ -313,6 +339,102 @@ install_uv() {
     | tar -xzf - --strip-components=1 -C "$extract_dir"
   mv "$extract_dir/uv" "$OUTDIR/uv"
   chmod +x "$OUTDIR/uv"
+}
+
+npm_cli() {
+  node_dir="$1"
+  echo "$OUTDIR/$node_dir/lib/node_modules/npm/bin/npm-cli.js"
+}
+
+run_toolkit_npm() {
+  node_dir="$1"
+  shift
+  node_bin="$OUTDIR/$node_dir/bin/node"
+  npm_bin="$(npm_cli "$node_dir")"
+  if [ ! -x "$node_bin" ] || [ ! -f "$npm_bin" ]; then
+    return 1
+  fi
+
+  case "$node_dir" in
+    node-musl)
+      if [ -d "$OUTDIR/node-musl/runtime-lib" ]; then
+        LD_LIBRARY_PATH="$OUTDIR/node-musl/runtime-lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+          "$node_bin" "$npm_bin" "$@"
+      else
+        "$node_bin" "$npm_bin" "$@"
+      fi
+      ;;
+    *)
+      "$node_bin" "$npm_bin" "$@"
+      ;;
+  esac
+}
+
+install_acp_packages_with_toolkit_npm() {
+  node_dir="$1"
+  run_toolkit_npm "$node_dir" \
+    install \
+    -g \
+    --prefix "$OUTDIR/acp" \
+    --include=optional \
+    --omit=dev \
+    --no-audit \
+    --no-fund \
+    --registry "$NPM_MIRROR" \
+    --os=linux \
+    --cpu="$NPM_CPU" \
+    --libc=glibc \
+    "@openai/codex@$CODEX_VERSION" \
+    "@zed-industries/codex-acp@$CODEX_ACP_VERSION"
+}
+
+install_acp_packages_with_host_npm() {
+  npm \
+    install \
+    -g \
+    --prefix "$OUTDIR/acp" \
+    --include=optional \
+    --omit=dev \
+    --no-audit \
+    --no-fund \
+    --registry "$NPM_MIRROR" \
+    --os=linux \
+    --cpu="$NPM_CPU" \
+    --libc=glibc \
+    "@openai/codex@$CODEX_VERSION" \
+    "@zed-industries/codex-acp@$CODEX_ACP_VERSION"
+}
+
+install_acp_packages() {
+  codex_bin="$OUTDIR/acp/lib/node_modules/@openai/codex/bin/codex.js"
+  codex_acp_bin="$OUTDIR/acp/lib/node_modules/@zed-industries/codex-acp/bin/codex-acp.js"
+  if [ -f "$codex_bin" ] && [ -f "$codex_acp_bin" ]; then
+    echo "Codex ACP packages already installed; skipping npm install."
+    return
+  fi
+
+  echo "Installing Codex ACP packages for linux-${NPM_CPU}..."
+  mkdir -p "$OUTDIR/acp"
+
+  # On Linux builders, prefer the freshly downloaded target Node/npm so Docker
+  # builds do not depend on a host npm install. On macOS development hosts the
+  # downloaded Linux Node cannot run, so fall back to the project npm.
+  if [ "$(uname -s)" = "Linux" ]; then
+    if install_acp_packages_with_toolkit_npm node-glibc; then
+      return
+    fi
+    if install_acp_packages_with_toolkit_npm node-musl; then
+      return
+    fi
+  fi
+
+  if command -v npm >/dev/null 2>&1; then
+    install_acp_packages_with_host_npm
+    return
+  fi
+
+  echo "ERROR: npm is required to install Codex ACP packages into the workspace toolkit." >&2
+  exit 1
 }
 
 write_display_wrappers() {
@@ -561,6 +683,8 @@ install_pinned_npm node-glibc
 install_pinned_npm node-musl
 
 install_uv
+install_acp_packages
+install_ca_bundle
 
 echo "Toolkit installed to $OUTDIR"
 install_display_bundle

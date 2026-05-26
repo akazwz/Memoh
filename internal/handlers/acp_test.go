@@ -1,0 +1,109 @@
+package handlers
+
+import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"github.com/labstack/echo/v4"
+
+	"github.com/memohai/memoh/internal/acpprofile"
+)
+
+func TestACPProfilesResponseIsSafeMetadata(t *testing.T) {
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodGet, "/acp/profiles", nil)
+	rec := httptest.NewRecorder()
+
+	if err := NewACPHandler().ListProfiles(e.NewContext(req, rec)); err != nil {
+		t.Fatalf("ListProfiles() error = %v", err)
+	}
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	var resp acpprofile.ProfilesResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(resp.Items) != 1 {
+		t.Fatalf("profiles len = %d, want 1", len(resp.Items))
+	}
+	profile := resp.Items[0]
+	if profile.ID != acpprofile.AgentCodexID {
+		t.Fatalf("profile id = %q", profile.ID)
+	}
+	if len(profile.ManagedFields) == 0 {
+		t.Fatalf("managed fields should be exposed for schema-driven UI")
+	}
+
+	raw := rec.Body.String()
+	for _, forbidden := range []string{"codex-acp", "npx", "OPENAI_API_KEY"} {
+		if jsonContainsSubstring(raw, forbidden) {
+			t.Fatalf("profiles response leaked unsafe implementation detail %q: %s", forbidden, raw)
+		}
+	}
+	for _, forbidden := range []string{"sk-test-secret"} {
+		if jsonContainsValue(raw, forbidden) {
+			t.Fatalf("profiles response leaked unsafe implementation detail %q: %s", forbidden, raw)
+		}
+	}
+}
+
+func jsonContainsSubstring(raw, value string) bool {
+	var decoded any
+	if err := json.Unmarshal([]byte(raw), &decoded); err != nil {
+		return false
+	}
+	return containsStringSubstring(decoded, value)
+}
+
+func jsonContainsValue(raw, value string) bool {
+	var decoded any
+	if err := json.Unmarshal([]byte(raw), &decoded); err != nil {
+		return false
+	}
+	return containsString(decoded, value)
+}
+
+func containsString(value any, needle string) bool {
+	switch v := value.(type) {
+	case string:
+		return v == needle
+	case []any:
+		for _, item := range v {
+			if containsString(item, needle) {
+				return true
+			}
+		}
+	case map[string]any:
+		for _, item := range v {
+			if containsString(item, needle) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func containsStringSubstring(value any, needle string) bool {
+	switch v := value.(type) {
+	case string:
+		return strings.Contains(v, needle)
+	case []any:
+		for _, item := range v {
+			if containsStringSubstring(item, needle) {
+				return true
+			}
+		}
+	case map[string]any:
+		for _, item := range v {
+			if containsStringSubstring(item, needle) {
+				return true
+			}
+		}
+	}
+	return false
+}

@@ -28,8 +28,7 @@
       >
         <component
           :is="iconComponent"
-          class="size-2.5"
-          :class="iconClass"
+          :class="[iconSizeClass, iconClass]"
         />
       </div>
       <div
@@ -115,6 +114,7 @@ import {
   DropdownMenuItem,
 } from '@memohai/ui'
 import ChannelBadge from '@/components/chat-list/channel-badge/index.vue'
+import { acpAgentDisplayName, acpAgentIcon, normalizeACPAgentID } from '@/utils/acp'
 
 const props = defineProps<{
   session: SessionSummary
@@ -143,6 +143,7 @@ const iconComponent = computed<Component>(() => {
     case 'heartbeat': return HeartPulse
     case 'schedule': return Clock
     case 'subagent': return GitBranch
+    case 'acp_agent': return acpAgentIcon(acpAgentId.value, true)
     default: return MessageSquare
   }
 })
@@ -152,9 +153,16 @@ const iconClass = computed(() => {
     case 'heartbeat': return 'text-event-heartbeat'
     case 'schedule': return 'text-event-schedule'
     case 'subagent': return 'text-event-subagent'
+    case 'acp_agent': return 'text-muted-foreground'
     default: return 'text-muted-foreground'
   }
 })
+
+const iconSizeClass = computed(() => {
+  return props.session.type === 'acp_agent' ? 'size-3.5' : 'size-2.5'
+})
+
+const acpAgentId = computed(() => normalizeACPAgentID(props.session.metadata?.acp_agent_id))
 
 function routeMeta(): Record<string, unknown> {
   return props.session.route_metadata ?? {}
@@ -192,6 +200,7 @@ const subLabel = computed(() => {
   if (props.session.type === 'heartbeat') return t('chat.sessionTypeHeartbeat')
   if (props.session.type === 'schedule') return t('chat.sessionTypeSchedule')
   if (props.session.type === 'subagent') return t('chat.sessionTypeSubagent')
+  if (props.session.type === 'acp_agent') return acpAgentDisplayName(acpAgentId.value, t('chat.sessionTypeACPAgent'))
   if (!isIMSession.value) return ''
   const meta = routeMeta()
   if (isGroupConversation()) {

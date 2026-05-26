@@ -55,6 +55,12 @@ SET metadata = sqlc.arg(metadata), updated_at = CURRENT_TIMESTAMP
 WHERE id = sqlc.arg(id) AND deleted_at IS NULL
 RETURNING *;
 
+-- name: UpdateSessionTypeAndMetadata :one
+UPDATE bot_sessions
+SET type = sqlc.arg(type), metadata = sqlc.arg(metadata), updated_at = CURRENT_TIMESTAMP
+WHERE id = sqlc.arg(id) AND deleted_at IS NULL
+RETURNING *;
+
 -- name: SoftDeleteSession :exec
 UPDATE bot_sessions
 SET deleted_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP

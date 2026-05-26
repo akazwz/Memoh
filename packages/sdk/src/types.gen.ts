@@ -141,6 +141,50 @@ export type AclUpdateRuleRequest = {
     subject_channel_type?: string;
 };
 
+export type AcpagentRuntimeStatus = {
+    acp_session_id?: string;
+    agent_id?: string;
+    models?: AcpclientModelState;
+    project_path?: string;
+    session_id?: string;
+    state?: string;
+};
+
+export type AcpclientModelInfo = {
+    description?: string;
+    id?: string;
+    name?: string;
+};
+
+export type AcpclientModelState = {
+    available_models?: Array<AcpclientModelInfo>;
+    current_model_id?: string;
+    supported?: boolean;
+};
+
+export type AcpprofileManagedField = {
+    help?: string;
+    id?: string;
+    label?: string;
+    placeholder?: string;
+    required?: boolean;
+    sensitive?: boolean;
+    type?: string;
+};
+
+export type AcpprofileProfilesResponse = {
+    items?: Array<AcpprofilePublicProfile>;
+};
+
+export type AcpprofilePublicProfile = {
+    description?: string;
+    display_name?: string;
+    id?: string;
+    managed_fields?: Array<AcpprofileManagedField>;
+    setup_modes?: Array<string>;
+    supported_backends?: Array<string>;
+};
+
 export type AdaptersCdfPoint = {
     /**
      * cumulative weight fraction [0.0, 1.0]
@@ -1283,12 +1327,17 @@ export type HandlersTriggerCompactResponse = {
     summary?: string;
 };
 
+export type HandlersAcpRuntimeModelRequest = {
+    model_id?: string;
+};
+
 export type HandlersCreateSessionRequest = {
     channel_type?: string;
     metadata?: {
         [key: string]: unknown;
     };
     title?: string;
+    type?: string;
 };
 
 export type HandlersDisplayInfoResponse = {
@@ -1412,6 +1461,7 @@ export type HandlersUpdateSessionRequest = {
         [key: string]: unknown;
     };
     title?: string;
+    type?: string;
 };
 
 export type HeartbeatListLogsResponse = {
@@ -1905,6 +1955,22 @@ export type SettingsUpsertRequest = {
     transcription_model_id?: string;
     tts_model_id?: string;
 };
+
+export type GetAcpProfilesData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/acp/profiles';
+};
+
+export type GetAcpProfilesResponses = {
+    /**
+     * OK
+     */
+    200: AcpprofileProfilesResponse;
+};
+
+export type GetAcpProfilesResponse = GetAcpProfilesResponses[keyof GetAcpProfilesResponses];
 
 export type PostAuthLoginData = {
     /**
@@ -5843,6 +5909,135 @@ export type PatchBotsByBotIdSessionsBySessionIdResponses = {
 
 export type PatchBotsByBotIdSessionsBySessionIdResponse = PatchBotsByBotIdSessionsBySessionIdResponses[keyof PatchBotsByBotIdSessionsBySessionIdResponses];
 
+export type GetBotsByBotIdSessionsBySessionIdAcpRuntimeData = {
+    body?: never;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+        /**
+         * Session ID
+         */
+        session_id: string;
+    };
+    query?: never;
+    url: '/bots/{bot_id}/sessions/{session_id}/acp-runtime';
+};
+
+export type GetBotsByBotIdSessionsBySessionIdAcpRuntimeErrors = {
+    /**
+     * Bad Request
+     */
+    400: HandlersErrorResponse;
+    /**
+     * Forbidden
+     */
+    403: HandlersErrorResponse;
+    /**
+     * Not Found
+     */
+    404: HandlersErrorResponse;
+};
+
+export type GetBotsByBotIdSessionsBySessionIdAcpRuntimeError = GetBotsByBotIdSessionsBySessionIdAcpRuntimeErrors[keyof GetBotsByBotIdSessionsBySessionIdAcpRuntimeErrors];
+
+export type GetBotsByBotIdSessionsBySessionIdAcpRuntimeResponses = {
+    /**
+     * OK
+     */
+    200: AcpagentRuntimeStatus;
+};
+
+export type GetBotsByBotIdSessionsBySessionIdAcpRuntimeResponse = GetBotsByBotIdSessionsBySessionIdAcpRuntimeResponses[keyof GetBotsByBotIdSessionsBySessionIdAcpRuntimeResponses];
+
+export type PostBotsByBotIdSessionsBySessionIdAcpRuntimeData = {
+    body?: never;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+        /**
+         * Session ID
+         */
+        session_id: string;
+    };
+    query?: never;
+    url: '/bots/{bot_id}/sessions/{session_id}/acp-runtime';
+};
+
+export type PostBotsByBotIdSessionsBySessionIdAcpRuntimeErrors = {
+    /**
+     * Bad Request
+     */
+    400: HandlersErrorResponse;
+    /**
+     * Forbidden
+     */
+    403: HandlersErrorResponse;
+    /**
+     * Not Found
+     */
+    404: HandlersErrorResponse;
+};
+
+export type PostBotsByBotIdSessionsBySessionIdAcpRuntimeError = PostBotsByBotIdSessionsBySessionIdAcpRuntimeErrors[keyof PostBotsByBotIdSessionsBySessionIdAcpRuntimeErrors];
+
+export type PostBotsByBotIdSessionsBySessionIdAcpRuntimeResponses = {
+    /**
+     * OK
+     */
+    200: AcpagentRuntimeStatus;
+};
+
+export type PostBotsByBotIdSessionsBySessionIdAcpRuntimeResponse = PostBotsByBotIdSessionsBySessionIdAcpRuntimeResponses[keyof PostBotsByBotIdSessionsBySessionIdAcpRuntimeResponses];
+
+export type PatchBotsByBotIdSessionsBySessionIdAcpRuntimeModelData = {
+    /**
+     * ACP model selection
+     */
+    body: HandlersAcpRuntimeModelRequest;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+        /**
+         * Session ID
+         */
+        session_id: string;
+    };
+    query?: never;
+    url: '/bots/{bot_id}/sessions/{session_id}/acp-runtime/model';
+};
+
+export type PatchBotsByBotIdSessionsBySessionIdAcpRuntimeModelErrors = {
+    /**
+     * Bad Request
+     */
+    400: HandlersErrorResponse;
+    /**
+     * Forbidden
+     */
+    403: HandlersErrorResponse;
+    /**
+     * Not Found
+     */
+    404: HandlersErrorResponse;
+};
+
+export type PatchBotsByBotIdSessionsBySessionIdAcpRuntimeModelError = PatchBotsByBotIdSessionsBySessionIdAcpRuntimeModelErrors[keyof PatchBotsByBotIdSessionsBySessionIdAcpRuntimeModelErrors];
+
+export type PatchBotsByBotIdSessionsBySessionIdAcpRuntimeModelResponses = {
+    /**
+     * OK
+     */
+    200: AcpagentRuntimeStatus;
+};
+
+export type PatchBotsByBotIdSessionsBySessionIdAcpRuntimeModelResponse = PatchBotsByBotIdSessionsBySessionIdAcpRuntimeModelResponses[keyof PatchBotsByBotIdSessionsBySessionIdAcpRuntimeModelResponses];
+
 export type PostBotsByBotIdSessionsBySessionIdCompactData = {
     body?: never;
     path: {
@@ -6205,7 +6400,7 @@ export type GetBotsByBotIdTokenUsageRecordsData = {
          */
         model_id?: string;
         /**
-         * Optional session type: chat, heartbeat, or schedule
+         * Optional session type: chat, heartbeat, schedule, or acp_agent
          */
         session_type?: string;
         /**

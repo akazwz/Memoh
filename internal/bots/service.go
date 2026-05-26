@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/memohai/memoh/internal/acl"
+	"github.com/memohai/memoh/internal/acpprofile"
 	"github.com/memohai/memoh/internal/db"
 	"github.com/memohai/memoh/internal/db/postgres/sqlc"
 	dbstore "github.com/memohai/memoh/internal/db/store"
@@ -258,7 +259,7 @@ func (s *Service) Update(ctx context.Context, botID string, req UpdateBotRequest
 		}
 	}
 	if req.Metadata != nil {
-		metadata = req.Metadata
+		metadata = acpprofile.MergeSensitiveFieldsForUpdate(metadata, req.Metadata)
 	}
 	if displayName == "" {
 		displayName = "bot-" + uuid.NewString()

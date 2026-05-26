@@ -343,7 +343,7 @@ CREATE TABLE IF NOT EXISTS bot_sessions (
   bot_id UUID NOT NULL REFERENCES bots(id) ON DELETE CASCADE,
   route_id UUID REFERENCES bot_channel_routes(id) ON DELETE SET NULL,
   channel_type TEXT,
-  type TEXT NOT NULL DEFAULT 'chat' CHECK (type IN ('chat', 'heartbeat', 'schedule', 'subagent', 'discuss')),
+  type TEXT NOT NULL DEFAULT 'chat' CHECK (type IN ('chat', 'heartbeat', 'schedule', 'subagent', 'discuss', 'acp_agent')),
   title TEXT NOT NULL DEFAULT '',
   metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
   parent_session_id UUID REFERENCES bot_sessions(id) ON DELETE SET NULL,

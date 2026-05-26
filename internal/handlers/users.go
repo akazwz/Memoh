@@ -12,13 +12,21 @@ import (
 
 	"github.com/memohai/memoh/internal/accounts"
 	"github.com/memohai/memoh/internal/acl"
+	"github.com/memohai/memoh/internal/acpclient"
+	"github.com/memohai/memoh/internal/acpprofile"
 	"github.com/memohai/memoh/internal/auth"
 	"github.com/memohai/memoh/internal/bots"
 	"github.com/memohai/memoh/internal/channel"
 	"github.com/memohai/memoh/internal/channel/route"
 	"github.com/memohai/memoh/internal/db"
 	"github.com/memohai/memoh/internal/identity"
+	"github.com/memohai/memoh/internal/workspace/bridge"
 )
+
+type acpWorkspaceConfigProvider interface {
+	bridge.Provider
+	WorkspaceInfo(ctx context.Context, botID string) (bridge.WorkspaceInfo, error)
+}
 
 // UsersHandler manages user/account CRUD and bot operations via REST API.
 type UsersHandler struct {
@@ -29,11 +37,12 @@ type UsersHandler struct {
 	channelLifecycle *channel.Lifecycle
 	channelManager   *channel.Manager
 	registry         *channel.Registry
+	acpWorkspace     acpWorkspaceConfigProvider
 	logger           *slog.Logger
 }
 
 // NewUsersHandler creates a UsersHandler with channel identity support.
-func NewUsersHandler(log *slog.Logger, service *accounts.Service, botService *bots.Service, routeService route.Service, channelStore *channel.Store, channelLifecycle *channel.Lifecycle, channelManager *channel.Manager, registry *channel.Registry) *UsersHandler {
+func NewUsersHandler(log *slog.Logger, service *accounts.Service, botService *bots.Service, routeService route.Service, channelStore *channel.Store, channelLifecycle *channel.Lifecycle, channelManager *channel.Manager, registry *channel.Registry, acpWorkspace acpWorkspaceConfigProvider) *UsersHandler {
 	if log == nil {
 		log = slog.Default()
 	}
@@ -45,6 +54,7 @@ func NewUsersHandler(log *slog.Logger, service *accounts.Service, botService *bo
 		channelLifecycle: channelLifecycle,
 		channelManager:   channelManager,
 		registry:         registry,
+		acpWorkspace:     acpWorkspace,
 		logger:           log.With(slog.String("handler", "users")),
 	}
 }
@@ -445,7 +455,7 @@ func (h *UsersHandler) CreateBot(c echo.Context) error {
 		}
 		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 	}
-	return c.JSON(http.StatusCreated, resp)
+	return c.JSON(http.StatusCreated, scrubBotForResponse(resp))
 }
 
 // ListBots godoc
@@ -476,13 +486,13 @@ func (h *UsersHandler) ListBots(c echo.Context) error {
 		if err != nil {
 			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 		}
-		return c.JSON(http.StatusOK, bots.ListBotsResponse{Items: items})
+		return c.JSON(http.StatusOK, bots.ListBotsResponse{Items: scrubBotsForResponse(items)})
 	}
 	items, err := h.botService.ListAccessible(c.Request().Context(), channelIdentityID)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 	}
-	return c.JSON(http.StatusOK, bots.ListBotsResponse{Items: items})
+	return c.JSON(http.StatusOK, bots.ListBotsResponse{Items: scrubBotsForResponse(items)})
 }
 
 // GetBot godoc
@@ -509,7 +519,7 @@ func (h *UsersHandler) GetBot(c echo.Context) error {
 	if err != nil {
 		return err
 	}
-	return c.JSON(http.StatusOK, bot)
+	return c.JSON(http.StatusOK, scrubBotForResponse(bot))
 }
 
 // ListBotChecks godoc
@@ -577,7 +587,34 @@ func (h *UsersHandler) UpdateBot(c echo.Context) error {
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 	}
-	return c.JSON(http.StatusOK, resp)
+	if req.Metadata != nil {
+		if err := h.prepareACPManagedWorkspaceConfig(c.Request().Context(), resp); err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+		}
+	}
+	return c.JSON(http.StatusOK, scrubBotForResponse(resp))
+}
+
+func (h *UsersHandler) prepareACPManagedWorkspaceConfig(ctx context.Context, bot bots.Bot) error {
+	if h.acpWorkspace == nil {
+		return nil
+	}
+	setup := acpprofile.ParseAgentSetup(bot.Metadata, acpprofile.AgentCodexID)
+	if !setup.Enabled || acpclient.SetupMode(setup.Mode) == acpclient.SetupModeSelf {
+		return nil
+	}
+	info, err := h.acpWorkspace.WorkspaceInfo(ctx, bot.ID)
+	if err != nil {
+		return err
+	}
+	if info.Backend == bridge.WorkspaceBackendLocal {
+		return nil
+	}
+	client, err := h.acpWorkspace.MCPClient(ctx, bot.ID)
+	if err != nil {
+		return err
+	}
+	return acpclient.WriteCodexManagedConfig(ctx, client, setup.Managed)
 }
 
 // TransferBotOwner godoc
@@ -622,7 +659,7 @@ func (h *UsersHandler) TransferBotOwner(c echo.Context) error {
 		}
 		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 	}
-	return c.JSON(http.StatusOK, resp)
+	return c.JSON(http.StatusOK, scrubBotForResponse(resp))
 }
 
 // DeleteBot godoc

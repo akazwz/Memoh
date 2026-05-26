@@ -9,6 +9,7 @@ import (
 
 	sdk "github.com/memohai/twilight-ai/sdk"
 
+	"github.com/memohai/memoh/internal/acpprofile"
 	"github.com/memohai/memoh/internal/conversation"
 	"github.com/memohai/memoh/internal/db/postgres/sqlc"
 	messageevent "github.com/memohai/memoh/internal/message/event"
@@ -60,7 +61,7 @@ func (r *Resolver) maybeGenerateSessionTitle(ctx context.Context, req conversati
 		r.logger.Warn("title gen: failed to get session", slog.String("session_id", sessionID), slog.Any("error", err))
 		return
 	}
-	if strings.TrimSpace(sess.Title) != "" {
+	if !shouldGenerateSessionTitle(sess) {
 		return
 	}
 
@@ -94,6 +95,33 @@ func (r *Resolver) maybeGenerateSessionTitle(ctx context.Context, req conversati
 		r.logger.Info("title gen: session title updated", slog.String("session_id", sessionID), slog.String("title", title))
 		r.publishSessionTitleUpdated(req.BotID, sessionID, title)
 	}
+}
+
+func shouldGenerateSessionTitle(sess session.Session) bool {
+	title := strings.TrimSpace(sess.Title)
+	if title == "" {
+		return true
+	}
+	if sess.Type != session.TypeACPAgent {
+		return false
+	}
+
+	agentID := metadataString(sess.Metadata, "acp_agent_id")
+	if agentID == "" {
+		agentID = metadataString(sess.Metadata, "agent_id")
+	}
+	normalized := acpprofile.NormalizeAgentID(agentID)
+	if normalized == "" {
+		return false
+	}
+
+	if strings.EqualFold(title, normalized) {
+		return true
+	}
+	if profile, ok := acpprofile.Lookup(normalized); ok && strings.EqualFold(title, strings.TrimSpace(profile.DisplayName)) {
+		return true
+	}
+	return false
 }
 
 func (r *Resolver) generateTitle(ctx context.Context, userID string, model models.GetResponse, provider sqlc.Provider, userQuery string) string {

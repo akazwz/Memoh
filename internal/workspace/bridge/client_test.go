@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"testing"
+	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -25,6 +26,24 @@ type rawReadTestServer struct {
 
 type tunnelEchoTestServer struct {
 	pb.UnimplementedContainerServiceServer
+}
+
+type execCancelTestServer struct {
+	pb.UnimplementedContainerServiceServer
+	cancelled chan struct{}
+}
+
+func newExecCancelTestServer() *execCancelTestServer {
+	return &execCancelTestServer{cancelled: make(chan struct{})}
+}
+
+func (s *execCancelTestServer) Exec(stream pb.ContainerService_ExecServer) error {
+	if _, err := stream.Recv(); err != nil {
+		return err
+	}
+	<-stream.Context().Done()
+	close(s.cancelled)
+	return stream.Context().Err()
 }
 
 func (s *rawReadTestServer) ReadRaw(req *pb.ReadRawRequest, stream pb.ContainerService_ReadRawServer) error {
@@ -189,5 +208,25 @@ func TestClientTunnelSurvivesDialContextCancellation(t *testing.T) {
 	}
 	if got := string(buf[:n]); got != "ping" {
 		t.Fatalf("expected echoed payload, got %q", got)
+	}
+}
+
+func TestExecStreamCloseCancelsServerContext(t *testing.T) {
+	t.Parallel()
+
+	server := newExecCancelTestServer()
+	client := newTestClient(t, server)
+	stream, err := client.ExecStreamWithEnv(context.Background(), "sleep 60", "/tmp", -1, nil)
+	if err != nil {
+		t.Fatalf("ExecStreamWithEnv returned error: %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close returned error: %v", err)
+	}
+
+	select {
+	case <-server.cancelled:
+	case <-time.After(2 * time.Second):
+		t.Fatal("server stream context was not cancelled after ExecStream.Close")
 	}
 }

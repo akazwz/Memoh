@@ -236,16 +236,77 @@
                 align="block-end"
                 class="items-center py-1.5"
               >
+                <Popover v-model:open="agentPopoverOpen">
+                  <PopoverTrigger as-child>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="ghost"
+                      :disabled="!currentBotId || activeChatReadOnly || agentChanging || !canChangeAgent"
+                      class="gap-1.5 text-muted-foreground max-w-40"
+                    >
+                      <LoaderCircle
+                        v-if="agentChanging"
+                        class="size-3 animate-spin"
+                      />
+                      <component
+                        :is="selectedAgentIcon"
+                        v-else
+                        class="size-3.5 shrink-0"
+                      />
+                      <span class="truncate text-[11px]">{{ selectedAgentLabel }}</span>
+                      <ChevronDown class="size-3 shrink-0 opacity-50" />
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent
+                    class="w-56 p-1"
+                    align="start"
+                  >
+                    <button
+                      type="button"
+                      class="flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-xs hover:bg-muted"
+                      @click="selectMemohAgent"
+                    >
+                      <MessageSquare class="size-3.5 text-muted-foreground" />
+                      <span class="min-w-0 flex-1 truncate">{{ $t('chat.agentMemoh') }}</span>
+                      <Check
+                        v-if="!activeIsACP"
+                        class="size-3 text-muted-foreground"
+                      />
+                    </button>
+                    <button
+                      v-for="profile in enabledACPProfiles"
+                      :key="profile.id"
+                      type="button"
+                      class="flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-xs hover:bg-muted"
+                      @click="selectACPAgent(profile)"
+                    >
+                      <component
+                        :is="acpAgentIcon(profile.id, true)"
+                        class="size-3.5 shrink-0"
+                      />
+                      <span class="min-w-0 flex-1 truncate">{{ profile.display_name || profile.id }}</span>
+                      <Check
+                        v-if="activeACPAgentId === normalizedProfileID(profile.id)"
+                        class="size-3 text-muted-foreground"
+                      />
+                    </button>
+                  </PopoverContent>
+                </Popover>
+
                 <Popover v-model:open="modelPopoverOpen">
                   <PopoverTrigger as-child>
                     <Button
                       type="button"
                       size="sm"
                       variant="ghost"
-                      :disabled="!currentBotId || activeChatReadOnly"
+                      :disabled="!currentBotId || activeChatReadOnly || acpModelChanging || acpModelsLoading"
                       class="gap-0.5 text-muted-foreground max-w-40"
-                      :title="selectedModelLabel"
                     >
+                      <LoaderCircle
+                        v-if="acpModelChanging || acpModelsLoading"
+                        class="size-3 animate-spin"
+                      />
                       <span class="truncate text-[11px]">{{ selectedModelLabel }}</span>
                       <ChevronDown class="size-3 shrink-0 opacity-50" />
                     </Button>
@@ -254,7 +315,53 @@
                     class="w-96 p-0"
                     align="start"
                   >
+                    <div
+                      v-if="activeIsACP"
+                      class="max-h-80 overflow-y-auto p-1"
+                    >
+                      <div
+                        v-if="acpModelsLoading"
+                        class="flex items-center gap-2 px-2 py-3 text-xs text-muted-foreground"
+                      >
+                        <LoaderCircle class="size-3 animate-spin" />
+                        {{ $t('common.loading') }}
+                      </div>
+                      <div
+                        v-else-if="!acpModels.length"
+                        class="px-2 py-3 text-xs text-muted-foreground"
+                      >
+                        {{ $t('chat.noModels') }}
+                      </div>
+                      <Tooltip
+                        v-for="model in acpModels"
+                        v-else
+                        :key="model.id || model.name"
+                      >
+                        <TooltipTrigger as-child>
+                          <button
+                            type="button"
+                            class="flex min-h-8 w-full items-center gap-2 rounded-md px-2 text-left text-xs hover:bg-muted"
+                            @click="onACPModelSelected(model)"
+                          >
+                            <span class="min-w-0 flex-1 truncate">
+                              {{ model.name || model.id }}
+                            </span>
+                            <Check
+                              v-if="model.id === currentACPModelId"
+                              class="size-3 text-muted-foreground"
+                            />
+                          </button>
+                        </TooltipTrigger>
+                        <TooltipContent
+                          v-if="model.description"
+                          class="max-w-80 text-left leading-relaxed"
+                        >
+                          {{ model.description }}
+                        </TooltipContent>
+                      </Tooltip>
+                    </div>
                     <ModelOptions
+                      v-else
                       v-model="overrideModelId"
                       :models="models"
                       :providers="providers"
@@ -265,7 +372,22 @@
                   </PopoverContent>
                 </Popover>
 
-                <Popover v-model:open="reasoningPopoverOpen">
+                <Button
+                  v-if="activeIsACP"
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  class="gap-1 text-muted-foreground max-w-40"
+                  disabled
+                >
+                  <FolderOpen class="size-3.5 shrink-0" />
+                  <span class="truncate text-[11px]">{{ activeACPProjectLabel }}</span>
+                </Button>
+
+                <Popover
+                  v-if="!activeIsACP"
+                  v-model:open="reasoningPopoverOpen"
+                >
                   <PopoverTrigger as-child>
                     <Button
                       type="button"
@@ -295,6 +417,7 @@
                 </Popover>
 
                 <Button
+                  v-if="!activeIsACP"
                   type="button"
                   size="sm"
                   variant="ghost"
@@ -306,8 +429,13 @@
                 </Button>
 
                 <SessionInfoRing
+                  v-if="!activeIsACP"
                   class="ml-auto"
                   :override-model-id="overrideModelId"
+                />
+                <div
+                  v-else
+                  class="ml-auto"
                 />
 
                 <Button
@@ -343,14 +471,14 @@
 
 <script setup lang="ts">
 import { ref, computed, onBeforeUnmount, useTemplateRef, watchEffect, watch, nextTick, onActivated, onDeactivated } from 'vue'
-import { LoaderCircle, Image as ImageIcon, File as FileIcon, X, Paperclip, Send, ChevronDown, ChevronUp, Lightbulb, CircleAlert, ArrowDown } from 'lucide-vue-next'
-import { ScrollArea, Button, InputGroup, InputGroupAddon, InputGroupTextarea, Popover, PopoverContent, PopoverTrigger } from '@memohai/ui'
+import { LoaderCircle, Image as ImageIcon, File as FileIcon, X, Paperclip, Send, ChevronDown, ChevronUp, Lightbulb, CircleAlert, ArrowDown, MessageSquare, Check, FolderOpen } from 'lucide-vue-next'
+import { ScrollArea, Button, InputGroup, InputGroupAddon, InputGroupTextarea, Popover, PopoverContent, PopoverTrigger, Tooltip, TooltipContent, TooltipTrigger } from '@memohai/ui'
 import { useChatStore } from '@/store/chat-list'
 import { storeToRefs } from 'pinia'
 import { useScroll, useElementBounding, useIntersectionObserver, useStorage } from '@vueuse/core'
 import { useQuery } from '@pinia/colada'
-import { getModels, getProviders, getBotsByBotIdSettings } from '@memohai/sdk'
-import type { ModelsGetResponse, ProvidersGetResponse } from '@memohai/sdk'
+import { getAcpProfiles, getModels, getProviders, getBotsByBotIdSettings } from '@memohai/sdk'
+import type { AcpclientModelInfo, AcpprofilePublicProfile, ModelsGetResponse, ProvidersGetResponse } from '@memohai/sdk'
 import { useI18n } from 'vue-i18n'
 import MessageItem from './message-item.vue'
 import MediaGalleryLightbox from './media-gallery-lightbox.vue'
@@ -362,6 +490,9 @@ import { useMediaGallery } from '../composables/useMediaGallery'
 import type { ChatAttachment } from '@/composables/api/useChat'
 import { onAuthSessionCleared } from '@/lib/auth-session'
 import type { ChatMessage } from '@/store/chat-list'
+import { useACPRuntime } from '@/composables/useACPRuntime'
+import { acpAgentDisplayName, acpAgentIcon, ACP_NO_PROJECT_MODE, createACPNoProjectPath, isACPAgentEnabled, isACPNoProject, normalizeACPAgentID } from '@/utils/acp'
+import { resolveApiErrorMessage } from '@/utils/api-error'
 
 interface ScrollSegment {
   id: string
@@ -395,12 +526,16 @@ const pendingFiles = ref<File[]>([])
 const composerError = ref('')
 const modelPopoverOpen = ref(false)
 const reasoningPopoverOpen = ref(false)
+const agentPopoverOpen = ref(false)
+const agentChanging = ref(false)
+const acpModelChanging = ref(false)
 const inputDrafts = useStorage<Record<string, string>>('chat-input-drafts', {})
 
 const {
   messages,
   streaming,
   currentBotId,
+  bots,
   activeSession,
   activeChatReadOnly,
   loadingOlder,
@@ -443,8 +578,63 @@ const { data: botSettings } = useQuery({
   enabled: () => !!currentBotId.value,
 })
 
+const { data: acpProfileData } = useQuery({
+  key: () => ['acp-profiles'],
+  query: async () => {
+    const { data } = await getAcpProfiles({ throwOnError: true })
+    return data
+  },
+})
+
+const currentBot = computed(() => bots.value.find(bot => bot.id === currentBotId.value) ?? null)
+const acpProfiles = computed<AcpprofilePublicProfile[]>(() => acpProfileData.value?.items ?? [])
+const enabledACPProfiles = computed(() =>
+  acpProfiles.value.filter(profile => isACPAgentEnabled(currentBot.value?.metadata as Record<string, unknown> | undefined, profile.id)),
+)
+
+const activeSessionMetadata = computed<Record<string, unknown>>(() =>
+  activeSession.value?.metadata && typeof activeSession.value.metadata === 'object'
+    ? activeSession.value.metadata
+    : {},
+)
+const activeIsACP = computed(() => activeSession.value?.type === 'acp_agent')
+const activeACPAgentId = computed(() => normalizeACPAgentID(activeSessionMetadata.value.acp_agent_id))
+const selectedAgentIcon = computed(() => activeIsACP.value ? acpAgentIcon(activeACPAgentId.value, true) : MessageSquare)
+const selectedAgentLabel = computed(() =>
+  activeIsACP.value
+    ? acpAgentDisplayName(activeACPAgentId.value, t('chat.agentCodex'))
+    : t('chat.agentMemoh'),
+)
+const activeACPProjectLabel = computed(() => {
+  if (isACPNoProject(activeSessionMetadata.value)) return t('chat.noProject')
+  const path = String(activeSessionMetadata.value.project_path ?? '').trim()
+  const parts = path.split('/').filter(Boolean)
+  return path ? parts[parts.length - 1] ?? path : t('chat.noProject')
+})
+const canChangeAgent = computed(() => !streaming.value && messages.value.length === 0)
+const activeSessionId = computed(() => activeSession.value?.id ?? '')
+const {
+  runtime: acpRuntime,
+  models: acpModels,
+  currentModelId: currentACPModelId,
+  isEnsuring: acpRuntimeEnsuring,
+  setModel: setActiveACPModel,
+} = useACPRuntime({
+  botId: currentBotId,
+  sessionId: activeSessionId,
+  enabled: computed(() => activeIsACP.value && !!currentBotId.value && !!activeSessionId.value),
+  onError: (error) => {
+    if (activeIsACP.value) {
+      composerError.value = resolveApiErrorMessage(error, t('chat.agentSwitchFailed'))
+    }
+  },
+})
+
 const models = computed<ModelsGetResponse[]>(() => modelData.value ?? [])
 const providers = computed<ProvidersGetResponse[]>(() => providerData.value ?? [])
+const acpModelsLoading = computed(() =>
+  activeIsACP.value && !acpRuntime.value?.models && (agentChanging.value || acpRuntimeEnsuring.value),
+)
 
 const activeModel = computed(() => {
   const id = overrideModelId.value || botSettings.value?.chat_model_id || ''
@@ -462,6 +652,10 @@ const availableReasoningEfforts = computed(() => {
 })
 
 const selectedModelLabel = computed(() => {
+  if (activeIsACP.value) {
+    const current = acpModels.value.find(model => model.id === currentACPModelId.value)
+    return current?.name || current?.id || currentACPModelId.value || t('chat.modelDefault')
+  }
   const m = models.value.find((m) => m.id === overrideModelId.value)
   return m?.name || m?.model_id || t('chat.modelDefault')
 })
@@ -496,10 +690,79 @@ watch(currentBotId, () => {
   overrideReasoningEffort.value = ''
 })
 
+watch(activeIsACP, (isACP) => {
+  if (isACP) {
+    pendingFiles.value = []
+  }
+})
+
+function normalizedProfileID(value: unknown): string {
+  return normalizeACPAgentID(value)
+}
+
+async function selectACPAgent(profile: AcpprofilePublicProfile) {
+  const agentId = normalizeACPAgentID(profile.id)
+  if (!agentId || agentChanging.value || !canChangeAgent.value) return
+  agentPopoverOpen.value = false
+  agentChanging.value = true
+  composerError.value = ''
+  try {
+    const projectPath = createACPNoProjectPath()
+    if (chatStore.sessionId) {
+      await chatStore.updateCurrentSessionAgent({
+        agentId,
+        projectPath,
+        projectMode: ACP_NO_PROJECT_MODE,
+      })
+    } else {
+      await chatStore.createACPSession({
+        agentId,
+        projectPath,
+        projectMode: ACP_NO_PROJECT_MODE,
+      })
+    }
+    pendingFiles.value = []
+  } catch (error) {
+    composerError.value = resolveApiErrorMessage(error, t('chat.agentSwitchFailed'))
+  } finally {
+    agentChanging.value = false
+  }
+}
+
+async function selectMemohAgent() {
+  if (agentChanging.value || !canChangeAgent.value) return
+  agentPopoverOpen.value = false
+  if (!activeIsACP.value || !chatStore.sessionId) return
+  agentChanging.value = true
+  composerError.value = ''
+  try {
+    await chatStore.updateCurrentSessionToMemoh()
+  } catch (error) {
+    composerError.value = resolveApiErrorMessage(error, t('chat.agentSwitchFailed'))
+  } finally {
+    agentChanging.value = false
+  }
+}
+
 function onModelSelected() {
   modelPopoverOpen.value = false
   if (!activeModelSupportsReasoning.value) {
     overrideReasoningEffort.value = REASONING_EFFORT_DISABLE
+  }
+}
+
+async function onACPModelSelected(model: AcpclientModelInfo) {
+  const modelId = (model.id ?? '').trim()
+  if (!modelId || acpModelChanging.value) return
+  modelPopoverOpen.value = false
+  acpModelChanging.value = true
+  composerError.value = ''
+  try {
+    await setActiveACPModel(modelId)
+  } catch (error) {
+    composerError.value = resolveApiErrorMessage(error, t('chat.modelSwitchFailed'))
+  } finally {
+    acpModelChanging.value = false
   }
 }
 
@@ -1124,6 +1387,10 @@ async function handleSend() {
   const text = inputText.value.trim()
   const files = [...pendingFiles.value]
   if ((!text && !files.length) || streaming.value || activeChatReadOnly.value) return
+  if (activeIsACP.value && files.length) {
+    composerError.value = t('chat.acpAttachmentsUnsupported')
+    return
+  }
 
   const sentDraftKey = inputDraftKey.value
   composerError.value = ''

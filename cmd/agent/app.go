@@ -21,6 +21,8 @@ import (
 
 	"github.com/memohai/memoh/internal/accounts"
 	"github.com/memohai/memoh/internal/acl"
+	"github.com/memohai/memoh/internal/acpagent"
+	"github.com/memohai/memoh/internal/acpclient"
 	agentpkg "github.com/memohai/memoh/internal/agent"
 	"github.com/memohai/memoh/internal/agent/background"
 	agenttools "github.com/memohai/memoh/internal/agent/tools"
@@ -368,7 +370,26 @@ func injectToolProviders(a *agentpkg.Agent, msgService *message.DBService, provi
 	}
 }
 
-func provideChatResolver(log *slog.Logger, a *agentpkg.Agent, modelsService *models.Service, queries dbstore.Queries, chatService *conversation.Service, msgService *message.DBService, settingsService *settings.Service, accountService *accounts.Service, mediaService *media.Service, containerdHandler *handlers.ContainerdHandler, memoryRegistry *memprovider.Registry, channelStore *channel.Store, routeService *route.DBService, sessionService *sessionpkg.Service, eventHub *event.Hub, compactionService *compaction.Service, pipeline *pipelinepkg.Pipeline, rc *boot.RuntimeConfig, bgManager *background.Manager, toolApproval *toolapproval.Service) *flow.Resolver {
+func provideACPRunner(log *slog.Logger, manager *workspace.Manager) *acpclient.Runner {
+	return acpclient.NewRunner(log, manager)
+}
+
+func provideACPSessionPool(lc fx.Lifecycle, log *slog.Logger, runner *acpclient.Runner, botService *bots.Service, sessionService *sessionpkg.Service) *acpagent.SessionPool {
+	pool := acpagent.NewSessionPool(log, runner, botService, sessionService)
+	lc.Append(fx.Hook{
+		OnStart: func(ctx context.Context) error {
+			pool.StartReaper(ctx)
+			return nil
+		},
+		OnStop: func(context.Context) error {
+			pool.CloseAll() //nolint:contextcheck // ACP shutdown must close subprocesses even after lifecycle ctx cancellation.
+			return nil
+		},
+	})
+	return pool
+}
+
+func provideChatResolver(log *slog.Logger, a *agentpkg.Agent, modelsService *models.Service, queries dbstore.Queries, chatService *conversation.Service, msgService *message.DBService, settingsService *settings.Service, accountService *accounts.Service, mediaService *media.Service, containerdHandler *handlers.ContainerdHandler, memoryRegistry *memprovider.Registry, channelStore *channel.Store, routeService *route.DBService, sessionService *sessionpkg.Service, eventHub *event.Hub, compactionService *compaction.Service, pipeline *pipelinepkg.Pipeline, rc *boot.RuntimeConfig, bgManager *background.Manager, toolApproval *toolapproval.Service, acpPool *acpagent.SessionPool) *flow.Resolver {
 	resolver := flow.NewResolver(log, modelsService, queries, chatService, msgService, settingsService, accountService, a, rc.TimezoneLocation, 120*time.Second)
 	resolver.SetMemoryRegistry(memoryRegistry)
 	resolver.SetSkillLoader(&skillLoaderAdapter{handler: containerdHandler})
@@ -381,6 +402,7 @@ func provideChatResolver(log *slog.Logger, a *agentpkg.Agent, modelsService *mod
 	resolver.SetPipeline(pipeline)
 	resolver.SetBackgroundManager(bgManager)
 	resolver.SetToolApprovalService(toolApproval)
+	resolver.SetACPSessionPool(acpPool)
 	if bgManager != nil {
 		bgManager.SetWakeFunc(func(botID, sessionID string) {
 			resolver.TriggerBackgroundNotification(context.Background(), botID, sessionID)
@@ -625,8 +647,8 @@ func provideMessageHandler(log *slog.Logger, chatService *conversation.Service, 
 	return h
 }
 
-func provideSessionHandler(log *slog.Logger, sessionService *sessionpkg.Service, botService *bots.Service, accountService *accounts.Service) *handlers.SessionHandler {
-	return handlers.NewSessionHandler(log, sessionService, botService, accountService)
+func provideSessionHandler(log *slog.Logger, sessionService *sessionpkg.Service, acpPool *acpagent.SessionPool, botService *bots.Service, accountService *accounts.Service) *handlers.SessionHandler {
+	return handlers.NewSessionHandler(log, sessionService, acpPool, botService, accountService)
 }
 
 func provideMediaService(log *slog.Logger, provider bridge.Provider, cfg config.Config) *media.Service {
@@ -640,8 +662,8 @@ func provideMediaService(log *slog.Logger, provider bridge.Provider, cfg config.
 	return media.NewService(log, storageProvider)
 }
 
-func provideUsersHandler(log *slog.Logger, accountService *accounts.Service, botService *bots.Service, routeService *route.DBService, channelStore *channel.Store, channelLifecycle *channel.Lifecycle, channelManager *channel.Manager, registry *channel.Registry) *handlers.UsersHandler {
-	return handlers.NewUsersHandler(log, accountService, botService, routeService, channelStore, channelLifecycle, channelManager, registry)
+func provideUsersHandler(log *slog.Logger, accountService *accounts.Service, botService *bots.Service, routeService *route.DBService, channelStore *channel.Store, channelLifecycle *channel.Lifecycle, channelManager *channel.Manager, registry *channel.Registry, workspaceManager *workspace.Manager) *handlers.UsersHandler {
+	return handlers.NewUsersHandler(log, accountService, botService, routeService, channelStore, channelLifecycle, channelManager, registry, workspaceManager)
 }
 
 func provideWebHandler(channelManager *channel.Manager, channelStore *channel.Store, chatService *conversation.Service, hub *local.RouteHub, botService *bots.Service, accountService *accounts.Service, resolver *flow.Resolver, mediaService *media.Service, audioService *audiopkg.Service, settingsService *settings.Service) *handlers.LocalChannelHandler {

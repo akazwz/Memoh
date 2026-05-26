@@ -352,3 +352,35 @@ func (q *Queries) UpdateSessionTitle(ctx context.Context, arg UpdateSessionTitle
 	)
 	return i, err
 }
+
+const updateSessionTypeAndMetadata = `-- name: UpdateSessionTypeAndMetadata :one
+UPDATE bot_sessions
+SET type = $1, metadata = $2, updated_at = now()
+WHERE id = $3 AND deleted_at IS NULL
+RETURNING id, bot_id, route_id, channel_type, type, title, metadata, parent_session_id, created_at, updated_at, deleted_at
+`
+
+type UpdateSessionTypeAndMetadataParams struct {
+	Type     string      `json:"type"`
+	Metadata []byte      `json:"metadata"`
+	ID       pgtype.UUID `json:"id"`
+}
+
+func (q *Queries) UpdateSessionTypeAndMetadata(ctx context.Context, arg UpdateSessionTypeAndMetadataParams) (BotSession, error) {
+	row := q.db.QueryRow(ctx, updateSessionTypeAndMetadata, arg.Type, arg.Metadata, arg.ID)
+	var i BotSession
+	err := row.Scan(
+		&i.ID,
+		&i.BotID,
+		&i.RouteID,
+		&i.ChannelType,
+		&i.Type,
+		&i.Title,
+		&i.Metadata,
+		&i.ParentSessionID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.DeletedAt,
+	)
+	return i, err
+}

@@ -1,0 +1,170 @@
+package handlers
+
+import (
+	"context"
+	"errors"
+	"net/http"
+	"strings"
+
+	"github.com/labstack/echo/v4"
+
+	"github.com/memohai/memoh/internal/accounts"
+	"github.com/memohai/memoh/internal/acpagent"
+	"github.com/memohai/memoh/internal/acpclient"
+	"github.com/memohai/memoh/internal/bots"
+	"github.com/memohai/memoh/internal/session"
+)
+
+type ACPRuntimeHandler struct {
+	pool           acpRuntimePool
+	sessionService *session.Service
+	botService     *bots.Service
+	accountService *accounts.Service
+}
+
+type acpRuntimePool interface {
+	RuntimeStatus(sessionID, agentID, projectPath string) acpagent.RuntimeStatus
+	Ensure(ctx context.Context, input acpagent.PromptInput) (acpagent.RuntimeStatus, error)
+	SetModel(ctx context.Context, input acpagent.PromptInput, modelID string) (acpagent.RuntimeStatus, error)
+}
+
+type acpRuntimeModelRequest struct {
+	ModelID string `json:"model_id"`
+}
+
+func NewACPRuntimeHandler(pool *acpagent.SessionPool, sessionService *session.Service, botService *bots.Service, accountService *accounts.Service) *ACPRuntimeHandler {
+	return newACPRuntimeHandler(pool, sessionService, botService, accountService)
+}
+
+func newACPRuntimeHandler(pool acpRuntimePool, sessionService *session.Service, botService *bots.Service, accountService *accounts.Service) *ACPRuntimeHandler {
+	return &ACPRuntimeHandler{
+		pool:           pool,
+		sessionService: sessionService,
+		botService:     botService,
+		accountService: accountService,
+	}
+}
+
+func (h *ACPRuntimeHandler) Register(e *echo.Echo) {
+	e.GET("/bots/:bot_id/sessions/:session_id/acp-runtime", h.GetRuntime)
+	e.POST("/bots/:bot_id/sessions/:session_id/acp-runtime", h.EnsureRuntime)
+	e.PATCH("/bots/:bot_id/sessions/:session_id/acp-runtime/model", h.SetModel)
+}
+
+// GetRuntime godoc
+// @Summary Get ACP session runtime state
+// @Tags acp
+// @Param bot_id path string true "Bot ID"
+// @Param session_id path string true "Session ID"
+// @Success 200 {object} acpagent.RuntimeStatus
+// @Failure 400 {object} ErrorResponse
+// @Failure 403 {object} ErrorResponse
+// @Failure 404 {object} ErrorResponse
+// @Router /bots/{bot_id}/sessions/{session_id}/acp-runtime [get].
+func (h *ACPRuntimeHandler) GetRuntime(c echo.Context) error {
+	_, sessionID, sess, err := h.authorizedACPSession(c)
+	if err != nil {
+		return err
+	}
+	status := h.pool.RuntimeStatus(sessionID, sessionMetadataString(sess.Metadata, "acp_agent_id"), sessionMetadataString(sess.Metadata, "project_path"))
+	return c.JSON(http.StatusOK, status)
+}
+
+// EnsureRuntime godoc
+// @Summary Ensure ACP session runtime is started
+// @Tags acp
+// @Param bot_id path string true "Bot ID"
+// @Param session_id path string true "Session ID"
+// @Success 200 {object} acpagent.RuntimeStatus
+// @Failure 400 {object} ErrorResponse
+// @Failure 403 {object} ErrorResponse
+// @Failure 404 {object} ErrorResponse
+// @Router /bots/{bot_id}/sessions/{session_id}/acp-runtime [post].
+func (h *ACPRuntimeHandler) EnsureRuntime(c echo.Context) error {
+	botID, sessionID, sess, err := h.authorizedACPSession(c)
+	if err != nil {
+		return err
+	}
+	status, err := h.pool.Ensure(c.Request().Context(), acpagent.PromptInput{
+		BotID:       botID,
+		SessionID:   sessionID,
+		AgentID:     sessionMetadataString(sess.Metadata, "acp_agent_id"),
+		ProjectPath: sessionMetadataString(sess.Metadata, "project_path"),
+	})
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+	}
+	return c.JSON(http.StatusOK, status)
+}
+
+// SetModel godoc
+// @Summary Set ACP session runtime model
+// @Tags acp
+// @Param bot_id path string true "Bot ID"
+// @Param session_id path string true "Session ID"
+// @Param body body acpRuntimeModelRequest true "ACP model selection"
+// @Success 200 {object} acpagent.RuntimeStatus
+// @Failure 400 {object} ErrorResponse
+// @Failure 403 {object} ErrorResponse
+// @Failure 404 {object} ErrorResponse
+// @Router /bots/{bot_id}/sessions/{session_id}/acp-runtime/model [patch].
+func (h *ACPRuntimeHandler) SetModel(c echo.Context) error {
+	botID, sessionID, sess, err := h.authorizedACPSession(c)
+	if err != nil {
+		return err
+	}
+	var req acpRuntimeModelRequest
+	if err := c.Bind(&req); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+	}
+	modelID := strings.TrimSpace(req.ModelID)
+	if modelID == "" {
+		return echo.NewHTTPError(http.StatusBadRequest, "model_id is required")
+	}
+	status, err := h.pool.SetModel(c.Request().Context(), acpagent.PromptInput{
+		BotID:       botID,
+		SessionID:   sessionID,
+		AgentID:     sessionMetadataString(sess.Metadata, "acp_agent_id"),
+		ProjectPath: sessionMetadataString(sess.Metadata, "project_path"),
+	}, modelID)
+	if err != nil {
+		switch {
+		case errors.Is(err, acpclient.ErrModelSelectionUnsupported),
+			errors.Is(err, acpclient.ErrModelUnavailable),
+			errors.Is(err, acpclient.ErrModelIDRequired):
+			return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+		case errors.Is(err, acpclient.ErrSessionNotInitialized),
+			errors.Is(err, acpclient.ErrSessionClosed):
+			return echo.NewHTTPError(http.StatusConflict, err.Error())
+		default:
+			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+		}
+	}
+	return c.JSON(http.StatusOK, status)
+}
+
+func (h *ACPRuntimeHandler) authorizedACPSession(c echo.Context) (string, string, session.Session, error) {
+	channelIdentityID, err := RequireChannelIdentityID(c)
+	if err != nil {
+		return "", "", session.Session{}, err
+	}
+	botID := strings.TrimSpace(c.Param("bot_id"))
+	if botID == "" {
+		return "", "", session.Session{}, echo.NewHTTPError(http.StatusBadRequest, "bot id is required")
+	}
+	if _, err := AuthorizeBotAccess(c.Request().Context(), h.botService, h.accountService, channelIdentityID, botID); err != nil {
+		return "", "", session.Session{}, err
+	}
+	sessionID := strings.TrimSpace(c.Param("session_id"))
+	if sessionID == "" {
+		return "", "", session.Session{}, echo.NewHTTPError(http.StatusBadRequest, "session id is required")
+	}
+	sess, err := h.sessionService.Get(c.Request().Context(), sessionID)
+	if err != nil || sess.BotID != botID {
+		return "", "", session.Session{}, echo.NewHTTPError(http.StatusNotFound, "session not found")
+	}
+	if sess.Type != session.TypeACPAgent {
+		return "", "", session.Session{}, echo.NewHTTPError(http.StatusBadRequest, "session is not an ACP agent session")
+	}
+	return botID, sessionID, sess, nil
+}

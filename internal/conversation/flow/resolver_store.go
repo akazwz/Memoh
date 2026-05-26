@@ -18,7 +18,10 @@ func (r *Resolver) storeRound(ctx context.Context, req conversation.ChatRequest,
 }
 
 type storeRoundOptions struct {
-	AllowPendingToolCalls bool
+	AllowPendingToolCalls   bool
+	SkipMemory              bool
+	AllowEmptyAssistantText bool
+	MessageMetadataByIndex  map[int]map[string]any
 }
 
 func (r *Resolver) storeRoundWithOptions(ctx context.Context, req conversation.ChatRequest, messages []conversation.ModelMessage, modelID string, opts storeRoundOptions) error {
@@ -45,7 +48,7 @@ func (r *Resolver) storeRoundWithOptions(ctx context.Context, req conversation.C
 	// to also produce empty responses.
 	filtered := make([]conversation.ModelMessage, 0, len(fullRound))
 	for _, m := range fullRound {
-		if m.Role == "assistant" && isEmptyAssistantMessage(m) {
+		if m.Role == "assistant" && isEmptyAssistantMessage(m) && !opts.AllowEmptyAssistantText {
 			r.logger.Warn("skipping empty assistant message in storeRound",
 				slog.String("bot_id", req.BotID),
 			)
@@ -58,8 +61,10 @@ func (r *Resolver) storeRoundWithOptions(ctx context.Context, req conversation.C
 		return nil
 	}
 
-	r.storeMessages(ctx, req, filtered, modelID)
-	go r.storeMemory(context.WithoutCancel(ctx), req, filtered)
+	r.storeMessages(ctx, req, filtered, modelID, opts)
+	if !opts.SkipMemory {
+		go r.storeMemory(context.WithoutCancel(ctx), req, filtered)
+	}
 
 	return nil
 }
@@ -100,7 +105,7 @@ func (r *Resolver) StoreRound(ctx context.Context, botID, sessionID, channelIden
 	return r.storeRound(ctx, req, modelMessages, modelID)
 }
 
-func (r *Resolver) storeMessages(ctx context.Context, req conversation.ChatRequest, messages []conversation.ModelMessage, modelID string) {
+func (r *Resolver) storeMessages(ctx context.Context, req conversation.ChatRequest, messages []conversation.ModelMessage, modelID string, opts storeRoundOptions) {
 	if r.messageService == nil {
 		return
 	}
@@ -199,6 +204,9 @@ func (r *Resolver) storeMessages(ctx context.Context, req conversation.ChatReque
 		}
 		if i == lastAssistantIdx && len(outboundAssets) > 0 {
 			assets = append(assets, outboundAssets...)
+		}
+		if extraMeta := opts.MessageMetadataByIndex[i]; len(extraMeta) > 0 {
+			persistMeta = mergeMetadata(persistMeta, extraMeta)
 		}
 		if _, err := r.messageService.Persist(ctx, messagepkg.PersistInput{
 			BotID:                   req.BotID,

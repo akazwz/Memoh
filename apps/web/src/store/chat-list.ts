@@ -8,6 +8,9 @@ import { shouldRefreshFromMessageCreated, upsertById } from './chat-list.utils'
 import {
   createSession,
   deleteSession as requestDeleteSession,
+  ensureACPRuntime as requestEnsureACPRuntime,
+  setACPRuntimeModel as requestSetACPRuntimeModel,
+  updateSessionAgent as requestUpdateSessionAgent,
   updateSessionTitle as requestUpdateSessionTitle,
   fetchSessions,
   type Bot,
@@ -37,6 +40,8 @@ import {
   connectWebSocket,
   locateMessageUI,
 } from '@/composables/api/useChat'
+import { ACP_NO_PROJECT_MODE, createACPNoProjectPath } from '@/utils/acp'
+import type { AcpagentRuntimeStatus } from '@memohai/sdk'
 
 export type TextBlock = UITextMessage
 export type ThinkingBlock = UIReasoningMessage
@@ -135,6 +140,14 @@ export interface SendMessageResult {
   restoreAttachments?: ChatAttachment[]
 }
 
+export interface ACPAgentSessionInput {
+  agentId: string
+  projectPath?: string
+  projectMode?: string
+  title?: string
+  startRuntime?: boolean
+}
+
 interface StartupSendFailure {
   id: string
   botId: string
@@ -215,6 +228,9 @@ export const useChatStore = defineStore('chat', () => {
   const sessionMessageStates = new Map<string, SessionMessageState>()
   const ephemeralAssistantErrors = new Map<string, EphemeralAssistantError[]>()
   const messageEventsStream = useRetryingStream()
+  const acpRuntimeStatuses = ref<Record<string, AcpagentRuntimeStatus | undefined>>({})
+  const acpRuntimePending = ref<Record<string, boolean>>({})
+  const acpRuntimeRequests = new Map<string, Promise<AcpagentRuntimeStatus>>()
 
   const activeSession = computed(() =>
     sessions.value.find((s) => s.id === sessionId.value) ?? null,
@@ -229,6 +245,45 @@ export const useChatStore = defineStore('chat', () => {
     if (ct && ct !== 'local') return true
     return false
   })
+
+  function acpRuntimeKey(botId: string, targetSessionId: string) {
+    const bid = botId.trim()
+    const sid = targetSessionId.trim()
+    return bid && sid ? `${bid}:${sid}` : ''
+  }
+
+  function setACPRuntimeStatus(botId: string, targetSessionId: string, runtime: AcpagentRuntimeStatus | undefined) {
+    const key = acpRuntimeKey(botId, targetSessionId)
+    if (!key) return
+    if (!runtime) {
+      const next = { ...acpRuntimeStatuses.value }
+      delete next[key]
+      acpRuntimeStatuses.value = next
+      return
+    }
+    acpRuntimeStatuses.value = {
+      ...acpRuntimeStatuses.value,
+      [key]: runtime,
+    }
+  }
+
+  function setACPRuntimePending(botId: string, targetSessionId: string, pending: boolean) {
+    const key = acpRuntimeKey(botId, targetSessionId)
+    if (!key) return
+    const next = { ...acpRuntimePending.value }
+    if (pending) {
+      next[key] = true
+    } else {
+      delete next[key]
+    }
+    acpRuntimePending.value = next
+  }
+
+  function clearACPRuntimeStatus(botId: string, targetSessionId: string) {
+    setACPRuntimeStatus(botId, targetSessionId, undefined)
+    setACPRuntimePending(botId, targetSessionId, false)
+    acpRuntimeRequests.delete(acpRuntimeKey(botId, targetSessionId))
+  }
 
   watch(currentBotId, (newId) => {
     if (newId) {
@@ -1425,6 +1480,107 @@ export const useChatStore = defineStore('chat', () => {
     sessions.value.unshift(target)
   }
 
+  function acpSessionMetadata(input: ACPAgentSessionInput): Record<string, unknown> {
+    const agentId = input.agentId.trim()
+    const projectMode = input.projectMode?.trim() || ACP_NO_PROJECT_MODE
+    const projectPath = input.projectPath?.trim() || createACPNoProjectPath()
+    return {
+      acp_agent_id: agentId,
+      project_path: projectPath,
+      acp_project_mode: projectMode,
+    }
+  }
+
+  function upsertSession(updated: SessionSummary) {
+    sessions.value = [updated, ...sessions.value.filter(session => session.id !== updated.id)]
+  }
+
+  async function createACPSession(input: ACPAgentSessionInput): Promise<{ session: SessionSummary; runtime?: AcpagentRuntimeStatus }> {
+    const bid = currentBotId.value ?? await ensureBot()
+    if (!bid) throw new Error('Bot not ready')
+    const metadata = acpSessionMetadata(input)
+    const created = await createSession(bid, {
+      title: input.title ?? '',
+      type: 'acp_agent',
+      metadata,
+    })
+    upsertSession(created)
+    sessionId.value = created.id
+    replaceMessages([])
+    hasMoreOlder.value = false
+    const runtime = input.startRuntime ? await ensureACPRuntime(created.id) : undefined
+    return { session: created, runtime }
+  }
+
+  async function updateCurrentSessionAgent(input: ACPAgentSessionInput): Promise<{ session: SessionSummary; runtime?: AcpagentRuntimeStatus }> {
+    if (!sessionId.value) return createACPSession(input)
+    const bid = currentBotId.value ?? ''
+    const sid = sessionId.value
+    if (!bid) throw new Error('Bot not selected')
+    const metadata = acpSessionMetadata(input)
+    const updated = await requestUpdateSessionAgent(bid, sid, 'acp_agent', metadata)
+    const index = sessions.value.findIndex(session => session.id === updated.id)
+    if (index >= 0) {
+      sessions.value[index] = updated
+    } else {
+      upsertSession(updated)
+    }
+    clearACPRuntimeStatus(bid, sid)
+    const runtime = input.startRuntime ? await ensureACPRuntime(sid) : undefined
+    return { session: updated, runtime }
+  }
+
+  async function updateCurrentSessionToMemoh(): Promise<SessionSummary | null> {
+    const bid = currentBotId.value ?? ''
+    const sid = sessionId.value ?? ''
+    if (!bid || !sid) return null
+    const updated = await requestUpdateSessionAgent(bid, sid, 'chat', {})
+    const index = sessions.value.findIndex(session => session.id === updated.id)
+    if (index >= 0) {
+      sessions.value[index] = updated
+    } else {
+      upsertSession(updated)
+    }
+    clearACPRuntimeStatus(bid, sid)
+    return updated
+  }
+
+  async function ensureACPRuntime(sessionID?: string): Promise<AcpagentRuntimeStatus> {
+    const bid = currentBotId.value ?? ''
+    const sid = sessionID?.trim() || sessionId.value || ''
+    if (!bid || !sid) throw new Error('ACP session is not selected')
+    const key = acpRuntimeKey(bid, sid)
+    const existing = acpRuntimeRequests.get(key)
+    if (existing) return existing
+
+    setACPRuntimePending(bid, sid, true)
+    const request = requestEnsureACPRuntime(bid, sid)
+      .then((runtime) => {
+        if (acpRuntimeRequests.get(key) === request) {
+          setACPRuntimeStatus(bid, sid, runtime)
+        }
+        return runtime
+      })
+      .finally(() => {
+        if (acpRuntimeRequests.get(key) === request) {
+          acpRuntimeRequests.delete(key)
+          setACPRuntimePending(bid, sid, false)
+        }
+      })
+    acpRuntimeRequests.set(key, request)
+    return request
+  }
+
+  async function setACPRuntimeModel(modelID: string, sessionID?: string): Promise<AcpagentRuntimeStatus> {
+    const bid = currentBotId.value ?? ''
+    const sid = sessionID?.trim() || sessionId.value || ''
+    const mid = modelID.trim()
+    if (!bid || !sid || !mid) throw new Error('ACP model is not selected')
+    const runtime = await requestSetACPRuntimeModel(bid, sid, mid)
+    setACPRuntimeStatus(bid, sid, runtime)
+    return runtime
+  }
+
   async function ensureActiveSession() {
     if (sessionId.value) return
     const bid = currentBotId.value ?? await ensureBot()
@@ -1520,6 +1676,7 @@ export const useChatStore = defineStore('chat', () => {
       const bid = currentBotId.value ?? ''
       if (!bid) throw new Error('Bot not selected')
       await requestDeleteSession(bid, delId)
+      clearACPRuntimeStatus(bid, delId)
       clearCachedMessages(bid, delId)
       const remaining = sessions.value.filter(session => session.id !== delId)
       sessions.value = remaining
@@ -1685,6 +1842,8 @@ export const useChatStore = defineStore('chat', () => {
     streaming,
     streamingSessionId,
     sessions,
+    acpRuntimeStatuses,
+    acpRuntimePending,
     chats,
     chatId,
     sessionId,
@@ -1706,6 +1865,12 @@ export const useChatStore = defineStore('chat', () => {
     selectBot,
     selectSession,
     selectChat: selectSession,
+    createACPSession,
+    updateCurrentSessionAgent,
+    updateCurrentSessionToMemoh,
+    acpRuntimeKey,
+    ensureACPRuntime,
+    setACPRuntimeModel,
     createNewSession,
     createNewChat: createNewSession,
     removeSession,

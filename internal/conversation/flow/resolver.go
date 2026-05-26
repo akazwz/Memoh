@@ -82,6 +82,7 @@ type Resolver struct {
 	accountService    *accounts.Service
 	sessionService    SessionService
 	routeService      RouteService
+	acpPool           acpPrompter
 	compactionService *compaction.Service
 	eventPublisher    messageevent.Publisher
 	skillLoader       SkillLoader

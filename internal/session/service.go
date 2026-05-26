@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/memohai/memoh/internal/acpprofile"
 	dbpkg "github.com/memohai/memoh/internal/db"
 	"github.com/memohai/memoh/internal/db/postgres/sqlc"
 	dbstore "github.com/memohai/memoh/internal/db/store"
@@ -37,7 +39,24 @@ const (
 	TypeSchedule  = "schedule"
 	TypeSubagent  = "subagent"
 	TypeDiscuss   = "discuss"
+	TypeACPAgent  = "acp_agent"
 )
+
+var (
+	ErrACPAgentIDRequired    = errors.New("acp_agent_id is required for acp_agent sessions")
+	ErrACPProjectPathMissing = errors.New("project_path is required for acp_agent sessions")
+	ErrACPUnknownAgent       = errors.New("unknown ACP agent")
+	ErrACPAgentNotEnabled    = errors.New("ACP agent is not enabled for this bot")
+)
+
+func IsKnownType(typ string) bool {
+	switch strings.TrimSpace(typ) {
+	case TypeChat, TypeHeartbeat, TypeSchedule, TypeSubagent, TypeDiscuss, TypeACPAgent:
+		return true
+	default:
+		return false
+	}
+}
 
 // CreateInput holds input for creating a new session.
 type CreateInput struct {
@@ -96,6 +115,17 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (Session, error
 	if sessionType == "" {
 		sessionType = TypeChat
 	}
+	if !IsKnownType(sessionType) {
+		return Session{}, fmt.Errorf("unknown session type %q", sessionType)
+	}
+	if sessionType == TypeACPAgent {
+		if err := validateACPMetadata(meta); err != nil {
+			return Session{}, err
+		}
+		if err := s.validateACPCreatePolicy(ctx, pgBotID, meta); err != nil {
+			return Session{}, err
+		}
+	}
 
 	pgParentSessionID, err := parseOptionalUUID(input.ParentSessionID)
 	if err != nil {
@@ -110,6 +140,50 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (Session, error
 		Title:           input.Title,
 		Metadata:        metaBytes,
 		ParentSessionID: pgParentSessionID,
+	})
+	if err != nil {
+		return Session{}, err
+	}
+	return toSession(row), nil
+}
+
+// UpdateTypeAndMetadata updates a session's runtime type and metadata in one
+// statement so callers don't expose a half-updated agent selection.
+func (s *Service) UpdateTypeAndMetadata(ctx context.Context, sessionID, typ string, metadata map[string]any) (Session, error) {
+	pgID, err := dbpkg.ParseUUID(sessionID)
+	if err != nil {
+		return Session{}, fmt.Errorf("invalid session id: %w", err)
+	}
+	sessionType := strings.TrimSpace(typ)
+	if sessionType == "" {
+		sessionType = TypeChat
+	}
+	if !IsKnownType(sessionType) {
+		return Session{}, fmt.Errorf("unknown session type %q", sessionType)
+	}
+	if metadata == nil {
+		metadata = map[string]any{}
+	}
+	existing, err := s.queries.GetSessionByID(ctx, pgID)
+	if err != nil {
+		return Session{}, err
+	}
+	if sessionType == TypeACPAgent {
+		if err := validateACPMetadata(metadata); err != nil {
+			return Session{}, err
+		}
+		if err := s.validateACPCreatePolicy(ctx, existing.BotID, metadata); err != nil {
+			return Session{}, err
+		}
+	}
+	metaBytes, err := json.Marshal(metadata)
+	if err != nil {
+		return Session{}, fmt.Errorf("marshal metadata: %w", err)
+	}
+	row, err := s.queries.UpdateSessionTypeAndMetadata(ctx, sqlc.UpdateSessionTypeAndMetadataParams{
+		ID:       pgID,
+		Type:     sessionType,
+		Metadata: metaBytes,
 	})
 	if err != nil {
 		return Session{}, err
@@ -225,6 +299,14 @@ func (s *Service) SoftDelete(ctx context.Context, sessionID string) error {
 	return s.queries.SoftDeleteSession(ctx, pgID)
 }
 
+func (s *Service) MessageCount(ctx context.Context, sessionID string) (int64, error) {
+	pgID, err := dbpkg.ParseUUID(sessionID)
+	if err != nil {
+		return 0, fmt.Errorf("invalid session id: %w", err)
+	}
+	return s.queries.CountMessagesBySession(ctx, pgID)
+}
+
 // Touch updates a session's updated_at timestamp.
 func (s *Service) Touch(ctx context.Context, sessionID string) error {
 	pgID, err := dbpkg.ParseUUID(sessionID)
@@ -312,6 +394,43 @@ func toSession(row sqlc.BotSession) Session {
 		CreatedAt:       row.CreatedAt.Time,
 		UpdatedAt:       row.UpdatedAt.Time,
 	}
+}
+
+func validateACPMetadata(meta map[string]any) error {
+	if strings.TrimSpace(metadataString(meta, "acp_agent_id")) == "" && strings.TrimSpace(metadataString(meta, "agent_id")) == "" {
+		return ErrACPAgentIDRequired
+	}
+	if strings.TrimSpace(metadataString(meta, "project_path")) == "" {
+		return ErrACPProjectPathMissing
+	}
+	return nil
+}
+
+func (s *Service) validateACPCreatePolicy(ctx context.Context, botID pgtype.UUID, meta map[string]any) error {
+	agentID := metadataString(meta, "acp_agent_id")
+	if agentID == "" {
+		agentID = metadataString(meta, "agent_id")
+	}
+	if _, ok := acpprofile.Lookup(agentID); !ok {
+		return fmt.Errorf("%w: %s", ErrACPUnknownAgent, agentID)
+	}
+	bot, err := s.queries.GetBotByID(ctx, botID)
+	if err != nil {
+		return err
+	}
+	botMeta := parseJSONMap(bot.Metadata)
+	if !acpprofile.MetadataAgentEnabled(botMeta, agentID) {
+		return fmt.Errorf("%w: %s", ErrACPAgentNotEnabled, agentID)
+	}
+	return nil
+}
+
+func metadataString(meta map[string]any, key string) string {
+	if meta == nil {
+		return ""
+	}
+	value, _ := meta[key].(string)
+	return strings.TrimSpace(value)
 }
 
 func parseOptionalUUID(id string) (pgtype.UUID, error) {

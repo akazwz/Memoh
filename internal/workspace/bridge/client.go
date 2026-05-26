@@ -153,8 +153,17 @@ func (c *Client) Exec(ctx context.Context, command, workDir string, timeout int3
 	return c.ExecWithStdin(ctx, command, workDir, timeout, nil)
 }
 
+// ExecWithEnv runs a command with additional environment variables.
+func (c *Client) ExecWithEnv(ctx context.Context, command, workDir string, timeout int32, env []string) (*ExecResult, error) {
+	return c.exec(ctx, command, workDir, timeout, nil, env)
+}
+
 // ExecWithStdin runs a command with optional stdin data.
 func (c *Client) ExecWithStdin(ctx context.Context, command, workDir string, timeout int32, stdinData []byte) (*ExecResult, error) {
+	return c.exec(ctx, command, workDir, timeout, stdinData, nil)
+}
+
+func (c *Client) exec(ctx context.Context, command, workDir string, timeout int32, stdinData []byte, env []string) (*ExecResult, error) {
 	stream, err := c.svc.Exec(ctx)
 	if err != nil {
 		return nil, mapError(err)
@@ -164,6 +173,7 @@ func (c *Client) ExecWithStdin(ctx context.Context, command, workDir string, tim
 	err = stream.Send(&pb.ExecInput{
 		Command:        command,
 		WorkDir:        workDir,
+		Env:            env,
 		TimeoutSeconds: timeout,
 		StdinData:      stdinData,
 	})
@@ -202,8 +212,15 @@ func (c *Client) ExecWithStdin(ctx context.Context, command, workDir string, tim
 // ExecStream returns a bidirectional stream for interactive exec.
 // Caller can send stdin data and receive stdout/stderr in real-time.
 func (c *Client) ExecStream(ctx context.Context, command, workDir string, timeout int32) (*ExecStream, error) {
-	stream, err := c.svc.Exec(ctx)
+	return c.ExecStreamWithEnv(ctx, command, workDir, timeout, nil)
+}
+
+// ExecStreamWithEnv returns a bidirectional exec stream with additional env.
+func (c *Client) ExecStreamWithEnv(ctx context.Context, command, workDir string, timeout int32, env []string) (*ExecStream, error) {
+	streamCtx, cancel := context.WithCancel(ctx)
+	stream, err := c.svc.Exec(streamCtx)
 	if err != nil {
+		cancel()
 		return nil, mapError(err)
 	}
 
@@ -211,18 +228,21 @@ func (c *Client) ExecStream(ctx context.Context, command, workDir string, timeou
 	err = stream.Send(&pb.ExecInput{
 		Command:        command,
 		WorkDir:        workDir,
+		Env:            env,
 		TimeoutSeconds: timeout,
 	})
 	if err != nil {
+		cancel()
 		return nil, err
 	}
 
-	return &ExecStream{stream: stream}, nil
+	return &ExecStream{stream: stream, cancel: cancel}, nil
 }
 
 // ExecStream wraps a bidirectional exec stream.
 type ExecStream struct {
 	stream pb.ContainerService_ExecClient
+	cancel context.CancelFunc
 }
 
 // SendStdin sends data to the process stdin.
@@ -246,14 +266,20 @@ func (s *ExecStream) Resize(cols, rows uint32) error {
 
 // Close closes the stream.
 func (s *ExecStream) Close() error {
-	return s.stream.CloseSend()
+	err := s.stream.CloseSend()
+	if s.cancel != nil {
+		s.cancel()
+	}
+	return err
 }
 
 // ExecStreamPTY opens a bidirectional PTY exec stream.
 // The command runs inside a pseudo-terminal with the given initial size.
 func (c *Client) ExecStreamPTY(ctx context.Context, command, workDir string, cols, rows uint32) (*ExecStream, error) {
-	stream, err := c.svc.Exec(ctx)
+	streamCtx, cancel := context.WithCancel(ctx)
+	stream, err := c.svc.Exec(streamCtx)
 	if err != nil {
+		cancel()
 		return nil, mapError(err)
 	}
 
@@ -264,10 +290,11 @@ func (c *Client) ExecStreamPTY(ctx context.Context, command, workDir string, col
 		Resize:  &pb.TerminalResize{Cols: cols, Rows: rows},
 	})
 	if err != nil {
+		cancel()
 		return nil, err
 	}
 
-	return &ExecStream{stream: stream}, nil
+	return &ExecStream{stream: stream, cancel: cancel}, nil
 }
 
 // ReadRaw streams raw file bytes. Caller must consume the returned reader.

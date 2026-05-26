@@ -4585,6 +4585,25 @@ func (q *Queries) UpdateSessionMetadata(ctx context.Context, arg pgsqlc.UpdateSe
 	return result, nil
 }
 
+func (q *Queries) UpdateSessionTypeAndMetadata(ctx context.Context, arg pgsqlc.UpdateSessionTypeAndMetadataParams) (pgsqlc.BotSession, error) {
+	if q == nil || q.store == nil || q.store.queries == nil {
+		return pgsqlc.BotSession{}, errSQLiteQueriesNotConfigured
+	}
+	var sqliteArg sqlitesqlc.UpdateSessionTypeAndMetadataParams
+	if err := convertValue(arg, &sqliteArg); err != nil {
+		return pgsqlc.BotSession{}, err
+	}
+	out, err := q.store.queries.UpdateSessionTypeAndMetadata(ctx, sqliteArg)
+	if err != nil {
+		return pgsqlc.BotSession{}, mapQueryErr(err)
+	}
+	var result pgsqlc.BotSession
+	if err := convertValue(out, &result); err != nil {
+		return pgsqlc.BotSession{}, err
+	}
+	return result, nil
+}
+
 func (q *Queries) UpdateSessionTitle(ctx context.Context, arg pgsqlc.UpdateSessionTitleParams) (pgsqlc.BotSession, error) {
 	if q == nil || q.store == nil || q.store.queries == nil {
 		return pgsqlc.BotSession{}, errSQLiteQueriesNotConfigured

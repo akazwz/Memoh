@@ -232,7 +232,7 @@ import {
 import {
   SquarePen, LoaderCircle, Check, Search, X, LayoutDashboard, Settings, MessageSquare,
   BrainCircuit, ShieldAlert, HeartPulse, Database, Mail, Link, Clock, Server, FileBox, Zap,
-  Monitor, Globe
+  Monitor, Globe, Bot as BotIcon
 } from 'lucide-vue-next'
 import { computed, ref, watch, onMounted, toValue, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
@@ -267,6 +267,7 @@ import BotOverview from './components/bot-overview.vue'
 import BotSchedule from './components/bot-schedule.vue'
 import BotContainer from './components/bot-container.vue'
 import BotAccess from './components/bot-access.vue'
+import BotAcp from './components/bot-acp.vue'
 import AvatarEditDialog from './components/avatar-edit-dialog.vue'
 import { resolveApiErrorMessage } from '@/utils/api-error'
 import { useAvatarInitials } from '@/composables/useAvatarInitials'
@@ -312,6 +313,7 @@ const tabList = computed(() => {
     { value: 'channels', label: 'bots.tabs.channels', icon: MessageSquare, component: BotChannels, params: { 'bot-id': bot_id } },
     { value: 'access', label: 'bots.tabs.access', icon: ShieldAlert, component: BotAccess, params: { 'bot-id': bot_id, 'bot-type': bot.value?.type } },
     { value: 'tool-approval', label: 'bots.tabs.toolApproval', icon: Zap, component: BotToolApproval, params: { 'bot-id': bot_id } },
+    { value: 'acp', label: 'bots.tabs.acp', icon: BotIcon, component: BotAcp, params: { 'bot-id': bot_id, 'is-local-workspace': isLocalWorkspace.value } },
     { value: 'email', label: 'bots.tabs.email', icon: Mail, component: BotEmail, params: { 'bot-id': bot_id } },
     { value: 'mcp', label: 'bots.tabs.mcp', icon: Link, component: BotMcp, params: { 'bot-id': bot_id } },
     { value: 'heartbeat', label: 'bots.tabs.heartbeat', icon: HeartPulse, component: BotHeartbeat, params: { 'bot-id': bot_id } },
@@ -340,6 +342,7 @@ const searchIndex = computed(() => {
     { tab: 'channels', key: 'bots.channels.configured', keywords: ['telegram', 'discord', 'wechat', 'slack'] },
     { tab: 'access', key: 'bots.access.title', keywords: ['permissions', 'acl', 'rules', 'allow', 'deny'] },
     { tab: 'tool-approval', key: 'bots.toolApproval.title', keywords: ['mcp', 'tools', 'review', 'bypass', 'approval'] },
+    { tab: 'acp', key: 'bots.tabs.acp', keywords: ['codex', 'coding agent', 'acp'] },
     { tab: 'email', key: 'bots.email.title', keywords: ['smtp', 'imap', 'mailbox', 'bindings'] },
     { tab: 'mcp', key: 'bots.tabs.mcp', keywords: ['servers', 'connect', 'plugins'] },
     { tab: 'heartbeat', key: 'bots.heartbeat.title', keywords: ['cron', 'ping', 'alive'] },
@@ -366,7 +369,7 @@ const searchResults = computed(() => {
 
 const groupedTabs = computed(() => {
   const coreKeys = ['overview', 'general', 'channels']
-  const capabilityKeys = ['skills', 'tool-approval', 'mcp', 'memory']
+  const capabilityKeys = ['skills', 'tool-approval', 'acp', 'mcp', 'memory']
   const runtimeKeys = ['desktop', 'container', 'network', 'schedule', 'compaction', 'heartbeat']
   const securityKeys = ['access', 'email']
 

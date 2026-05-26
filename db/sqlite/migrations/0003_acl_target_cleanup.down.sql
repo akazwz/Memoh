@@ -3,6 +3,8 @@
 
 PRAGMA foreign_keys = OFF;
 
+BEGIN;
+
 DROP INDEX IF EXISTS idx_bot_acl_rules_unique_target;
 
 ALTER TABLE bot_acl_rules RENAME TO bot_acl_rules_old;
@@ -80,5 +82,7 @@ DROP TABLE bot_acl_rules_old;
 CREATE INDEX IF NOT EXISTS idx_bot_acl_rules_bot_id ON bot_acl_rules(bot_id);
 CREATE INDEX IF NOT EXISTS idx_bot_acl_rules_channel_identity_id ON bot_acl_rules(channel_identity_id);
 CREATE INDEX IF NOT EXISTS idx_bot_acl_rules_subject_channel_type ON bot_acl_rules(subject_channel_type);
+
+COMMIT;
 
 PRAGMA foreign_keys = ON;

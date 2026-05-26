@@ -247,8 +247,10 @@ func ConvertMessagesToUITurns(messages []messagepkg.Message) []UITurn {
 			text := extractPersistedMessageText(raw, modelMessage)
 			reasonings := extractPersistedReasoning(modelMessage)
 			attachments := uiAttachmentsFromMessageAssets(raw)
+			acpReplay := uiACPMessagesFromMetadata(raw.Metadata)
+			acpBlocks := acpReplay.Messages
 
-			if len(toolCalls) > 0 {
+			if len(toolCalls) > 0 || len(acpBlocks) > 0 {
 				if pending == nil {
 					pending = newPendingAssistantTurn(raw)
 				}
@@ -259,6 +261,27 @@ func ConvertMessagesToUITurns(messages []messagepkg.Message) []UITurn {
 						Type:    UIMessageReasoning,
 						Content: reasoning,
 					})
+				}
+
+				if acpReplay.FromEvents && len(toolCalls) == 0 {
+					for _, block := range acpBlocks {
+						appendPendingAssistantMessage(pending, block)
+					}
+					if text != "" && !acpReplay.ContainsText {
+						appendPendingAssistantMessage(pending, UIMessage{
+							ID:      pending.NextID,
+							Type:    UIMessageText,
+							Content: text,
+						})
+					}
+					if len(attachments) > 0 {
+						appendPendingAssistantMessage(pending, UIMessage{
+							ID:          pending.NextID,
+							Type:        UIMessageAttachments,
+							Attachments: attachments,
+						})
+					}
+					continue
 				}
 
 				if text != "" {
@@ -291,6 +314,9 @@ func ConvertMessagesToUITurns(messages []messagepkg.Message) []UITurn {
 						Type:        UIMessageAttachments,
 						Attachments: attachments,
 					})
+				}
+				for _, block := range acpBlocks {
+					appendPendingAssistantMessage(pending, block)
 				}
 				continue
 			}
@@ -429,6 +455,242 @@ func buildStandaloneAssistantMessages(text string, reasonings []string, attachme
 		})
 	}
 	return messages
+}
+
+type uiACPReplay struct {
+	Messages     []UIMessage
+	ContainsText bool
+	FromEvents   bool
+}
+
+func uiACPMessagesFromMetadata(metadata map[string]any) uiACPReplay {
+	if metadata == nil {
+		return uiACPReplay{}
+	}
+
+	if replay := uiACPMessagesFromEvents(metadata["acp_events"]); replay.FromEvents {
+		if len(replay.Messages) > 0 {
+			return replay
+		}
+	}
+
+	actions := acpMetadataSlice(metadata["acp_actions"])
+	plan := acpMetadataSlice(metadata["acp_plan"])
+	if len(actions) == 0 && len(plan) == 0 {
+		return uiACPReplay{}
+	}
+
+	messages := make([]UIMessage, 0, len(actions)+1)
+	for idx, rawAction := range actions {
+		action, ok := acpMetadataMap(rawAction)
+		if !ok {
+			continue
+		}
+		id := firstNonEmptyString(
+			stringFromMap(action, "id"),
+			stringFromMap(action, "tool_call_id"),
+			stringFromMap(action, "toolCallId"),
+		)
+		if id == "" {
+			id = "acp_action_" + strconv.Itoa(idx+1)
+		}
+		messages = append(messages, uiACPActionMessage(id, action))
+	}
+
+	if len(plan) > 0 {
+		messages = append(messages, uiACPPlanMessage(plan))
+	}
+	return uiACPReplay{Messages: messages, FromEvents: false}
+}
+
+func uiACPMessagesFromEvents(value any) uiACPReplay {
+	events := acpMetadataSlice(value)
+	if len(events) == 0 {
+		return uiACPReplay{}
+	}
+
+	replay := uiACPReplay{FromEvents: true}
+	toolIndexes := map[string]int{}
+	planIndex := -1
+	var text strings.Builder
+	flushText := func() {
+		content := text.String()
+		text.Reset()
+		if strings.TrimSpace(content) == "" {
+			return
+		}
+		replay.Messages = append(replay.Messages, UIMessage{
+			Type:    UIMessageText,
+			Content: strings.TrimSpace(content),
+		})
+		replay.ContainsText = true
+	}
+
+	for _, rawEvent := range events {
+		event, ok := acpMetadataMap(rawEvent)
+		if !ok {
+			continue
+		}
+		switch stringFromMap(event, "type") {
+		case "text_delta":
+			if delta, ok := event["delta"].(string); ok {
+				text.WriteString(delta)
+			}
+		case "tool_start", "tool_update":
+			tool, ok := acpMetadataMap(event["tool"])
+			if !ok {
+				continue
+			}
+			id := firstNonEmptyString(
+				stringFromMap(tool, "id"),
+				stringFromMap(tool, "tool_call_id"),
+				stringFromMap(tool, "toolCallId"),
+			)
+			if id == "" {
+				continue
+			}
+			block := uiACPActionMessage(id, tool)
+			if idx, ok := toolIndexes[id]; ok && idx >= 0 && idx < len(replay.Messages) {
+				replay.Messages[idx] = mergeACPActionMessage(replay.Messages[idx], block)
+				continue
+			}
+			flushText()
+			replay.Messages = append(replay.Messages, block)
+			toolIndexes[id] = len(replay.Messages) - 1
+		case "plan":
+			plan := acpMetadataSlice(event["plan"])
+			if len(plan) == 0 {
+				continue
+			}
+			block := uiACPPlanMessage(plan)
+			if planIndex >= 0 && planIndex < len(replay.Messages) {
+				replay.Messages[planIndex] = block
+				continue
+			}
+			flushText()
+			replay.Messages = append(replay.Messages, block)
+			planIndex = len(replay.Messages) - 1
+		}
+	}
+	flushText()
+	return replay
+}
+
+func uiACPActionMessage(id string, action map[string]any) UIMessage {
+	title := stringFromMap(action, "title")
+	kind := stringFromMap(action, "kind")
+	status := stringFromMap(action, "status")
+	input := map[string]any{}
+	if title != "" {
+		input["title"] = title
+	}
+	if kind != "" {
+		input["kind"] = kind
+	}
+	output := map[string]any{}
+	if title != "" {
+		output["title"] = title
+	}
+	if kind != "" {
+		output["kind"] = kind
+	}
+	if status != "" {
+		output["status"] = status
+	}
+	return UIMessage{
+		Type:       UIMessageTool,
+		Name:       "acp_action",
+		Input:      input,
+		Output:     output,
+		ToolCallID: id,
+		Running:    uiBoolPtr(false),
+	}
+}
+
+func mergeACPActionMessage(current, next UIMessage) UIMessage {
+	if current.Input == nil {
+		current.Input = next.Input
+	}
+	if next.Output != nil {
+		current.Output = next.Output
+	}
+	if current.ToolCallID == "" {
+		current.ToolCallID = next.ToolCallID
+	}
+	current.Running = uiBoolPtr(false)
+	return current
+}
+
+func uiACPPlanMessage(plan []any) UIMessage {
+	return UIMessage{
+		Type:       UIMessageTool,
+		Name:       "acp_plan",
+		Output:     map[string]any{"plan": plan},
+		ToolCallID: "acp_plan",
+		Running:    uiBoolPtr(false),
+	}
+}
+
+func acpMetadataSlice(value any) []any {
+	switch typed := value.(type) {
+	case nil:
+		return nil
+	case []any:
+		return typed
+	case []map[string]any:
+		items := make([]any, 0, len(typed))
+		for _, item := range typed {
+			items = append(items, item)
+		}
+		return items
+	case json.RawMessage:
+		var decoded []any
+		if err := json.Unmarshal(typed, &decoded); err == nil {
+			return decoded
+		}
+	case string:
+		var decoded []any
+		if err := json.Unmarshal([]byte(typed), &decoded); err == nil {
+			return decoded
+		}
+	}
+
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return nil
+	}
+	var decoded []any
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		return nil
+	}
+	return decoded
+}
+
+func acpMetadataMap(value any) (map[string]any, bool) {
+	switch typed := value.(type) {
+	case map[string]any:
+		return typed, true
+	case json.RawMessage:
+		var decoded map[string]any
+		if err := json.Unmarshal(typed, &decoded); err == nil {
+			return decoded, true
+		}
+	case string:
+		var decoded map[string]any
+		if err := json.Unmarshal([]byte(typed), &decoded); err == nil {
+			return decoded, true
+		}
+	}
+
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return nil, false
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		return nil, false
+	}
+	return decoded, true
 }
 
 func decodePersistedModelMessage(raw messagepkg.Message) ModelMessage {

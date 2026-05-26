@@ -224,6 +224,86 @@ definitions:
       subject_channel_type:
         type: string
     type: object
+  acpagent.RuntimeStatus:
+    properties:
+      acp_session_id:
+        type: string
+      agent_id:
+        type: string
+      models:
+        $ref: '#/definitions/acpclient.ModelState'
+      project_path:
+        type: string
+      session_id:
+        type: string
+      state:
+        type: string
+    type: object
+  acpclient.ModelInfo:
+    properties:
+      description:
+        type: string
+      id:
+        type: string
+      name:
+        type: string
+    type: object
+  acpclient.ModelState:
+    properties:
+      available_models:
+        items:
+          $ref: '#/definitions/acpclient.ModelInfo'
+        type: array
+      current_model_id:
+        type: string
+      supported:
+        type: boolean
+    type: object
+  acpprofile.ManagedField:
+    properties:
+      help:
+        type: string
+      id:
+        type: string
+      label:
+        type: string
+      placeholder:
+        type: string
+      required:
+        type: boolean
+      sensitive:
+        type: boolean
+      type:
+        type: string
+    type: object
+  acpprofile.ProfilesResponse:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/acpprofile.PublicProfile'
+        type: array
+    type: object
+  acpprofile.PublicProfile:
+    properties:
+      description:
+        type: string
+      display_name:
+        type: string
+      id:
+        type: string
+      managed_fields:
+        items:
+          $ref: '#/definitions/acpprofile.ManagedField'
+        type: array
+      setup_modes:
+        items:
+          type: string
+        type: array
+      supported_backends:
+        items:
+          type: string
+        type: array
+    type: object
   adapters.CDFPoint:
     properties:
       cumulative:
@@ -2144,6 +2224,11 @@ definitions:
       summary:
         type: string
     type: object
+  handlers.acpRuntimeModelRequest:
+    properties:
+      model_id:
+        type: string
+    type: object
   handlers.createSessionRequest:
     properties:
       channel_type:
@@ -2152,6 +2237,8 @@ definitions:
         additionalProperties: {}
         type: object
       title:
+        type: string
+      type:
         type: string
     type: object
   handlers.displayInfoResponse:
@@ -2340,6 +2427,8 @@ definitions:
         additionalProperties: {}
         type: object
       title:
+        type: string
+      type:
         type: string
     type: object
   heartbeat.ListLogsResponse:
@@ -3204,6 +3293,18 @@ info:
   title: Memoh API
   version: 1.0.0
 paths:
+  /acp/profiles:
+    get:
+      description: List safe ACP profile metadata used by the frontend to render agent
+        configuration UI
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/acpprofile.ProfilesResponse'
+      summary: List ACP profiles
+      tags:
+      - acp
   /auth/login:
     post:
       description: Validate user credentials and issue a JWT
@@ -6401,6 +6502,110 @@ paths:
       summary: Update a session
       tags:
       - sessions
+  /bots/{bot_id}/sessions/{session_id}/acp-runtime:
+    get:
+      parameters:
+      - description: Bot ID
+        in: path
+        name: bot_id
+        required: true
+        type: string
+      - description: Session ID
+        in: path
+        name: session_id
+        required: true
+        type: string
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/acpagent.RuntimeStatus'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      summary: Get ACP session runtime state
+      tags:
+      - acp
+    post:
+      parameters:
+      - description: Bot ID
+        in: path
+        name: bot_id
+        required: true
+        type: string
+      - description: Session ID
+        in: path
+        name: session_id
+        required: true
+        type: string
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/acpagent.RuntimeStatus'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      summary: Ensure ACP session runtime is started
+      tags:
+      - acp
+  /bots/{bot_id}/sessions/{session_id}/acp-runtime/model:
+    patch:
+      parameters:
+      - description: Bot ID
+        in: path
+        name: bot_id
+        required: true
+        type: string
+      - description: Session ID
+        in: path
+        name: session_id
+        required: true
+        type: string
+      - description: ACP model selection
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/handlers.acpRuntimeModelRequest'
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/acpagent.RuntimeStatus'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      summary: Set ACP session runtime model
+      tags:
+      - acp
   /bots/{bot_id}/sessions/{session_id}/compact:
     post:
       description: Run context compaction synchronously for a session
@@ -6693,7 +6898,7 @@ paths:
         in: query
         name: model_id
         type: string
-      - description: 'Optional session type: chat, heartbeat, or schedule'
+      - description: 'Optional session type: chat, heartbeat, schedule, or acp_agent'
         in: query
         name: session_type
         type: string

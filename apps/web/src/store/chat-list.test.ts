@@ -11,6 +11,9 @@ const api = vi.hoisted(() => ({
   fetchBots: vi.fn(),
   fetchMessagesUI: vi.fn(),
   sendLocalChannelMessage: vi.fn(),
+  updateSessionAgent: vi.fn(),
+  ensureACPRuntime: vi.fn(),
+  setACPRuntimeModel: vi.fn(),
   streamMessageEvents: vi.fn(),
   connectWebSocket: vi.fn(),
   locateMessageUI: vi.fn(),
@@ -48,6 +51,32 @@ describe('chat-list store', () => {
       bot_id: 'bot-1',
       title: 'New session',
       type: 'chat',
+    })
+    api.updateSessionAgent.mockResolvedValue({
+      id: 'session-1',
+      bot_id: 'bot-1',
+      title: '',
+      type: 'acp_agent',
+      metadata: {
+        acp_agent_id: 'codex',
+        project_path: '/data/app',
+      },
+    })
+    api.ensureACPRuntime.mockResolvedValue({
+      session_id: 'session-1',
+      agent_id: 'codex',
+      models: {
+        current_model_id: 'gpt-5.1-codex',
+        available_models: [{ id: 'gpt-5.1-codex', name: 'GPT-5.1 Codex' }],
+      },
+    })
+    api.setACPRuntimeModel.mockResolvedValue({
+      session_id: 'session-1',
+      agent_id: 'codex',
+      models: {
+        current_model_id: 'gpt-5.1-codex-high',
+        available_models: [{ id: 'gpt-5.1-codex-high', name: 'GPT-5.1 Codex High' }],
+      },
     })
     api.fetchMessagesUI.mockResolvedValue([])
     api.streamMessageEvents.mockImplementation((_botId: string, signal: AbortSignal) => new Promise<void>((resolve) => {
@@ -97,6 +126,96 @@ describe('chat-list store', () => {
       error: 'model failed',
       restoreInput: 'hello',
     })
+  })
+
+  it('creates ACP sessions without a placeholder title', async () => {
+    api.createSession.mockResolvedValueOnce({
+      id: 'acp-session-1',
+      bot_id: 'bot-1',
+      title: '',
+      type: 'acp_agent',
+      metadata: {
+        acp_agent_id: 'codex',
+        project_path: '/data/app',
+      },
+    })
+    const store = useChatStore()
+
+    await store.selectBot('bot-1')
+    await store.createACPSession({
+      agentId: 'codex',
+      projectPath: '/data/app',
+      projectMode: 'project',
+    })
+
+    expect(api.createSession).toHaveBeenLastCalledWith('bot-1', expect.objectContaining({
+      title: '',
+      type: 'acp_agent',
+    }))
+  })
+
+  it('stores ACP runtime models when starting an ACP session', async () => {
+    api.createSession.mockResolvedValueOnce({
+      id: 'acp-session-1',
+      bot_id: 'bot-1',
+      title: '',
+      type: 'acp_agent',
+      metadata: {
+        acp_agent_id: 'codex',
+        project_path: '/data/app',
+      },
+    })
+    api.ensureACPRuntime.mockResolvedValueOnce({
+      session_id: 'acp-session-1',
+      agent_id: 'codex',
+      models: {
+        current_model_id: 'gpt-5.1-codex',
+        available_models: [{ id: 'gpt-5.1-codex', name: 'GPT-5.1 Codex' }],
+      },
+    })
+    const store = useChatStore()
+
+    await store.selectBot('bot-1')
+    await store.createACPSession({
+      agentId: 'codex',
+      projectPath: '/data/app',
+      projectMode: 'project',
+      startRuntime: true,
+    })
+
+    const key = store.acpRuntimeKey('bot-1', 'acp-session-1')
+    expect(api.ensureACPRuntime).toHaveBeenCalledTimes(1)
+    expect(store.acpRuntimeStatuses[key]?.models?.current_model_id).toBe('gpt-5.1-codex')
+    expect(store.acpRuntimePending[key]).toBeUndefined()
+  })
+
+  it('deduplicates concurrent ACP runtime ensure calls', async () => {
+    api.fetchSessions.mockResolvedValueOnce([
+      { id: 'acp-session-1', bot_id: 'bot-1', title: '', type: 'acp_agent' },
+    ])
+    let resolveRuntime!: (value: unknown) => void
+    api.ensureACPRuntime.mockReturnValueOnce(new Promise(resolve => {
+      resolveRuntime = resolve
+    }))
+    const store = useChatStore()
+
+    await store.selectBot('bot-1')
+    const first = store.ensureACPRuntime('acp-session-1')
+    const second = store.ensureACPRuntime('acp-session-1')
+    expect(api.ensureACPRuntime).toHaveBeenCalledTimes(1)
+
+    resolveRuntime({
+      session_id: 'acp-session-1',
+      agent_id: 'codex',
+      models: {
+        current_model_id: 'gpt-5.1-codex',
+        available_models: [{ id: 'gpt-5.1-codex', name: 'GPT-5.1 Codex' }],
+      },
+    })
+    await Promise.all([first, second])
+
+    expect(api.ensureACPRuntime).toHaveBeenCalledTimes(1)
+    expect(store.acpRuntimeStatuses[store.acpRuntimeKey('bot-1', 'acp-session-1')]?.models?.available_models).toHaveLength(1)
   })
 
   it('renders stream errors in the chat transcript after assistant output starts', async () => {

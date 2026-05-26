@@ -4,6 +4,8 @@
 
 PRAGMA foreign_keys = OFF;
 
+BEGIN;
+
 -- SQLite does not support ADD COLUMN IF NOT EXISTS. Patch the schema cookie
 -- first so older databases can expose missing columns before the table rebuild
 -- below copies data into the final shape.
@@ -133,5 +135,7 @@ DROP TABLE bots_old;
 DROP TABLE IF EXISTS browser_contexts;
 
 CREATE INDEX IF NOT EXISTS idx_bots_owner_user_id ON bots(owner_user_id);
+
+COMMIT;
 
 PRAGMA foreign_keys = ON;

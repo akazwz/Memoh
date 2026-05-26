@@ -3,6 +3,8 @@
 
 PRAGMA foreign_keys = OFF;
 
+BEGIN;
+
 CREATE TABLE IF NOT EXISTS browser_contexts (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL DEFAULT '',
@@ -79,5 +81,7 @@ FROM bots_old;
 DROP TABLE bots_old;
 
 CREATE INDEX IF NOT EXISTS idx_bots_owner_user_id ON bots(owner_user_id);
+
+COMMIT;
 
 PRAGMA foreign_keys = ON;

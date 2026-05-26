@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"errors"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -8,6 +9,7 @@ import (
 	"github.com/labstack/echo/v4"
 
 	"github.com/memohai/memoh/internal/accounts"
+	"github.com/memohai/memoh/internal/acpprofile"
 	"github.com/memohai/memoh/internal/bots"
 	"github.com/memohai/memoh/internal/session"
 )
@@ -15,15 +17,21 @@ import (
 // SessionHandler handles bot session CRUD endpoints.
 type SessionHandler struct {
 	sessionService *session.Service
+	acpPool        acpSessionCloser
 	botService     *bots.Service
 	accountService *accounts.Service
 	logger         *slog.Logger
 }
 
+type acpSessionCloser interface {
+	CloseSession(sessionID string) error
+}
+
 // NewSessionHandler creates a SessionHandler.
-func NewSessionHandler(log *slog.Logger, sessionService *session.Service, botService *bots.Service, accountService *accounts.Service) *SessionHandler {
+func NewSessionHandler(log *slog.Logger, sessionService *session.Service, acpPool acpSessionCloser, botService *bots.Service, accountService *accounts.Service) *SessionHandler {
 	return &SessionHandler{
 		sessionService: sessionService,
+		acpPool:        acpPool,
 		botService:     botService,
 		accountService: accountService,
 		logger:         log.With(slog.String("handler", "session")),
@@ -41,6 +49,7 @@ func (h *SessionHandler) Register(e *echo.Echo) {
 }
 
 type createSessionRequest struct {
+	Type        string         `json:"type,omitempty"`
 	Title       string         `json:"title"`
 	ChannelType string         `json:"channel_type,omitempty"`
 	Metadata    map[string]any `json:"metadata,omitempty"`
@@ -48,6 +57,7 @@ type createSessionRequest struct {
 
 type updateSessionRequest struct {
 	Title    *string        `json:"title,omitempty"`
+	Type     *string        `json:"type,omitempty"`
 	Metadata map[string]any `json:"metadata,omitempty"`
 }
 
@@ -69,21 +79,35 @@ func (h *SessionHandler) CreateSession(c echo.Context) error {
 	if botID == "" {
 		return echo.NewHTTPError(http.StatusBadRequest, "bot id is required")
 	}
-	if _, err := AuthorizeBotAccess(c.Request().Context(), h.botService, h.accountService, channelIdentityID, botID); err != nil {
+	bot, err := AuthorizeBotAccess(c.Request().Context(), h.botService, h.accountService, channelIdentityID, botID)
+	if err != nil {
 		return err
 	}
 	var req createSessionRequest
 	if err := c.Bind(&req); err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
+	sessionType := strings.TrimSpace(req.Type)
+	if sessionType == "" {
+		sessionType = session.TypeChat
+	}
+	if !session.IsKnownType(sessionType) {
+		return echo.NewHTTPError(http.StatusBadRequest, "unknown session type")
+	}
+	if sessionType == session.TypeACPAgent {
+		if err := validateACPCreate(bot, req.Metadata); err != nil {
+			return err
+		}
+	}
 	sess, err := h.sessionService.Create(c.Request().Context(), session.CreateInput{
 		BotID:       botID,
 		ChannelType: req.ChannelType,
+		Type:        sessionType,
 		Title:       req.Title,
 		Metadata:    req.Metadata,
 	})
 	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+		return sessionServiceError(err)
 	}
 	return c.JSON(http.StatusCreated, sess)
 }
@@ -171,7 +195,8 @@ func (h *SessionHandler) UpdateSession(c echo.Context) error {
 	if botID == "" {
 		return echo.NewHTTPError(http.StatusBadRequest, "bot id is required")
 	}
-	if _, err := AuthorizeBotAccess(c.Request().Context(), h.botService, h.accountService, channelIdentityID, botID); err != nil {
+	bot, err := AuthorizeBotAccess(c.Request().Context(), h.botService, h.accountService, channelIdentityID, botID)
+	if err != nil {
 		return err
 	}
 	sessionID := strings.TrimSpace(c.Param("session_id"))
@@ -192,20 +217,58 @@ func (h *SessionHandler) UpdateSession(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
 
-	var result session.Session
+	result := existing
+	if req.Type != nil || req.Metadata != nil {
+		targetType := existing.Type
+		if req.Type != nil {
+			targetType = strings.TrimSpace(*req.Type)
+			if targetType == "" {
+				targetType = session.TypeChat
+			}
+		}
+		if !session.IsKnownType(targetType) {
+			return echo.NewHTTPError(http.StatusBadRequest, "unknown session type")
+		}
+		targetMetadata := cloneSessionMetadata(existing.Metadata)
+		if req.Metadata != nil {
+			targetMetadata = cloneSessionMetadata(req.Metadata)
+		}
+		agentChanged := sessionAgentConfigChanged(existing.Type, existing.Metadata, targetType, targetMetadata)
+		if agentChanged {
+			count, err := h.sessionService.MessageCount(c.Request().Context(), sessionID)
+			if err != nil {
+				return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+			}
+			if count > 0 {
+				return echo.NewHTTPError(http.StatusConflict, "session agent cannot be changed after messages are sent")
+			}
+		}
+		if targetType == session.TypeACPAgent {
+			if err := validateACPCreate(bot, targetMetadata); err != nil {
+				return err
+			}
+		} else if existing.Type == session.TypeACPAgent || req.Type != nil {
+			targetMetadata = stripACPMetadata(targetMetadata)
+		}
+		if targetType != existing.Type || req.Metadata != nil {
+			result, err = h.sessionService.UpdateTypeAndMetadata(c.Request().Context(), sessionID, targetType, targetMetadata)
+			if err != nil {
+				return sessionServiceError(err)
+			}
+			if agentChanged && existing.Type == session.TypeACPAgent && h.acpPool != nil {
+				if closeErr := h.acpPool.CloseSession(sessionID); closeErr != nil {
+					h.logger.Warn("failed to close ACP runtime after session update", slog.String("session_id", sessionID), slog.Any("error", closeErr))
+				}
+			}
+		}
+	}
 	if req.Title != nil {
 		result, err = h.sessionService.UpdateTitle(c.Request().Context(), sessionID, *req.Title)
 		if err != nil {
 			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 		}
 	}
-	if req.Metadata != nil {
-		result, err = h.sessionService.UpdateMetadata(c.Request().Context(), sessionID, req.Metadata)
-		if err != nil {
-			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
-		}
-	}
-	if req.Title == nil && req.Metadata == nil {
+	if req.Title == nil && req.Metadata == nil && req.Type == nil {
 		result = existing
 	}
 	return c.JSON(http.StatusOK, result)
@@ -236,8 +299,94 @@ func (h *SessionHandler) DeleteSession(c echo.Context) error {
 	if sessionID == "" {
 		return echo.NewHTTPError(http.StatusBadRequest, "session id is required")
 	}
+	existing, err := h.sessionService.Get(c.Request().Context(), sessionID)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusNotFound, "session not found")
+	}
+	if existing.BotID != botID {
+		return echo.NewHTTPError(http.StatusNotFound, "session not found")
+	}
+	if existing.Type == session.TypeACPAgent && h.acpPool != nil {
+		if closeErr := h.acpPool.CloseSession(sessionID); closeErr != nil {
+			h.logger.Warn("failed to close ACP runtime before session delete", slog.String("session_id", sessionID), slog.Any("error", closeErr))
+		}
+	}
 	if err := h.sessionService.SoftDelete(c.Request().Context(), sessionID); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 	}
 	return c.NoContent(http.StatusNoContent)
+}
+
+func validateACPCreate(bot bots.Bot, metadata map[string]any) error {
+	agentID := sessionMetadataString(metadata, "acp_agent_id")
+	if agentID == "" {
+		agentID = sessionMetadataString(metadata, "agent_id")
+	}
+	if agentID == "" {
+		return echo.NewHTTPError(http.StatusBadRequest, session.ErrACPAgentIDRequired.Error())
+	}
+	if sessionMetadataString(metadata, "project_path") == "" {
+		return echo.NewHTTPError(http.StatusBadRequest, session.ErrACPProjectPathMissing.Error())
+	}
+	if _, ok := acpprofile.Lookup(agentID); !ok {
+		return echo.NewHTTPError(http.StatusBadRequest, "unknown ACP agent")
+	}
+	if !acpprofile.MetadataAgentEnabled(bot.Metadata, agentID) {
+		return echo.NewHTTPError(http.StatusForbidden, "ACP agent is not enabled for this bot")
+	}
+	return nil
+}
+
+func sessionServiceError(err error) error {
+	switch {
+	case errors.Is(err, session.ErrACPAgentIDRequired),
+		errors.Is(err, session.ErrACPProjectPathMissing),
+		errors.Is(err, session.ErrACPUnknownAgent):
+		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+	case errors.Is(err, session.ErrACPAgentNotEnabled):
+		return echo.NewHTTPError(http.StatusForbidden, err.Error())
+	default:
+		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+	}
+}
+
+func sessionAgentConfigChanged(existingType string, existingMetadata map[string]any, targetType string, targetMetadata map[string]any) bool {
+	if strings.TrimSpace(existingType) != strings.TrimSpace(targetType) {
+		return true
+	}
+	if targetType != session.TypeACPAgent {
+		return false
+	}
+	for _, key := range []string{"acp_agent_id", "agent_id", "project_path", "acp_project_mode"} {
+		if sessionMetadataString(existingMetadata, key) != sessionMetadataString(targetMetadata, key) {
+			return true
+		}
+	}
+	return false
+}
+
+func stripACPMetadata(metadata map[string]any) map[string]any {
+	out := cloneSessionMetadata(metadata)
+	for key := range out {
+		if strings.HasPrefix(key, "acp_") || key == "agent_id" || key == "project_path" {
+			delete(out, key)
+		}
+	}
+	return out
+}
+
+func cloneSessionMetadata(metadata map[string]any) map[string]any {
+	out := make(map[string]any, len(metadata))
+	for key, value := range metadata {
+		out[key] = value
+	}
+	return out
+}
+
+func sessionMetadataString(metadata map[string]any, key string) string {
+	if metadata == nil {
+		return ""
+	}
+	value, _ := metadata[key].(string)
+	return strings.TrimSpace(value)
 }

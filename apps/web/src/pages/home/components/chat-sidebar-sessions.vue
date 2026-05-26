@@ -199,6 +199,7 @@ import {
   DialogFooter,
 } from '@memohai/ui'
 import SessionItem from './session-item.vue'
+import { acpAgentIcon } from '@/utils/acp'
 
 const { t } = useI18n()
 const chatStore = useChatStore()
@@ -214,6 +215,7 @@ const filterOptions = computed(() => [
   { value: 'heartbeat', label: t('chat.sessionTypeHeartbeat') },
   { value: 'schedule', label: t('chat.sessionTypeSchedule') },
   { value: 'subagent', label: t('chat.sessionTypeSubagent') },
+  { value: 'acp_agent', label: t('chat.sessionTypeACPAgent') },
 ])
 
 const filterLabel = computed(() => {
@@ -227,6 +229,7 @@ const filterIconComponent = computed<Component>(() => {
     case 'heartbeat': return HeartPulse
     case 'schedule': return Clock
     case 'subagent': return GitBranch
+    case 'acp_agent': return acpAgentIcon('codex', true)
     default: return MessageSquare
   }
 })
@@ -237,6 +240,7 @@ const filterIconClass = computed(() => {
     case 'heartbeat': return 'text-event-heartbeat'
     case 'schedule': return 'text-event-schedule'
     case 'subagent': return 'text-event-subagent'
+    case 'acp_agent': return 'text-muted-foreground'
     default: return 'text-muted-foreground'
   }
 })
@@ -244,7 +248,7 @@ const filterIconClass = computed(() => {
 const filteredSessions = computed(() => {
   let list = sessions.value
   if (filterType.value === 'chat') {
-    list = list.filter(s => s.type === 'chat' || s.type === 'discuss')
+    list = list.filter(s => s.type === 'chat' || s.type === 'discuss' || s.type === 'acp_agent')
   } else {
     list = list.filter(s => s.type === filterType.value)
   }

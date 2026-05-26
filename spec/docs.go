@@ -15,6 +15,23 @@ const docTemplate = `{
     "host": "{{.Host}}",
     "basePath": "{{.BasePath}}",
     "paths": {
+        "/acp/profiles": {
+            "get": {
+                "description": "List safe ACP profile metadata used by the frontend to render agent configuration UI",
+                "tags": [
+                    "acp"
+                ],
+                "summary": "List ACP profiles",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/acpprofile.ProfilesResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/auth/login": {
             "post": {
                 "description": "Validate user credentials and issue a JWT",
@@ -4813,6 +4830,163 @@ const docTemplate = `{
                 }
             }
         },
+        "/bots/{bot_id}/sessions/{session_id}/acp-runtime": {
+            "get": {
+                "tags": [
+                    "acp"
+                ],
+                "summary": "Get ACP session runtime state",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Session ID",
+                        "name": "session_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/acpagent.RuntimeStatus"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "tags": [
+                    "acp"
+                ],
+                "summary": "Ensure ACP session runtime is started",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Session ID",
+                        "name": "session_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/acpagent.RuntimeStatus"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/bots/{bot_id}/sessions/{session_id}/acp-runtime/model": {
+            "patch": {
+                "tags": [
+                    "acp"
+                ],
+                "summary": "Set ACP session runtime model",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Session ID",
+                        "name": "session_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "ACP model selection",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.acpRuntimeModelRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/acpagent.RuntimeStatus"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/bots/{bot_id}/sessions/{session_id}/compact": {
             "post": {
                 "description": "Run context compaction synchronously for a session",
@@ -5255,7 +5429,7 @@ const docTemplate = `{
                     },
                     {
                         "type": "string",
-                        "description": "Optional session type: chat, heartbeat, or schedule",
+                        "description": "Optional session type: chat, heartbeat, schedule, or acp_agent",
                         "name": "session_type",
                         "in": "query"
                     },
@@ -10095,6 +10269,129 @@ const docTemplate = `{
                 }
             }
         },
+        "acpagent.RuntimeStatus": {
+            "type": "object",
+            "properties": {
+                "acp_session_id": {
+                    "type": "string"
+                },
+                "agent_id": {
+                    "type": "string"
+                },
+                "models": {
+                    "$ref": "#/definitions/acpclient.ModelState"
+                },
+                "project_path": {
+                    "type": "string"
+                },
+                "session_id": {
+                    "type": "string"
+                },
+                "state": {
+                    "type": "string"
+                }
+            }
+        },
+        "acpclient.ModelInfo": {
+            "type": "object",
+            "properties": {
+                "description": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                }
+            }
+        },
+        "acpclient.ModelState": {
+            "type": "object",
+            "properties": {
+                "available_models": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/acpclient.ModelInfo"
+                    }
+                },
+                "current_model_id": {
+                    "type": "string"
+                },
+                "supported": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "acpprofile.ManagedField": {
+            "type": "object",
+            "properties": {
+                "help": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "label": {
+                    "type": "string"
+                },
+                "placeholder": {
+                    "type": "string"
+                },
+                "required": {
+                    "type": "boolean"
+                },
+                "sensitive": {
+                    "type": "boolean"
+                },
+                "type": {
+                    "type": "string"
+                }
+            }
+        },
+        "acpprofile.ProfilesResponse": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/acpprofile.PublicProfile"
+                    }
+                }
+            }
+        },
+        "acpprofile.PublicProfile": {
+            "type": "object",
+            "properties": {
+                "description": {
+                    "type": "string"
+                },
+                "display_name": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "managed_fields": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/acpprofile.ManagedField"
+                    }
+                },
+                "setup_modes": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "supported_backends": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
         "adapters.CDFPoint": {
             "type": "object",
             "properties": {
@@ -12989,6 +13286,14 @@ const docTemplate = `{
                 }
             }
         },
+        "handlers.acpRuntimeModelRequest": {
+            "type": "object",
+            "properties": {
+                "model_id": {
+                    "type": "string"
+                }
+            }
+        },
         "handlers.createSessionRequest": {
             "type": "object",
             "properties": {
@@ -13000,6 +13305,9 @@ const docTemplate = `{
                     "additionalProperties": {}
                 },
                 "title": {
+                    "type": "string"
+                },
+                "type": {
                     "type": "string"
                 }
             }
@@ -13289,6 +13597,9 @@ const docTemplate = `{
                     "additionalProperties": {}
                 },
                 "title": {
+                    "type": "string"
+                },
+                "type": {
                     "type": "string"
                 }
             }

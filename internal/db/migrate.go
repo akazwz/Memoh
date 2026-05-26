@@ -147,7 +147,12 @@ func newMigrateForTarget(target MigrationTarget, sourceDriver source.Driver) (*m
 		if err != nil {
 			return nil, err
 		}
-		dbDriver, err := migratesqlite.WithInstance(db, &migratesqlite.Config{})
+		// Several SQLite migrations temporarily disable foreign_keys while
+		// rebuilding tables. SQLite ignores PRAGMA foreign_keys changes inside
+		// an outer transaction, so migration files own their transaction scope.
+		dbDriver, err := migratesqlite.WithInstance(db, &migratesqlite.Config{
+			NoTxWrap: true,
+		})
 		if err != nil {
 			_ = db.Close()
 			return nil, err

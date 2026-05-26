@@ -335,7 +335,7 @@ CREATE TABLE IF NOT EXISTS bot_sessions (
   bot_id TEXT NOT NULL REFERENCES bots(id) ON DELETE CASCADE,
   route_id TEXT REFERENCES bot_channel_routes(id) ON DELETE SET NULL,
   channel_type TEXT,
-  type TEXT NOT NULL DEFAULT 'chat' CHECK (type IN ('chat', 'heartbeat', 'schedule', 'subagent', 'discuss')),
+  type TEXT NOT NULL DEFAULT 'chat' CHECK (type IN ('chat', 'heartbeat', 'schedule', 'subagent', 'discuss', 'acp_agent')),
   title TEXT NOT NULL DEFAULT '',
   metadata TEXT NOT NULL DEFAULT '{}',
   parent_session_id TEXT REFERENCES bot_sessions(id) ON DELETE SET NULL,
