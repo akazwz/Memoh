@@ -63,8 +63,9 @@ import { computed, inject, type Component } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useRouter, useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { ChevronLeft, Bot, Boxes, Globe, Brain, Volume2, AudioLines, Mail, ChartLine, User, Store, Info, Palette } from 'lucide-vue-next'
+import { ChevronLeft, Bot, Boxes, Globe, Brain, Volume2, AudioLines, Mail, ChartLine, User, Store, Info, Palette, Users } from 'lucide-vue-next'
 import { useChatSelectionStore } from '@/store/chat-selection'
+import { useUserStore } from '@/store/user'
 import {
   Sidebar,
   SidebarContent,
@@ -98,6 +99,8 @@ const route = useRoute()
 const { t } = useI18n()
 const selectionStore = useChatSelectionStore()
 const { currentBotId } = storeToRefs(selectionStore)
+const userStore = useUserStore()
+const { userInfo } = storeToRefs(userStore)
 
 const backToChatRoute = computed(() => {
   const botId = (currentBotId.value ?? '').trim()
@@ -115,7 +118,7 @@ function isItemActive(name: string): boolean {
   return route.name === name
 }
 
-type NavItem = { title: string; name: string; icon: Component }
+type NavItem = { title: string; name: string; icon: Component; adminOnly?: boolean }
 
 const allNavItems = computed<NavItem[]>(() => [
   { title: t('sidebar.bots'), name: 'bots', icon: Bot },
@@ -127,14 +130,16 @@ const allNavItems = computed<NavItem[]>(() => [
   { title: t('sidebar.email'), name: 'email', icon: Mail },
   { title: t('sidebar.supermarket'), name: 'supermarket', icon: Store },
   { title: t('sidebar.usage'), name: 'usage', icon: ChartLine },
+  { title: t('sidebar.people'), name: 'people', icon: Users, adminOnly: true },
   { title: t('sidebar.appearance'), name: 'appearance', icon: Palette },
   { title: t('sidebar.profile'), name: 'profile', icon: User },
   { title: t('sidebar.about'), name: 'about', icon: Info },
 ])
 
 const navItems = computed(() =>
-  props.excludeItems.length > 0
-    ? allNavItems.value.filter(item => !props.excludeItems.includes(item.name))
-    : allNavItems.value,
+  allNavItems.value.filter((item) => {
+    if (item.adminOnly && userInfo.value.role !== 'admin') return false
+    return props.excludeItems.length === 0 || !props.excludeItems.includes(item.name)
+  }),
 )
 </script>

@@ -3,6 +3,7 @@ import { computed, reactive, ref, watch } from 'vue'
 import { useRetryingStream } from '@/composables/useRetryingStream'
 import { useUserStore } from '@/store/user'
 import { useChatSelectionStore } from '@/store/chat-selection'
+import { onAuthSessionCleared } from '@/lib/auth-session'
 import { shouldRefreshFromMessageCreated, upsertById } from './chat-list.utils'
 import {
   createSession,
@@ -233,15 +234,11 @@ export const useChatStore = defineStore('chat', () => {
     if (newId) {
       void initialize()
     } else {
-      stopMessageEvents()
-      abortAllAssistantStreams()
-      stopWebSocket()
-      messageEventsSince = ''
-      sessions.value = []
-      sessionId.value = null
-      replaceMessages([])
+      resetUserScopedState()
     }
   }, { immediate: true })
+
+  onAuthSessionCleared(() => resetUserScopedState({ clearSelection: true }))
 
   const nextId = () => `${Date.now()}-${Math.floor(Math.random() * 1000)}`
 
@@ -1034,6 +1031,42 @@ export const useChatStore = defineStore('chat', () => {
     }
   }
 
+  function resetUserScopedState(options: { clearSelection?: boolean } = {}) {
+    stopMessageEvents()
+    abortAllAssistantStreams()
+    stopWebSocket()
+
+    if (refreshTimer) {
+      clearTimeout(refreshTimer)
+      refreshTimer = null
+    }
+    refreshPromise = null
+    messageEventsSince = ''
+
+    sessions.value = []
+    bots.value = []
+    sessionId.value = null
+    if (options.clearSelection && currentBotId.value) {
+      currentBotId.value = null
+    }
+    replaceMessages([])
+    hasMoreOlder.value = true
+    loading.value = false
+    loadingChats.value = false
+    loadingOlder.value = false
+    initializing.value = false
+    overrideModelId.value = ''
+    overrideReasoningEffort.value = ''
+    startupSendFailure.value = null
+    fsChangedAt.value = 0
+
+    pendingAssistantStreams.clear()
+    pendingBackgroundEvents.clear()
+    latestBackgroundTasks.clear()
+    sessionMessageStates.clear()
+    ephemeralAssistantErrors.clear()
+  }
+
   function startWebSocket(targetBotId: string) {
     const bid = targetBotId.trim()
     stopWebSocket()
@@ -1682,6 +1715,7 @@ export const useChatStore = defineStore('chat', () => {
     sendMessage,
     respondToolApproval,
     clearMessages,
+    resetUserScopedState,
     loadOlderMessages,
     findMessageIdByExternalId,
     locateMessageByExternalId,

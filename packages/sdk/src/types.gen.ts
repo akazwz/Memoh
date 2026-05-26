@@ -1284,6 +1284,7 @@ export type HandlersCreateSessionRequest = {
 };
 
 export type HandlersDisplayInfoResponse = {
+    a11y_available?: boolean;
     available?: boolean;
     browser_available?: boolean;
     desktop_available?: boolean;
@@ -9701,6 +9702,46 @@ export type PutUsersMePasswordErrors = {
 export type PutUsersMePasswordError = PutUsersMePasswordErrors[keyof PutUsersMePasswordErrors];
 
 export type PutUsersMePasswordResponses = {
+    /**
+     * No Content
+     */
+    204: unknown;
+};
+
+export type DeleteUsersByIdData = {
+    body?: never;
+    path: {
+        /**
+         * User ID
+         */
+        id: string;
+    };
+    query?: never;
+    url: '/users/{id}';
+};
+
+export type DeleteUsersByIdErrors = {
+    /**
+     * Bad Request
+     */
+    400: HandlersErrorResponse;
+    /**
+     * Forbidden
+     */
+    403: HandlersErrorResponse;
+    /**
+     * Not Found
+     */
+    404: HandlersErrorResponse;
+    /**
+     * Internal Server Error
+     */
+    500: HandlersErrorResponse;
+};
+
+export type DeleteUsersByIdError = DeleteUsersByIdErrors[keyof DeleteUsersByIdErrors];
+
+export type DeleteUsersByIdResponses = {
     /**
      * No Content
      */

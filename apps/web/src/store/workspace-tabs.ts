@@ -3,7 +3,9 @@ import { computed, nextTick, ref, watch } from 'vue'
 import { useStorage } from '@vueuse/core'
 import { useChatStore } from '@/store/chat-list'
 import { useChatSelectionStore } from '@/store/chat-selection'
+import { onAuthSessionCleared } from '@/lib/auth-session'
 import {
+  clearTerminalSnapshots,
   clearTerminalSnapshotsForBot,
   deleteTerminalSnapshot,
   terminalCacheKey,
@@ -391,6 +393,13 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
     void nextTick(() => clearTerminalSnapshotsForBot(bid))
   }
 
+  function resetAll() {
+    storage.value = {}
+    void nextTick(() => clearTerminalSnapshots())
+  }
+
+  onAuthSessionCleared(() => resetAll())
+
   // When the active tab is a chat tab, keep chat-store selection in sync.
   watch(activeTab, (tab) => {
     if (!tab) return
@@ -455,5 +464,6 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
     updateChatTitle,
     setActive,
     resetBot,
+    resetAll,
   }
 })
