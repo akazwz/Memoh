@@ -739,6 +739,7 @@ func (a *Agent) assembleTools(ctx context.Context, cfg RunConfig, emitter tools.
 		SessionToken:       cfg.Identity.SessionToken,
 		CurrentPlatform:    cfg.Identity.CurrentPlatform,
 		ReplyTarget:        cfg.Identity.ReplyTarget,
+		ConversationType:   cfg.Identity.ConversationType,
 		SupportsImageInput: cfg.SupportsImageInput,
 		IsSubagent:         cfg.Identity.IsSubagent,
 		Skills:             skillsMap,

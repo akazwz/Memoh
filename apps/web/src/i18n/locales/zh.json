@@ -293,8 +293,6 @@
       "transcribe_audio": "转录音频",
       "generate_image": "生成图像",
       "spawn": "派遣 {count} 个子代理",
-      "acp_action": "ACP Agent 动作",
-      "acp_plan": "ACP Agent 计划",
       "use_skill": "使用技能",
       "generic": "调用工具",
       "approve": "允许",

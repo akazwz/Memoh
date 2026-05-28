@@ -7,6 +7,8 @@ import (
 	"log/slog"
 	"strings"
 
+	sdk "github.com/memohai/twilight-ai/sdk"
+
 	"github.com/memohai/memoh/internal/acpagent"
 	"github.com/memohai/memoh/internal/acpclient"
 	agentpkg "github.com/memohai/memoh/internal/agent"
@@ -42,9 +44,6 @@ func (r *Resolver) streamACPAgentWS(ctx context.Context, req conversation.ChatRe
 		return err
 	}
 	agentID := metadataString(sess.Metadata, "acp_agent_id")
-	if agentID == "" {
-		agentID = metadataString(sess.Metadata, "agent_id")
-	}
 	projectPath := metadataString(sess.Metadata, "project_path")
 
 	doneTurn := r.enterSessionTurn(ctx, req.BotID, req.SessionID)
@@ -81,11 +80,20 @@ func (r *Resolver) streamACPAgentWS(ctx context.Context, req conversation.ChatRe
 	emit(agentpkg.StreamEvent{Type: agentpkg.EventTextStart})
 
 	result, err := r.acpPool.Prompt(streamCtx, acpagent.PromptInput{
-		BotID:       req.BotID,
-		SessionID:   req.SessionID,
-		AgentID:     agentID,
-		ProjectPath: projectPath,
-		Prompt:      req.Query,
+		BotID:             req.BotID,
+		ChatID:            req.ChatID,
+		SessionID:         req.SessionID,
+		StreamID:          req.StreamID,
+		RouteID:           req.RouteID,
+		AgentID:           agentID,
+		ProjectPath:       projectPath,
+		Prompt:            req.Query,
+		ChannelIdentityID: req.SourceChannelIdentityID,
+		SessionToken:      req.Token,
+		CurrentPlatform:   req.CurrentChannel,
+		ReplyTarget:       req.ReplyTarget,
+		ConversationType:  req.ConversationType,
+		ToolHTTPURL:       req.ToolHTTPURL,
 		Sink: acpclient.EventSinkFunc(func(event acpclient.StreamEvent) {
 			for _, mapped := range mapACPStreamEvent(event) {
 				emit(mapped)
@@ -123,111 +131,139 @@ func mapACPStreamEvent(event acpclient.StreamEvent) []agentpkg.StreamEvent {
 			return nil
 		}
 		return []agentpkg.StreamEvent{{Type: agentpkg.EventTextDelta, Delta: event.Delta}}
-	case acpclient.StreamEventToolStart:
+	case acpclient.StreamEventToolCallStart:
 		return []agentpkg.StreamEvent{{
 			Type:       agentpkg.EventToolCallStart,
-			ToolName:   "acp_action",
-			ToolCallID: event.Tool.ID,
-			Input: map[string]any{
-				"title": event.Tool.Title,
-				"kind":  event.Tool.Kind,
-			},
-			Status: event.Tool.Status,
+			ToolName:   event.ToolName,
+			ToolCallID: event.ToolCallID,
+			Input:      event.Input,
 		}}
-	case acpclient.StreamEventToolUpdate:
-		result := map[string]any{
-			"status": event.Tool.Status,
-		}
-		if event.Tool.Title != "" {
-			result["title"] = event.Tool.Title
-		}
-		if event.Tool.Kind != "" {
-			result["kind"] = event.Tool.Kind
-		}
-		if isTerminalACPToolStatus(event.Tool.Status) {
-			mapped := agentpkg.StreamEvent{
-				Type:       agentpkg.EventToolCallEnd,
-				ToolName:   "acp_action",
-				ToolCallID: event.Tool.ID,
-				Result:     result,
-			}
-			if isFailedACPToolStatus(event.Tool.Status) {
-				mapped.Error = event.Tool.Status
-			}
-			return []agentpkg.StreamEvent{mapped}
-		}
-		return []agentpkg.StreamEvent{{
-			Type:       agentpkg.EventToolCallProgress,
-			ToolName:   "acp_action",
-			ToolCallID: event.Tool.ID,
-			Status:     event.Tool.Status,
-			Progress: map[string]any{
-				"title": event.Tool.Title,
-				"kind":  event.Tool.Kind,
-			},
-		}}
-	case acpclient.StreamEventPlan:
+	case acpclient.StreamEventToolCallEnd:
 		return []agentpkg.StreamEvent{{
 			Type:       agentpkg.EventToolCallEnd,
-			ToolName:   "acp_plan",
-			ToolCallID: "acp_plan",
-			Result: map[string]any{
-				"plan": event.Plan,
-			},
+			ToolName:   event.ToolName,
+			ToolCallID: event.ToolCallID,
+			Input:      event.Input,
+			Result:     event.Result,
+			Error:      event.Error,
 		}}
 	default:
 		return nil
 	}
 }
 
-func isTerminalACPToolStatus(status string) bool {
-	switch strings.ToLower(strings.TrimSpace(status)) {
-	case "completed", "complete", "done", "failed", "error", "cancelled", "canceled":
-		return true
-	default:
-		return false
-	}
-}
-
-func isFailedACPToolStatus(status string) bool {
-	switch strings.ToLower(strings.TrimSpace(status)) {
-	case "failed", "error", "cancelled", "canceled":
-		return true
-	default:
-		return false
-	}
-}
-
 func (r *Resolver) persistACPRound(ctx context.Context, req conversation.ChatRequest, agentID, projectPath string, result acpclient.PromptResult, promptErr error) error {
-	// Persist the assistant text exactly as the agent produced it (which may
-	// be empty when the turn only emitted tool actions or a plan). The web UI
-	// is responsible for rendering an i18n-aware placeholder based on the
-	// presence of acp_actions / acp_plan / error metadata; encoding a
-	// hard-coded English placeholder here would defeat that and leak the
-	// "Codex" brand into stored history.
-	text := strings.TrimSpace(result.Text)
 	meta := map[string]any{
 		"acp_agent_id": agentID,
 		"project_path": projectPath,
 		"stop_reason":  result.StopReason,
-		"acp_actions":  result.ToolCalls,
-		"acp_plan":     result.Plan,
-		"acp_events":   result.Events,
 	}
 	if promptErr != nil {
 		meta["error"] = promptErr.Error()
 	}
-	round := []conversation.ModelMessage{
-		{Role: "user", Content: conversation.NewTextContent(req.Query)},
-		{Role: "assistant", Content: conversation.NewTextContent(text)},
+	output := acpResultOutputMessages(result)
+	round := make([]conversation.ModelMessage, 0, 1+len(output))
+	round = append(round, conversation.ModelMessage{Role: "user", Content: conversation.NewTextContent(req.Query)})
+	round = append(round, output...)
+
+	metadataByIndex := make(map[int]map[string]any, len(output))
+	for idx, msg := range output {
+		if msg.Role == "assistant" {
+			metadataByIndex[idx+1] = meta
+		}
 	}
 	return r.storeRoundWithOptions(ctx, req, round, "", storeRoundOptions{
-		SkipMemory:              true,
+		SkipMemory:              promptErr != nil,
 		AllowEmptyAssistantText: true,
-		MessageMetadataByIndex: map[int]map[string]any{
-			1: meta,
-		},
+		MessageMetadataByIndex:  metadataByIndex,
 	})
+}
+
+func acpResultOutputMessages(result acpclient.PromptResult) []conversation.ModelMessage {
+	output := make([]conversation.ModelMessage, 0)
+	assistantParts := make([]sdk.MessagePart, 0)
+	var text strings.Builder
+	sawTextDelta := false
+
+	flushText := func() {
+		if text.Len() == 0 {
+			return
+		}
+		assistantParts = append(assistantParts, sdk.TextPart{Text: text.String()})
+		text.Reset()
+	}
+	assistantHasToolCall := func() bool {
+		for _, part := range assistantParts {
+			if _, ok := part.(sdk.ToolCallPart); ok {
+				return true
+			}
+		}
+		return false
+	}
+	flushAssistant := func() {
+		flushText()
+		if len(assistantParts) == 0 {
+			return
+		}
+		converted := sdkMessagesToModelMessages([]sdk.Message{{
+			Role:    sdk.MessageRoleAssistant,
+			Content: assistantParts,
+		}})
+		output = append(output, converted...)
+		assistantParts = assistantParts[:0]
+	}
+	appendText := func(delta string) {
+		if delta == "" {
+			return
+		}
+		if assistantHasToolCall() {
+			flushAssistant()
+		}
+		sawTextDelta = true
+		text.WriteString(delta)
+	}
+	appendToolResult := func(event acpclient.StreamEvent) {
+		result := event.Result
+		isError := strings.TrimSpace(event.Error) != ""
+		if result == nil && isError {
+			result = strings.TrimSpace(event.Error)
+		}
+		converted := sdkMessagesToModelMessages([]sdk.Message{
+			sdk.ToolMessage(sdk.ToolResultPart{
+				ToolCallID: strings.TrimSpace(event.ToolCallID),
+				ToolName:   strings.TrimSpace(event.ToolName),
+				Result:     result,
+				IsError:    isError,
+			}),
+		})
+		output = append(output, converted...)
+	}
+
+	for _, event := range result.Events {
+		switch event.Type {
+		case acpclient.StreamEventTextDelta:
+			appendText(event.Delta)
+		case acpclient.StreamEventToolCallStart:
+			flushText()
+			assistantParts = append(assistantParts, sdk.ToolCallPart{
+				ToolCallID: strings.TrimSpace(event.ToolCallID),
+				ToolName:   strings.TrimSpace(event.ToolName),
+				Input:      event.Input,
+			})
+		case acpclient.StreamEventToolCallEnd:
+			flushAssistant()
+			appendToolResult(event)
+		}
+	}
+	if !sawTextDelta {
+		appendText(strings.TrimSpace(result.Text))
+	}
+	flushAssistant()
+
+	if len(output) == 0 {
+		return []conversation.ModelMessage{{Role: "assistant", Content: conversation.NewTextContent("")}}
+	}
+	return output
 }
 
 // acpFailureResult appends the raw upstream error (truncated, single-line) to

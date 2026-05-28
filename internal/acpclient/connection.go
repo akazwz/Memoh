@@ -72,24 +72,6 @@ func (c *clientConnection) handle(ctx context.Context, method string, params jso
 			return nil, err
 		}
 		return callACPHandler(func() (any, error) { return c.client.WriteTextFile(ctx, p) })
-	case acp.ClientMethodMcpConnect:
-		var p acp.UnstableConnectMcpRequest
-		if err := decodeACPParams(params, &p); err != nil {
-			return nil, err
-		}
-		return callACPHandler(func() (any, error) { return c.client.UnstableConnectMcp(ctx, p) })
-	case acp.ClientMethodMcpDisconnect:
-		var p acp.UnstableDisconnectMcpRequest
-		if err := decodeACPParams(params, &p); err != nil {
-			return nil, err
-		}
-		return callACPHandler(func() (any, error) { return c.client.UnstableDisconnectMcp(ctx, p) })
-	case acp.ClientMethodMcpMessage:
-		var p acp.UnstableMessageMcpRequest
-		if err := decodeACPParams(params, &p); err != nil {
-			return nil, err
-		}
-		return callACPHandler(func() (any, error) { return c.client.UnstableMessageMcp(ctx, p) })
 	case acp.ClientMethodSessionRequestPermission:
 		var p acp.RequestPermissionRequest
 		if err := decodeACPParams(params, &p); err != nil {

@@ -225,6 +225,7 @@ type ChatRequest struct {
 	BotID                     string           `json:"-"`
 	ChatID                    string           `json:"-"`
 	SessionID                 string           `json:"-"`
+	StreamID                  string           `json:"-"`
 	Token                     string           `json:"-"`
 	UserID                    string           `json:"-"`
 	SourceChannelIdentityID   string           `json:"-"`
@@ -247,6 +248,7 @@ type ChatRequest struct {
 	UserMessagePersisted      bool             `json:"-"`
 	EventID                   string           `json:"-"`
 	RawQuery                  string           `json:"-"`
+	ToolHTTPURL               string           `json:"-"`
 
 	// OutboundAssetCollector returns asset refs accumulated during outbound streaming.
 	// Set by the inbound channel processor; called by the resolver at persist time.

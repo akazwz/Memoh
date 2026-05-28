@@ -30,15 +30,6 @@ func TestMetadataAgentEnabled(t *testing.T) {
 			},
 			want: false,
 		},
-		{
-			name: "enabled agents compatibility",
-			metadata: map[string]any{
-				MetadataKeyACP: map[string]any{
-					"enabled_agents": []any{AgentCodexID},
-				},
-			},
-			want: true,
-		},
 	}
 
 	for _, tt := range tests {

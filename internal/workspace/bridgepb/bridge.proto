@@ -13,6 +13,7 @@ service ContainerService {
   rpc Rename(RenameRequest) returns (RenameResponse);
   rpc Exec(stream ExecInput) returns (stream ExecOutput);
   rpc Tunnel(stream TunnelFrame) returns (stream TunnelFrame);
+  rpc ReverseHTTP(stream ReverseHTTPFrame) returns (stream ReverseHTTPFrame);
   rpc ReadRaw(ReadRawRequest) returns (stream DataChunk);
   rpc WriteRaw(stream WriteRawChunk) returns (WriteRawResponse);
   rpc DeleteFile(DeleteFileRequest) returns (DeleteFileResponse);
@@ -103,6 +104,39 @@ message TunnelFrame {
     TunnelOpen open = 1;
     TunnelData data = 2;
     TunnelClose close = 3;
+  }
+}
+
+message HTTPHeader {
+  string name = 1;
+  repeated string values = 2;
+}
+
+message ReverseHTTPRequest {
+  string id = 1;
+  string method = 2;
+  string url = 3;
+  repeated HTTPHeader headers = 4;
+  bytes body = 5;
+}
+
+message ReverseHTTPResponse {
+  string id = 1;
+  int32 status_code = 2;
+  repeated HTTPHeader headers = 3;
+  bytes body = 4;
+}
+
+message ReverseHTTPError {
+  string id = 1;
+  string error = 2;
+}
+
+message ReverseHTTPFrame {
+  oneof frame {
+    ReverseHTTPRequest request = 1;
+    ReverseHTTPResponse response = 2;
+    ReverseHTTPError error = 3;
   }
 }
 

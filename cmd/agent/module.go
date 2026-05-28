@@ -69,6 +69,7 @@ func options() fx.Option {
 			searchproviders.NewService,
 			policy.NewService,
 			mcp.NewConnectionService,
+			mcp.NewToolSessionContextStore,
 			conversation.NewService,
 			identities.NewService,
 			event.NewHub,
@@ -106,6 +107,7 @@ func options() fx.Option {
 			compaction.NewService,
 			provideContainerdHandler,
 			provideFederationGateway,
+			provideACPToolSource,
 			provideToolGatewayService,
 			provideBackgroundManager,
 			provideToolProviders,
@@ -152,6 +154,7 @@ func options() fx.Option {
 		),
 		fx.Invoke(
 			injectToolProviders,
+			injectACPToolProviders,
 			startRegistrySync,
 			startAudioProviderBootstrap,
 			startMemoryProviderBootstrap,

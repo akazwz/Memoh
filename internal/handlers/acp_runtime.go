@@ -3,7 +3,10 @@ package handlers
 import (
 	"context"
 	"errors"
+	"net"
 	"net/http"
+	"net/url"
+	"os"
 	"strings"
 
 	"github.com/labstack/echo/v4"
@@ -86,10 +89,12 @@ func (h *ACPRuntimeHandler) EnsureRuntime(c echo.Context) error {
 		return err
 	}
 	status, err := h.pool.Ensure(c.Request().Context(), acpagent.PromptInput{
-		BotID:       botID,
-		SessionID:   sessionID,
-		AgentID:     sessionMetadataString(sess.Metadata, "acp_agent_id"),
-		ProjectPath: sessionMetadataString(sess.Metadata, "project_path"),
+		BotID:        botID,
+		SessionID:    sessionID,
+		AgentID:      sessionMetadataString(sess.Metadata, "acp_agent_id"),
+		ProjectPath:  sessionMetadataString(sess.Metadata, "project_path"),
+		SessionToken: extractRawBearerToken(c),
+		ToolHTTPURL:  buildACPMCPToolsURL(c, botID),
 	})
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
@@ -122,10 +127,12 @@ func (h *ACPRuntimeHandler) SetModel(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "model_id is required")
 	}
 	status, err := h.pool.SetModel(c.Request().Context(), acpagent.PromptInput{
-		BotID:       botID,
-		SessionID:   sessionID,
-		AgentID:     sessionMetadataString(sess.Metadata, "acp_agent_id"),
-		ProjectPath: sessionMetadataString(sess.Metadata, "project_path"),
+		BotID:        botID,
+		SessionID:    sessionID,
+		AgentID:      sessionMetadataString(sess.Metadata, "acp_agent_id"),
+		ProjectPath:  sessionMetadataString(sess.Metadata, "project_path"),
+		SessionToken: extractRawBearerToken(c),
+		ToolHTTPURL:  buildACPMCPToolsURL(c, botID),
 	}, modelID)
 	if err != nil {
 		switch {
@@ -167,4 +174,73 @@ func (h *ACPRuntimeHandler) authorizedACPSession(c echo.Context) (string, string
 		return "", "", session.Session{}, echo.NewHTTPError(http.StatusBadRequest, "session is not an ACP agent session")
 	}
 	return botID, sessionID, sess, nil
+}
+
+func buildACPMCPToolsURL(c echo.Context, botID string) string {
+	if c == nil {
+		return ""
+	}
+	return buildACPMCPToolsURLFromRequest(c.Request(), botID)
+}
+
+func buildACPMCPToolsURLFromRequest(req *http.Request, botID string) string {
+	if raw := strings.TrimSpace(os.Getenv("MEMOH_ACP_MCP_HTTP_URL")); raw != "" {
+		if strings.Contains(raw, "{bot_id}") {
+			return strings.ReplaceAll(raw, "{bot_id}", url.PathEscape(strings.TrimSpace(botID)))
+		}
+		return raw
+	}
+	base := strings.TrimSpace(os.Getenv("MEMOH_ACP_MCP_HTTP_BASE_URL"))
+	if base == "" {
+		base = externalRequestBaseURL(req)
+	}
+	base = strings.TrimRight(strings.TrimSpace(base), "/")
+	if base == "" {
+		return ""
+	}
+	return base + "/bots/" + url.PathEscape(strings.TrimSpace(botID)) + "/tools"
+}
+
+func externalRequestBaseURL(req *http.Request) string {
+	if req == nil {
+		return ""
+	}
+	proto := firstForwardedHeader(req, "X-Forwarded-Proto", "X-Forwarded-Protocol", "X-Url-Scheme")
+	if proto == "" {
+		if req.TLS != nil {
+			proto = "https"
+		} else {
+			proto = "http"
+		}
+	}
+	host := firstForwardedHeader(req, "X-Forwarded-Host")
+	if host == "" {
+		host = strings.TrimSpace(req.Host)
+	}
+	if host == "" {
+		return ""
+	}
+	if _, _, err := net.SplitHostPort(host); err != nil && strings.Contains(host, "/") {
+		return ""
+	}
+	return strings.TrimSpace(proto) + "://" + host
+}
+
+func firstForwardedHeader(req *http.Request, names ...string) string {
+	if req == nil {
+		return ""
+	}
+	for _, name := range names {
+		value := strings.TrimSpace(req.Header.Get(name))
+		if value == "" {
+			continue
+		}
+		if before, _, ok := strings.Cut(value, ","); ok {
+			value = before
+		}
+		if value = strings.TrimSpace(value); value != "" {
+			return value
+		}
+	}
+	return ""
 }

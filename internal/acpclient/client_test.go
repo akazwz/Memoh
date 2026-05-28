@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -125,6 +126,7 @@ func TestRunnerStartSessionStreamsEvents(t *testing.T) {
 	})
 
 	var streamed strings.Builder
+	var streamedEvents []StreamEvent
 	startupCtx, cancelStartup := context.WithCancel(context.Background())
 	sess, err := runner.StartSession(startupCtx, StartRequest{
 		BotID:       "bot-1",
@@ -132,6 +134,7 @@ func TestRunnerStartSessionStreamsEvents(t *testing.T) {
 		Command:     agentPath,
 		Timeout:     10 * time.Second,
 	}, EventSinkFunc(func(event StreamEvent) {
+		streamedEvents = append(streamedEvents, event)
 		if event.Type == StreamEventTextDelta {
 			streamed.WriteString(event.Delta)
 		}
@@ -152,6 +155,61 @@ func TestRunnerStartSessionStreamsEvents(t *testing.T) {
 	if !strings.Contains(streamed.String(), "read: hello") {
 		t.Fatalf("streamed text = %q", streamed.String())
 	}
+	for _, want := range []string{"read", "write", "exec"} {
+		if !hasStreamedToolEvent(streamedEvents, StreamEventToolCallEnd, want) {
+			t.Fatalf("streamed events missing %s tool end: %#v", want, streamedEvents)
+		}
+		if !hasStreamedToolEvent(result.Events, StreamEventToolCallEnd, want) {
+			t.Fatalf("result events missing %s tool end: %#v", want, result.Events)
+		}
+	}
+}
+
+func TestRunnerStartSessionSupportsReleaseTerminalWithoutWait(t *testing.T) {
+	t.Setenv("MEMOH_ACP_FAKE_AGENT_RELEASE_TERMINAL_WITHOUT_WAIT", "1")
+	root := t.TempDir()
+	project := filepath.Join(root, "project")
+	if err := os.MkdirAll(project, 0o750); err != nil {
+		t.Fatal(err)
+	}
+
+	client := newTestBridgeClient(t, root)
+	agentPath := writeFakeAgentScript(t, root)
+	runner := NewRunner(nil, testWorkspace{
+		client: client,
+		info: bridge.WorkspaceInfo{
+			Backend:        bridge.WorkspaceBackendLocal,
+			DefaultWorkDir: root,
+		},
+	})
+
+	sess, err := runner.StartSession(context.Background(), StartRequest{
+		BotID:       "bot-1",
+		ProjectPath: "/data/project",
+		Command:     agentPath,
+		Timeout:     10 * time.Second,
+	}, nil)
+	if err != nil {
+		t.Fatalf("StartSession() error = %v", err)
+	}
+	defer func() { _ = sess.Close() }()
+
+	result, err := sess.Prompt(context.Background(), "check time")
+	if err != nil {
+		t.Fatalf("Prompt() error = %v", err)
+	}
+	if !strings.Contains(result.Text, "term: terminal-ok") {
+		t.Fatalf("result text = %q, want terminal output", result.Text)
+	}
+}
+
+func hasStreamedToolEvent(events []StreamEvent, typ StreamEventType, toolName string) bool {
+	for _, event := range events {
+		if event.Type == typ && event.ToolName == toolName {
+			return true
+		}
+	}
+	return false
 }
 
 func TestRunnerStartSessionReadsProtocolModelsAndSetsModel(t *testing.T) {
@@ -286,6 +344,111 @@ func TestRunnerStartSessionSendsNoMCPServers(t *testing.T) {
 	if len(servers) != 0 {
 		t.Fatalf("captured MCP servers = %#v, want none for basic ACP runtime", servers)
 	}
+}
+
+func TestRunnerStartSessionInjectsHTTPToolServer(t *testing.T) {
+	root := t.TempDir()
+	project := filepath.Join(root, "project")
+	if err := os.MkdirAll(project, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	capturePath := filepath.Join(root, "mcp-servers.json")
+	t.Setenv("MEMOH_ACP_FAKE_AGENT_MCP_HTTP", "1")
+	t.Setenv("MEMOH_ACP_FAKE_AGENT_CAPTURE_MCP_FILE", capturePath)
+
+	client := newTestBridgeClient(t, root)
+	agentPath := writeFakeAgentScript(t, root)
+	runner := NewRunner(nil, testWorkspace{
+		client: client,
+		info: bridge.WorkspaceInfo{
+			Backend:        bridge.WorkspaceBackendLocal,
+			DefaultWorkDir: root,
+		},
+	})
+
+	sess, err := runner.StartSession(context.Background(), StartRequest{
+		BotID:       "bot-1",
+		ProjectPath: "/data/project",
+		Command:     agentPath,
+		Timeout:     10 * time.Second,
+		ToolHTTPURL: "http://memoh.test/bots/bot-1/tools",
+		ToolHTTPHandler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":"1","result":{}}`))
+		}),
+		ToolSession: ToolSessionContext{
+			BotID:             "bot-1",
+			ChatID:            "chat-1",
+			SessionID:         "session-1",
+			StreamID:          "stream-1",
+			SessionType:       "acp_agent",
+			ChannelIdentityID: "user-1",
+			SessionToken:      "token-1",
+			ConversationType:  "private",
+		},
+	}, nil)
+	if err != nil {
+		t.Fatalf("StartSession() error = %v", err)
+	}
+	defer func() { _ = sess.Close() }()
+
+	raw, err := os.ReadFile(capturePath) //nolint:gosec // test path is under t.TempDir.
+	if err != nil {
+		t.Fatalf("read captured MCP servers: %v", err)
+	}
+	var servers []map[string]any
+	if err := json.Unmarshal(raw, &servers); err != nil {
+		t.Fatalf("decode captured MCP servers: %v", err)
+	}
+	if len(servers) != 1 {
+		t.Fatalf("captured MCP servers = %#v, want one Memoh tools server", servers)
+	}
+	rawURL, _ := servers[0]["url"].(string)
+	if servers[0]["type"] != "http" || !strings.HasPrefix(rawURL, "http://127.0.0.1:") || !strings.Contains(rawURL, "/mcp/") || servers[0]["name"] != "Memoh Tools" {
+		t.Fatalf("captured MCP server = %#v", servers[0])
+	}
+	headers, _ := servers[0]["headers"].([]any)
+	if hasCapturedHeaderName(headers, "Authorization") || hasCapturedHeaderName(headers, "X-Memoh-Session-Token") {
+		t.Fatalf("captured credentials in MCP headers: %#v", headers)
+	}
+	if !hasCapturedHeader(headers, "X-Memoh-Session-Id", "session-1") {
+		t.Fatalf("missing session id header in %#v", headers)
+	}
+	if !hasCapturedHeader(headers, "X-Memoh-Stream-Id", "stream-1") {
+		t.Fatalf("missing stream id header in %#v", headers)
+	}
+	if !hasCapturedHeader(headers, "X-Memoh-Channel-Identity-Id", "user-1") {
+		t.Fatalf("missing channel identity header in %#v", headers)
+	}
+	if !hasCapturedHeader(headers, "X-Memoh-Conversation-Type", "private") {
+		t.Fatalf("missing conversation type header in %#v", headers)
+	}
+}
+
+func hasCapturedHeader(headers []any, name, value string) bool {
+	for _, raw := range headers {
+		item, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		if item["name"] == name && item["value"] == value {
+			return true
+		}
+	}
+	return false
+}
+
+func hasCapturedHeaderName(headers []any, name string) bool {
+	for _, raw := range headers {
+		item, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		if item["name"] == name {
+			return true
+		}
+	}
+	return false
 }
 
 func TestSessionCloseCancelsActivePrompt(t *testing.T) {
@@ -470,6 +633,10 @@ func TestRequestPermissionOnlyAutoAllowsOnce(t *testing.T) {
 	callbacks := &clientCallbacks{root: "/data", cwd: "/data", virtualRoot: true}
 
 	allowed, err := callbacks.RequestPermission(context.Background(), acp.RequestPermissionRequest{
+		ToolCall: acp.ToolCallUpdate{
+			Locations: []acp.ToolCallLocation{{Path: "/data/output.txt"}},
+			RawInput:  map[string]any{"path": "/data/output.txt", "cwd": "/data"},
+		},
 		Options: []acp.PermissionOption{
 			{Kind: acp.PermissionOptionKindAllowOnce, Name: "Allow once", OptionId: acp.PermissionOptionId("once")},
 		},
@@ -482,6 +649,10 @@ func TestRequestPermissionOnlyAutoAllowsOnce(t *testing.T) {
 	}
 
 	always, err := callbacks.RequestPermission(context.Background(), acp.RequestPermissionRequest{
+		ToolCall: acp.ToolCallUpdate{
+			Locations: []acp.ToolCallLocation{{Path: "/data/output.txt"}},
+			RawInput:  map[string]any{"path": "/data/output.txt", "cwd": "/data"},
+		},
 		Options: []acp.PermissionOption{
 			{Kind: acp.PermissionOptionKindAllowAlways, Name: "Allow always", OptionId: acp.PermissionOptionId("always")},
 		},
@@ -491,6 +662,21 @@ func TestRequestPermissionOnlyAutoAllowsOnce(t *testing.T) {
 	}
 	if always.Outcome.Cancelled == nil {
 		t.Fatalf("allow_always outcome = %#v, want cancelled because Memoh does not persist ACP permission grants", always.Outcome)
+	}
+
+	escaped, err := callbacks.RequestPermission(context.Background(), acp.RequestPermissionRequest{
+		ToolCall: acp.ToolCallUpdate{
+			Locations: []acp.ToolCallLocation{{Path: "/outside.txt"}},
+		},
+		Options: []acp.PermissionOption{
+			{Kind: acp.PermissionOptionKindAllowOnce, Name: "Allow once", OptionId: acp.PermissionOptionId("once")},
+		},
+	})
+	if err != nil {
+		t.Fatalf("RequestPermission(escaped) error = %v", err)
+	}
+	if escaped.Outcome.Cancelled == nil {
+		t.Fatalf("escaped outcome = %#v, want cancelled", escaped.Outcome)
 	}
 }
 
@@ -712,6 +898,9 @@ func (a *fakeACPAgent) Prompt(ctx context.Context, p acp.PromptRequest) (acp.Pro
 		}
 		return acp.PromptResponse{}, ctx.Err()
 	}
+	if os.Getenv("MEMOH_ACP_FAKE_AGENT_RELEASE_TERMINAL_WITHOUT_WAIT") == "1" {
+		return a.promptReleaseTerminalAfterOutput(ctx, p)
+	}
 
 	outputPath := filepath.Join(a.cwd, "output.txt")
 	permission, err := a.conn.RequestPermission(ctx, acp.RequestPermissionRequest{
@@ -768,12 +957,47 @@ func (a *fakeACPAgent) Prompt(ctx context.Context, p acp.PromptRequest) (acp.Pro
 		return acp.PromptResponse{}, err
 	}
 	_, _ = a.conn.ReleaseTerminal(ctx, acp.ReleaseTerminalRequest{SessionId: p.SessionId, TerminalId: term.TerminalId})
-
 	_ = a.conn.SessionUpdate(ctx, acp.SessionNotification{
 		SessionId: p.SessionId,
 		Update: acp.UpdateAgentMessageText(
 			"read: " + strings.TrimSpace(read.Content) + " term: " + strings.TrimSpace(termOut.Output),
 		),
+	})
+	return acp.PromptResponse{StopReason: acp.StopReasonEndTurn}, nil
+}
+
+func (a *fakeACPAgent) promptReleaseTerminalAfterOutput(ctx context.Context, p acp.PromptRequest) (acp.PromptResponse, error) {
+	term, err := a.conn.CreateTerminal(ctx, acp.CreateTerminalRequest{
+		SessionId: p.SessionId,
+		Command:   "printf",
+		Args:      []string{"terminal-ok"},
+		Cwd:       &a.cwd,
+	})
+	if err != nil {
+		return acp.PromptResponse{}, err
+	}
+
+	var termOut acp.TerminalOutputResponse
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		termOut, err = a.conn.TerminalOutput(ctx, acp.TerminalOutputRequest{SessionId: p.SessionId, TerminalId: term.TerminalId})
+		if err != nil {
+			return acp.PromptResponse{}, err
+		}
+		if strings.Contains(termOut.Output, "terminal-ok") {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !strings.Contains(termOut.Output, "terminal-ok") {
+		return acp.PromptResponse{}, fmt.Errorf("terminal output = %q, want terminal-ok", termOut.Output)
+	}
+	if _, err := a.conn.ReleaseTerminal(ctx, acp.ReleaseTerminalRequest{SessionId: p.SessionId, TerminalId: term.TerminalId}); err != nil {
+		return acp.PromptResponse{}, err
+	}
+	_ = a.conn.SessionUpdate(ctx, acp.SessionNotification{
+		SessionId: p.SessionId,
+		Update:    acp.UpdateAgentMessageText("term: " + strings.TrimSpace(termOut.Output)),
 	})
 	return acp.PromptResponse{StopReason: acp.StopReasonEndTurn}, nil
 }

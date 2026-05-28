@@ -33,6 +33,7 @@ type ContainerdHandler struct {
 	containerBackend string
 	logger           *slog.Logger
 	toolGateway      *mcp.ToolGatewayService
+	toolContexts     *mcp.ToolSessionContextStore
 	mcpSess          map[string]*mcpSession
 	mcpStdioMu       sync.Mutex
 	mcpStdioSess     map[string]*mcpStdioSession

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	acp "github.com/coder/acp-go-sdk"
+	"github.com/google/uuid"
 
 	"github.com/memohai/memoh/internal/workspace/bridge"
 )
@@ -50,8 +51,6 @@ type RunResult struct {
 	ProjectPath string        `json:"project_path,omitempty"`
 	Text        string        `json:"text,omitempty"`
 	StopReason  string        `json:"stop_reason,omitempty"`
-	ToolCalls   []ToolSummary `json:"tool_calls,omitempty"`
-	Plan        []PlanItem    `json:"plan,omitempty"`
 	Events      []StreamEvent `json:"events,omitempty"`
 }
 
@@ -120,8 +119,6 @@ func (r *Runner) Run(ctx context.Context, req RunRequest) (RunResult, error) {
 		ProjectPath: sess.ProjectPath(),
 		Text:        prompt.Text,
 		StopReason:  prompt.StopReason,
-		ToolCalls:   prompt.ToolCalls,
-		Plan:        prompt.Plan,
 		Events:      prompt.Events,
 	}
 	if err != nil {
@@ -160,23 +157,26 @@ type clientCallbacks struct {
 	mu          sync.RWMutex
 	collector   *eventCollector
 	sink        EventSink
+	events      *toolEventEmitter
+	toolMapper  *acpToolEventMapper
 	terminals   *terminalManager
 }
-
-var _ acp.Client = (*clientCallbacks)(nil)
 
 func newClientCallbacks(ctx context.Context, client *bridge.Client, root, cwd string, timeout time.Duration, sink EventSink, env []string, virtualRoot bool) *clientCallbacks {
 	timeoutSeconds := int32(timeout.Seconds())
 	if timeoutSeconds <= 0 {
 		timeoutSeconds = defaultTerminalTimeout
 	}
+	events := &toolEventEmitter{}
 	return &clientCallbacks{
 		client:      client,
 		root:        root,
 		cwd:         cwd,
 		virtualRoot: virtualRoot,
 		sink:        sink,
-		terminals:   newTerminalManager(ctx, client, root, cwd, timeoutSeconds, env, virtualRoot),
+		events:      events,
+		toolMapper:  newACPToolEventMapper(),
+		terminals:   newTerminalManager(ctx, client, root, cwd, timeoutSeconds, env, virtualRoot, events),
 	}
 }
 
@@ -194,11 +194,33 @@ func (c *clientCallbacks) setPromptState(collector *eventCollector, sink EventSi
 	c.collector = collector
 	c.sink = sink
 	c.mu.Unlock()
+	if c.events != nil {
+		c.events.setPromptState(collector, sink)
+	}
 }
 
 func (c *clientCallbacks) ReadTextFile(ctx context.Context, p acp.ReadTextFileRequest) (acp.ReadTextFileResponse, error) {
+	toolID := "read-" + uuid.NewString()
+	input := map[string]any{"path": p.Path}
+	if p.Line != nil && *p.Line > 0 {
+		input["line"] = *p.Line
+	}
+	if p.Limit != nil && *p.Limit > 0 {
+		input["limit"] = *p.Limit
+	}
+	c.emitToolCallStart(toolID, "read", input)
+	var toolErr error
+	defer func() {
+		result := map[string]any{}
+		if toolErr != nil {
+			result = toolErrorResult(toolErr)
+		}
+		c.emitToolCallEnd(toolID, "read", input, result, toolErr)
+	}()
+
 	path, err := c.resolvePath(p.Path)
 	if err != nil {
+		toolErr = err
 		return acp.ReadTextFileResponse{}, err
 	}
 	line := int32(1)
@@ -211,10 +233,12 @@ func (c *clientCallbacks) ReadTextFile(ctx context.Context, p acp.ReadTextFileRe
 	}
 	resp, err := c.client.ReadFile(ctx, path, line, limit)
 	if err != nil {
+		toolErr = err
 		return acp.ReadTextFileResponse{}, err
 	}
 	if resp.GetBinary() {
-		return acp.ReadTextFileResponse{}, fmt.Errorf("path %q is binary; ACP text file reads only support text", p.Path)
+		toolErr = fmt.Errorf("path %q is binary; ACP text file reads only support text", p.Path)
+		return acp.ReadTextFileResponse{}, toolErr
 	}
 	content := resp.GetContent()
 	if content == "" {
@@ -224,20 +248,77 @@ func (c *clientCallbacks) ReadTextFile(ctx context.Context, p acp.ReadTextFileRe
 }
 
 func (c *clientCallbacks) WriteTextFile(ctx context.Context, p acp.WriteTextFileRequest) (acp.WriteTextFileResponse, error) {
+	toolID := "write-" + uuid.NewString()
+	input := map[string]any{"path": p.Path}
+	c.emitToolCallStart(toolID, "write", input)
+	var toolErr error
+	defer func() {
+		result := map[string]any{}
+		if toolErr != nil {
+			result = toolErrorResult(toolErr)
+		}
+		c.emitToolCallEnd(toolID, "write", input, result, toolErr)
+	}()
+
 	path, err := c.resolvePath(p.Path)
 	if err != nil {
+		toolErr = err
 		return acp.WriteTextFileResponse{}, err
 	}
 	if err := c.client.WriteFile(ctx, path, []byte(p.Content)); err != nil {
+		toolErr = err
 		return acp.WriteTextFileResponse{}, err
 	}
 	return acp.WriteTextFileResponse{}, nil
 }
 
+func (c *clientCallbacks) emitToolCallStart(id, name string, input map[string]any) {
+	if c == nil || c.events == nil {
+		return
+	}
+	c.events.emit(StreamEvent{
+		Type:       StreamEventToolCallStart,
+		ToolCallID: id,
+		ToolName:   name,
+		Input:      input,
+	})
+}
+
+func (c *clientCallbacks) emitToolCallEnd(id, name string, input map[string]any, result any, err error) {
+	if c == nil || c.events == nil {
+		return
+	}
+	event := StreamEvent{
+		Type:       StreamEventToolCallEnd,
+		ToolCallID: id,
+		ToolName:   name,
+		Input:      input,
+		Result:     result,
+	}
+	if err != nil {
+		event.Error = err.Error()
+	}
+	c.events.emit(event)
+}
+
+func toolErrorResult(err error) map[string]any {
+	message := ""
+	if err != nil {
+		message = err.Error()
+	}
+	return map[string]any{
+		"isError": true,
+		"content": []map[string]any{{
+			"type": "text",
+			"text": message,
+		}},
+	}
+}
+
 func (c *clientCallbacks) RequestPermission(_ context.Context, p acp.RequestPermissionRequest) (acp.RequestPermissionResponse, error) {
-	// ACP permission requests are decided in-process for now. They are not
-	// persisted to tool_approval_requests because that table and broker path
-	// currently model only Memoh-native write/edit/exec tool approvals.
+	// ACP permissions stay scoped to the current request. Persistent grants are
+	// intentionally not stored because Memoh's approval table models native
+	// tool approvals, not ACP client callback grants.
 	if err := c.validatePermissionScope(p); err != nil {
 		return cancelledPermission(), nil
 	}
@@ -254,11 +335,15 @@ func (c *clientCallbacks) SessionUpdate(_ context.Context, p acp.SessionNotifica
 	collector := c.collector
 	sink := c.sink
 	c.mu.RUnlock()
+	var events []StreamEvent
+	if c.toolMapper != nil {
+		events = c.toolMapper.eventsFromNotification(p)
+	}
 	if collector != nil {
-		collector.apply(p)
+		collector.apply(p, events)
 	}
 	if sink != nil {
-		for _, event := range streamEventsFromNotification(p) {
+		for _, event := range events {
 			sink.EmitACPEvent(event)
 		}
 	}
@@ -285,16 +370,11 @@ func (c *clientCallbacks) WaitForTerminalExit(ctx context.Context, p acp.WaitFor
 	return c.terminals.WaitForTerminalExit(ctx, p)
 }
 
-func (*clientCallbacks) UnstableConnectMcp(_ context.Context, _ acp.UnstableConnectMcpRequest) (acp.UnstableConnectMcpResponse, error) {
-	return acp.UnstableConnectMcpResponse{}, errors.New("ACP inline MCP is not enabled")
-}
-
-func (*clientCallbacks) UnstableDisconnectMcp(_ context.Context, _ acp.UnstableDisconnectMcpRequest) (acp.UnstableDisconnectMcpResponse, error) {
-	return acp.UnstableDisconnectMcpResponse{}, nil
-}
-
-func (*clientCallbacks) UnstableMessageMcp(_ context.Context, _ acp.UnstableMessageMcpRequest) (acp.UnstableMessageMcpResponse, error) {
-	return nil, errors.New("ACP inline MCP is not enabled")
+func (c *clientCallbacks) resolvePath(path string) (string, error) {
+	if c.virtualRoot {
+		return ResolvePathUnderVirtualRoot(c.root, path)
+	}
+	return ResolvePathUnderRoot(c.root, path)
 }
 
 func (c *clientCallbacks) validatePermissionScope(p acp.RequestPermissionRequest) error {
@@ -318,13 +398,6 @@ func (c *clientCallbacks) validatePermissionScope(p acp.RequestPermissionRequest
 		}
 	}
 	return nil
-}
-
-func (c *clientCallbacks) resolvePath(path string) (string, error) {
-	if c.virtualRoot {
-		return ResolvePathUnderVirtualRoot(c.root, path)
-	}
-	return ResolvePathUnderRoot(c.root, path)
 }
 
 func selectedPermission(id acp.PermissionOptionId) acp.RequestPermissionResponse {

@@ -23,6 +23,11 @@ const (
 	noProjectWorkDirPart = "/.memoh/acp-work/no-project/"
 )
 
+var (
+	commandResolveWindow = 5 * time.Second
+	commandResolveDelay  = 200 * time.Millisecond
+)
+
 type WorkspaceBackend string
 
 const (
@@ -215,41 +220,77 @@ func normalizeSetupMode(mode SetupMode) SetupMode {
 
 func resolveCommand(ctx context.Context, client *bridge.Client, command, workDir string, env []string, backend WorkspaceBackend) (string, error) {
 	command = strings.TrimSpace(command)
+	resolved, lastResult, err := resolveCommandOnce(ctx, client, command, workDir, env, backend)
+	if err != nil || resolved != "" || backend != WorkspaceBackendContainer {
+		if resolved != "" || err != nil {
+			return resolved, err
+		}
+		return "", commandNotAvailableError(command, lastResult, backend)
+	}
+
+	deadline := time.Now().Add(commandResolveWindow)
+	for time.Now().Before(deadline) {
+		timer := time.NewTimer(commandResolveDelay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return "", ctx.Err()
+		case <-timer.C:
+		}
+
+		resolved, result, err := resolveCommandOnce(ctx, client, command, workDir, env, backend)
+		if result != nil {
+			lastResult = result
+		}
+		if err != nil {
+			return "", err
+		}
+		if resolved != "" {
+			return resolved, nil
+		}
+	}
+	return "", commandNotAvailableError(command, lastResult, backend)
+}
+
+func resolveCommandOnce(ctx context.Context, client *bridge.Client, command, workDir string, env []string, backend WorkspaceBackend) (string, *bridge.ExecResult, error) {
+	command = strings.TrimSpace(command)
 	if !isPlainCommand(command) {
-		return command, nil
+		return command, nil, nil
 	}
 
 	if strings.Contains(command, "/") {
 		result, err := checkCommand(ctx, client, "test -x "+escapeShellArg(command), workDir, env)
 		if err != nil {
-			return "", fmt.Errorf("check ACP command %q: %w", command, err)
+			return "", nil, fmt.Errorf("check ACP command %q: %w", command, err)
 		}
 		if result.ExitCode == 0 {
-			return command, nil
+			return command, result, nil
 		}
-		return "", commandNotAvailableError(command, result, backend)
+		return "", result, nil
 	}
 
 	result, err := checkCommand(ctx, client, "command -v "+escapeShellArg(command)+" >/dev/null 2>&1", workDir, env)
 	if err != nil {
-		return "", fmt.Errorf("check ACP command %q: %w", command, err)
+		return "", nil, fmt.Errorf("check ACP command %q: %w", command, err)
 	}
 	if result.ExitCode == 0 {
-		return command, nil
+		return command, result, nil
 	}
+	lastResult := result
 
 	if backend == WorkspaceBackendContainer {
 		toolkitCommand := containerToolkitBin + "/" + command
 		toolkitResult, err := checkCommand(ctx, client, "test -x "+escapeShellArg(toolkitCommand), workDir, env)
 		if err != nil {
-			return "", fmt.Errorf("check ACP command %q: %w", command, err)
+			return "", nil, fmt.Errorf("check ACP command %q: %w", command, err)
 		}
+		lastResult = toolkitResult
 		if toolkitResult.ExitCode == 0 {
-			return toolkitCommand, nil
+			return toolkitCommand, toolkitResult, nil
 		}
 	}
 
-	return "", commandNotAvailableError(command, result, backend)
+	return "", lastResult, nil
 }
 
 func checkCommand(ctx context.Context, client *bridge.Client, check, workDir string, env []string) (*bridge.ExecResult, error) {
@@ -257,9 +298,12 @@ func checkCommand(ctx context.Context, client *bridge.Client, check, workDir str
 }
 
 func commandNotAvailableError(command string, result *bridge.ExecResult, backend WorkspaceBackend) error {
-	detail := strings.TrimSpace(result.Stderr)
-	if detail == "" {
-		detail = strings.TrimSpace(result.Stdout)
+	detail := ""
+	if result != nil {
+		detail = strings.TrimSpace(result.Stderr)
+		if detail == "" {
+			detail = strings.TrimSpace(result.Stdout)
+		}
 	}
 	if detail != "" {
 		detail = ": " + detail

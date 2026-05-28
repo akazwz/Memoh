@@ -5,11 +5,14 @@ import "context"
 const (
 	WorkspaceBackendContainer = "container"
 	WorkspaceBackendLocal     = "local"
+	ACPToolsProxyAddr         = "127.0.0.1:18732"
+	ACPToolsProxyHTTPURL      = "http://" + ACPToolsProxyAddr + "/mcp"
 )
 
 type WorkspaceInfo struct {
-	Backend        string
-	DefaultWorkDir string
+	Backend         string
+	DefaultWorkDir  string
+	ACPToolsHTTPURL string
 }
 
 type WorkspaceInfoProvider interface {

@@ -374,8 +374,10 @@ func provideACPRunner(log *slog.Logger, manager *workspace.Manager) *acpclient.R
 	return acpclient.NewRunner(log, manager)
 }
 
-func provideACPSessionPool(lc fx.Lifecycle, log *slog.Logger, runner *acpclient.Runner, botService *bots.Service, sessionService *sessionpkg.Service) *acpagent.SessionPool {
+func provideACPSessionPool(lc fx.Lifecycle, log *slog.Logger, runner *acpclient.Runner, botService *bots.Service, sessionService *sessionpkg.Service, toolGateway *mcp.ToolGatewayService, toolContexts *mcp.ToolSessionContextStore) *acpagent.SessionPool {
 	pool := acpagent.NewSessionPool(log, runner, botService, sessionService)
+	pool.SetToolGateway(toolGateway)
+	pool.SetToolSessionContextStore(toolContexts)
 	lc.Append(fx.Hook{
 		OnStart: func(ctx context.Context) error {
 			pool.StartReaper(ctx)
@@ -589,12 +591,41 @@ func provideOAuthService(log *slog.Logger, queries dbstore.Queries, cfg config.C
 	return mcp.NewOAuthService(log, queries, callbackURL)
 }
 
-func provideToolGatewayService(log *slog.Logger, fedGateway *handlers.MCPFederationGateway, oauthService *mcp.OAuthService, mcpConnService *mcp.ConnectionService, containerdHandler *handlers.ContainerdHandler) *mcp.ToolGatewayService {
+func provideACPToolSource(log *slog.Logger, toolApproval *toolapproval.Service, eventHub *event.Hub) *agenttools.NativeToolSource {
+	return agenttools.NewNativeToolSource(log, nil, agenttools.NativeToolSourceOptions{
+		AllowAll:          true,
+		Approval:          toolApproval,
+		ApprovalPublisher: eventHub,
+	})
+}
+
+func injectACPToolProviders(source *agenttools.NativeToolSource, toolProviders []agenttools.ToolProvider) {
+	if source != nil {
+		source.SetProviders(acpToolProviders(toolProviders))
+	}
+}
+
+func provideToolGatewayService(log *slog.Logger, fedGateway *handlers.MCPFederationGateway, oauthService *mcp.OAuthService, mcpConnService *mcp.ConnectionService, containerdHandler *handlers.ContainerdHandler, nativeSource *agenttools.NativeToolSource, toolContexts *mcp.ToolSessionContextStore) *mcp.ToolGatewayService {
 	fedGateway.SetOAuthService(oauthService)
 	fedSource := mcpfederation.NewSource(log, fedGateway, mcpConnService)
-	svc := mcp.NewToolGatewayService(log, []mcp.ToolSource{fedSource})
+	svc := mcp.NewToolGatewayService(log, []mcp.ToolSource{nativeSource, fedSource})
 	containerdHandler.SetToolGatewayService(svc)
+	containerdHandler.SetToolSessionContextStore(toolContexts)
 	return svc
+}
+
+func acpToolProviders(providers []agenttools.ToolProvider) []agenttools.ToolProvider {
+	filtered := make([]agenttools.ToolProvider, 0, len(providers))
+	for _, provider := range providers {
+		if provider == nil {
+			continue
+		}
+		if _, ok := provider.(*agenttools.FederationProvider); ok {
+			continue
+		}
+		filtered = append(filtered, provider)
+	}
+	return filtered
 }
 
 func provideBackgroundManager(log *slog.Logger) *background.Manager {

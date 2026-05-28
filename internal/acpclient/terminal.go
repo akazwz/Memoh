@@ -7,6 +7,7 @@ import (
 	"io"
 	"strings"
 	"sync"
+	"time"
 	"unicode/utf8"
 
 	acp "github.com/coder/acp-go-sdk"
@@ -19,6 +20,7 @@ const (
 	defaultTerminalOutputLimit = 128 * 1024
 	maxTerminalOutputLimit     = 1024 * 1024
 	defaultTerminalTimeout     = int32(600)
+	terminalReleaseGrace       = 200 * time.Millisecond
 )
 
 type terminalManager struct {
@@ -29,6 +31,7 @@ type terminalManager struct {
 	timeout     int32
 	baseEnv     []string
 	virtualRoot bool
+	events      *toolEventEmitter
 
 	mu        sync.Mutex
 	nextID    int
@@ -38,17 +41,21 @@ type terminalManager struct {
 type terminal struct {
 	stream *bridge.ExecStream
 	limit  int
+	id     string
+	input  map[string]any
 
 	mu        sync.Mutex
 	output    string
 	truncated bool
 	exitCode  *int
 	signal    *string
+	reported  bool
 	done      chan struct{}
 	doneOnce  sync.Once
+	onDone    func(*terminal)
 }
 
-func newTerminalManager(ctx context.Context, client *bridge.Client, root, defaultCwd string, timeoutSeconds int32, baseEnv []string, virtualRoot bool) *terminalManager { //nolint:contextcheck // terminal streams must live for the ACP turn, not a single RPC callback.
+func newTerminalManager(ctx context.Context, client *bridge.Client, root, defaultCwd string, timeoutSeconds int32, baseEnv []string, virtualRoot bool, events *toolEventEmitter) *terminalManager { //nolint:contextcheck // terminal streams must live for the ACP turn, not a single RPC callback.
 	if timeoutSeconds <= 0 {
 		timeoutSeconds = defaultTerminalTimeout
 	}
@@ -63,6 +70,7 @@ func newTerminalManager(ctx context.Context, client *bridge.Client, root, defaul
 		timeout:     timeoutSeconds,
 		baseEnv:     append([]string(nil), baseEnv...),
 		virtualRoot: virtualRoot,
+		events:      events,
 		terminals:   map[string]*terminal{},
 	}
 }
@@ -80,6 +88,14 @@ func (m *terminalManager) CreateTerminal(_ context.Context, p acp.CreateTerminal
 	if strings.TrimSpace(command) == "" {
 		return acp.CreateTerminalResponse{}, errors.New("terminal command is required")
 	}
+	id := m.nextTerminalID()
+	input := map[string]any{
+		"command": command,
+	}
+	if p.Cwd != nil && strings.TrimSpace(*p.Cwd) != "" {
+		input["cwd"] = strings.TrimSpace(*p.Cwd)
+	}
+	m.emitToolCallStart("terminal-"+id, "exec", input)
 
 	limit := defaultTerminalOutputLimit
 	if p.OutputByteLimit != nil && *p.OutputByteLimit > 0 {
@@ -99,11 +115,11 @@ func (m *terminalManager) CreateTerminal(_ context.Context, p acp.CreateTerminal
 	}
 	stream, err := m.client.ExecStreamWithEnv(m.ctx, command, cwd, m.timeout, env) //nolint:contextcheck // use the ACP turn context so terminal output survives the create RPC.
 	if err != nil {
+		m.emitToolCallEnd("terminal-"+id, "exec", input, toolErrorResult(err), err)
 		return acp.CreateTerminalResponse{}, err
 	}
 
-	term := &terminal{stream: stream, limit: limit, done: make(chan struct{})}
-	id := m.nextTerminalID()
+	term := &terminal{stream: stream, limit: limit, id: "terminal-" + id, input: input, done: make(chan struct{}), onDone: m.emitTerminalEnd}
 	m.mu.Lock()
 	m.terminals[id] = term
 	m.mu.Unlock()
@@ -125,6 +141,7 @@ func (m *terminalManager) KillTerminal(_ context.Context, p acp.KillTerminalRequ
 		return acp.KillTerminalResponse{}, err
 	}
 	term.kill("killed")
+	m.emitTerminalEnd(term)
 	return acp.KillTerminalResponse{}, nil
 }
 
@@ -145,7 +162,10 @@ func (m *terminalManager) ReleaseTerminal(_ context.Context, p acp.ReleaseTermin
 	if err != nil {
 		return acp.ReleaseTerminalResponse{}, err
 	}
-	term.kill("released")
+	if !term.waitDone(terminalReleaseGrace) {
+		term.kill("released")
+	}
+	m.emitTerminalEnd(term)
 	return acp.ReleaseTerminalResponse{}, nil
 }
 
@@ -160,6 +180,7 @@ func (m *terminalManager) WaitForTerminalExit(ctx context.Context, p acp.WaitFor
 		return acp.WaitForTerminalExitResponse{}, ctx.Err()
 	}
 	code, signal := term.exit()
+	m.emitTerminalEnd(term)
 	return acp.WaitForTerminalExitResponse{ExitCode: code, Signal: signal}, nil
 }
 
@@ -173,7 +194,57 @@ func (m *terminalManager) killAll() {
 	m.mu.Unlock()
 	for _, term := range terms {
 		term.kill("closed")
+		m.emitTerminalEnd(term)
 	}
+}
+
+func (m *terminalManager) emitToolCallStart(id, name string, input map[string]any) {
+	if m == nil || m.events == nil {
+		return
+	}
+	m.events.emit(StreamEvent{
+		Type:       StreamEventToolCallStart,
+		ToolCallID: id,
+		ToolName:   name,
+		Input:      input,
+	})
+}
+
+func (m *terminalManager) emitToolCallEnd(id, name string, input map[string]any, result any, err error) {
+	if m == nil || m.events == nil {
+		return
+	}
+	event := StreamEvent{
+		Type:       StreamEventToolCallEnd,
+		ToolCallID: id,
+		ToolName:   name,
+		Input:      input,
+		Result:     result,
+	}
+	if err != nil {
+		event.Error = err.Error()
+	}
+	m.events.emit(event)
+}
+
+func (m *terminalManager) emitTerminalEnd(term *terminal) {
+	if m == nil || term == nil || !term.markReported() {
+		return
+	}
+	output, truncated, status := term.snapshot()
+	result := map[string]any{
+		"stdout":    output,
+		"truncated": truncated,
+	}
+	if status != nil {
+		if status.ExitCode != nil {
+			result["exit_code"] = *status.ExitCode
+		}
+		if status.Signal != nil {
+			result["signal"] = *status.Signal
+		}
+	}
+	m.emitToolCallEnd(term.id, "exec", term.input, result, nil)
 }
 
 func (m *terminalManager) nextTerminalID() string {
@@ -205,6 +276,11 @@ func (m *terminalManager) remove(id string) (*terminal, error) {
 }
 
 func (t *terminal) readLoop() {
+	defer func() {
+		if t.onDone != nil {
+			t.onDone(t)
+		}
+	}()
 	for {
 		output, err := t.stream.Recv()
 		if err != nil {
@@ -225,6 +301,28 @@ func (t *terminal) readLoop() {
 			t.finish(&code, nil)
 			return
 		}
+	}
+}
+
+func (t *terminal) waitDone(timeout time.Duration) bool {
+	if t == nil {
+		return true
+	}
+	if timeout <= 0 {
+		select {
+		case <-t.done:
+			return true
+		default:
+			return false
+		}
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case <-t.done:
+		return true
+	case <-timer.C:
+		return false
 	}
 }
 
@@ -255,6 +353,16 @@ func (t *terminal) exit() (*int, *string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return t.exitCode, t.signal
+}
+
+func (t *terminal) markReported() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.reported {
+		return false
+	}
+	t.reported = true
+	return true
 }
 
 func (t *terminal) kill(signal string) {

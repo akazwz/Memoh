@@ -297,8 +297,6 @@
       "transcribe_audio": "Transcribe",
       "generate_image": "Generate image",
       "spawn": "Spawn {count} subagents",
-      "acp_action": "Agent action",
-      "acp_plan": "Agent plan",
       "use_skill": "Use skill",
       "generic": "Tool",
       "approve": "Allow",

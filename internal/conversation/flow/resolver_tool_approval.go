@@ -9,8 +9,10 @@ import (
 
 	sdk "github.com/memohai/twilight-ai/sdk"
 
+	agentpkg "github.com/memohai/memoh/internal/agent"
 	"github.com/memohai/memoh/internal/conversation"
 	"github.com/memohai/memoh/internal/models"
+	sessionpkg "github.com/memohai/memoh/internal/session"
 	"github.com/memohai/memoh/internal/toolapproval"
 )
 
@@ -38,6 +40,11 @@ func (r *Resolver) RespondToolApproval(ctx context.Context, input ToolApprovalRe
 	})
 	if err != nil {
 		return err
+	}
+	if isACP, err := r.isACPToolApprovalSession(ctx, target.SessionID); err != nil {
+		return err
+	} else if isACP {
+		return r.respondACPToolApproval(ctx, target, input, eventCh)
 	}
 
 	var toolResult sdk.ToolResultPart
@@ -67,6 +74,54 @@ func (r *Resolver) RespondToolApproval(ctx context.Context, input ToolApprovalRe
 	}
 
 	return r.storeToolResultAndContinue(ctx, target, input, toolResult, eventCh)
+}
+
+func (r *Resolver) isACPToolApprovalSession(ctx context.Context, sessionID string) (bool, error) {
+	if r == nil || r.sessionService == nil {
+		return false, nil
+	}
+	sess, err := r.sessionService.Get(ctx, sessionID)
+	if err != nil {
+		return false, err
+	}
+	return sess.Type == sessionpkg.TypeACPAgent, nil
+}
+
+func (r *Resolver) respondACPToolApproval(ctx context.Context, target toolapproval.Request, input ToolApprovalResponseInput, eventCh chan<- WSStreamEvent) error {
+	switch strings.ToLower(strings.TrimSpace(input.Decision)) {
+	case "approve", "approved":
+		if _, err := r.toolApproval.Approve(ctx, target.ID, input.ActorChannelIdentityID, input.Reason); err != nil {
+			return err
+		}
+	case "reject", "rejected":
+		if _, err := r.toolApproval.Reject(ctx, target.ID, input.ActorChannelIdentityID, input.Reason); err != nil {
+			return err
+		}
+	default:
+		return fmt.Errorf("unknown tool approval decision %q", input.Decision)
+	}
+	return emitApprovalAck(ctx, eventCh)
+}
+
+func emitApprovalAck(ctx context.Context, eventCh chan<- WSStreamEvent) error {
+	if eventCh == nil {
+		return nil
+	}
+	for _, event := range []agentpkg.StreamEvent{
+		{Type: agentpkg.EventAgentStart},
+		{Type: agentpkg.EventAgentEnd},
+	} {
+		data, err := json.Marshal(event)
+		if err != nil {
+			return err
+		}
+		select {
+		case eventCh <- json.RawMessage(data):
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return nil
 }
 
 func (r *Resolver) executeApprovedTool(ctx context.Context, req toolapproval.Request, input ToolApprovalResponseInput) (sdk.ToolResultPart, error) {

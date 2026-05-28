@@ -34,6 +34,7 @@ const (
 	ContainerPrefix             = "workspace-"
 	LegacyContainerPrefix       = "mcp-"
 	DisplayRFBSocketName        = "display.rfb.sock"
+	ACPToolsProxyHTTPURL        = bridge.ACPToolsProxyHTTPURL
 
 	legacyGRPCPort = 9090
 )
@@ -222,16 +223,28 @@ func (m *Manager) WorkspaceInfo(ctx context.Context, botID string) (bridge.Works
 	if provider, ok := m.service.(bridge.WorkspaceInfoProvider); ok {
 		info, err := provider.WorkspaceInfo(ctx, botID)
 		if err == nil {
-			return info, nil
+			return withACPToolsEndpoint(info), nil
 		}
 		if !errors.Is(err, ctr.ErrNotSupported) && !ctr.IsNotFound(err) {
 			return bridge.WorkspaceInfo{}, err
 		}
 	}
-	return bridge.WorkspaceInfo{
+	info := bridge.WorkspaceInfo{
 		Backend:        bridge.WorkspaceBackendContainer,
 		DefaultWorkDir: config.DefaultDataMount,
-	}, nil
+	}
+	return withACPToolsEndpoint(info), nil
+}
+
+func withACPToolsEndpoint(info bridge.WorkspaceInfo) bridge.WorkspaceInfo {
+	if strings.TrimSpace(info.Backend) != bridge.WorkspaceBackendContainer {
+		return info
+	}
+	if strings.TrimSpace(info.ACPToolsHTTPURL) != "" {
+		return info
+	}
+	info.ACPToolsHTTPURL = ACPToolsProxyHTTPURL
+	return info
 }
 
 func (m *Manager) Init(ctx context.Context) error {

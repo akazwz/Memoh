@@ -107,9 +107,6 @@ func shouldGenerateSessionTitle(sess session.Session) bool {
 	}
 
 	agentID := metadataString(sess.Metadata, "acp_agent_id")
-	if agentID == "" {
-		agentID = metadataString(sess.Metadata, "agent_id")
-	}
 	normalized := acpprofile.NormalizeAgentID(agentID)
 	if normalized == "" {
 		return false

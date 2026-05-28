@@ -397,7 +397,7 @@ func toSession(row sqlc.BotSession) Session {
 }
 
 func validateACPMetadata(meta map[string]any) error {
-	if strings.TrimSpace(metadataString(meta, "acp_agent_id")) == "" && strings.TrimSpace(metadataString(meta, "agent_id")) == "" {
+	if strings.TrimSpace(metadataString(meta, "acp_agent_id")) == "" {
 		return ErrACPAgentIDRequired
 	}
 	if strings.TrimSpace(metadataString(meta, "project_path")) == "" {
@@ -408,9 +408,6 @@ func validateACPMetadata(meta map[string]any) error {
 
 func (s *Service) validateACPCreatePolicy(ctx context.Context, botID pgtype.UUID, meta map[string]any) error {
 	agentID := metadataString(meta, "acp_agent_id")
-	if agentID == "" {
-		agentID = metadataString(meta, "agent_id")
-	}
 	if _, ok := acpprofile.Lookup(agentID); !ok {
 		return fmt.Errorf("%w: %s", ErrACPUnknownAgent, agentID)
 	}

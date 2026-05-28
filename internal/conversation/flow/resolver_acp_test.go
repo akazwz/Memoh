@@ -166,12 +166,6 @@ func TestPersistACPRoundUsesDedicatedSessionMetadata(t *testing.T) {
 		acpclient.PromptResult{
 			Text:       "done",
 			StopReason: "end_turn",
-			ToolCalls: []acpclient.ToolSummary{{
-				ID:     "tool-1",
-				Title:  "Read main.go",
-				Status: "completed",
-				Kind:   "fs_read",
-			}},
 		},
 		nil,
 	)
@@ -182,15 +176,7 @@ func TestPersistACPRoundUsesDedicatedSessionMetadata(t *testing.T) {
 		t.Fatalf("persisted %d messages, want 2", len(messages.persisted))
 	}
 
-	userMeta := messages.persisted[0].Metadata
-	if _, ok := userMeta["source"]; ok {
-		t.Fatalf("user metadata must not use ACP source markers: %#v", userMeta)
-	}
-
 	assistantMeta := messages.persisted[1].Metadata
-	if _, ok := assistantMeta["source"]; ok {
-		t.Fatalf("assistant metadata must not use ACP source markers: %#v", assistantMeta)
-	}
 	if assistantMeta["acp_agent_id"] != "codex" {
 		t.Fatalf("acp_agent_id = %#v, want codex", assistantMeta["acp_agent_id"])
 	}
@@ -200,56 +186,101 @@ func TestPersistACPRoundUsesDedicatedSessionMetadata(t *testing.T) {
 	if assistantMeta["stop_reason"] != "end_turn" {
 		t.Fatalf("stop_reason = %#v, want end_turn", assistantMeta["stop_reason"])
 	}
-	if _, ok := assistantMeta["acp_actions"]; !ok {
-		t.Fatalf("expected acp_actions metadata, got %#v", assistantMeta)
+}
+
+func TestPersistACPRoundStoresACPEventsAsNativeToolMessages(t *testing.T) {
+	t.Parallel()
+
+	messages := &recordingMessageService{}
+	resolver := &Resolver{
+		messageService: messages,
+		logger:         slog.New(slog.DiscardHandler),
+	}
+
+	err := resolver.persistACPRound(
+		context.Background(),
+		conversation.ChatRequest{BotID: "bot-1", SessionID: "session-1", Query: "inspect"},
+		"codex",
+		"/data/app",
+		acpclient.PromptResult{
+			Events: []acpclient.StreamEvent{
+				{Type: acpclient.StreamEventTextDelta, Delta: "Before"},
+				{
+					Type:       acpclient.StreamEventToolCallStart,
+					ToolCallID: "read-1",
+					ToolName:   "read",
+					Input:      map[string]any{"path": "README.md"},
+				},
+				{
+					Type:       acpclient.StreamEventToolCallEnd,
+					ToolCallID: "read-1",
+					ToolName:   "read",
+					Result:     map[string]any{"ok": true},
+				},
+				{Type: acpclient.StreamEventTextDelta, Delta: "After"},
+			},
+			StopReason: "end_turn",
+		},
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("persistACPRound returned error: %v", err)
+	}
+	if len(messages.persisted) != 4 {
+		t.Fatalf("persisted %d messages, want user + assistant + tool + assistant", len(messages.persisted))
+	}
+	roles := []string{
+		messages.persisted[0].Role,
+		messages.persisted[1].Role,
+		messages.persisted[2].Role,
+		messages.persisted[3].Role,
+	}
+	if strings.Join(roles, ",") != "user,assistant,tool,assistant" {
+		t.Fatalf("persisted roles = %v", roles)
+	}
+
+	before := persistedModelMessage(t, messages.persisted[1].Content)
+	if got := before.TextContent(); got != "Before" {
+		t.Fatalf("first assistant text = %q, want Before", got)
+	}
+	calls := extractAssistantToolCallParts(before)
+	if len(calls) != 1 || calls[0].ToolCallID != "read-1" || calls[0].ToolName != "read" {
+		t.Fatalf("assistant tool calls = %#v, want read-1/read", calls)
+	}
+	tool := persistedModelMessage(t, messages.persisted[2].Content)
+	results := extractToolResultParts(tool)
+	if len(results) != 1 || results[0].ToolCallID != "read-1" || results[0].ToolName != "read" {
+		t.Fatalf("tool results = %#v, want read-1/read", results)
+	}
+	after := persistedModelMessage(t, messages.persisted[3].Content)
+	if got := after.TextContent(); got != "After" {
+		t.Fatalf("last assistant text = %q, want After", got)
 	}
 }
 
 func TestPersistACPRoundEmptyTextLeavesAssistantBlank(t *testing.T) {
 	t.Parallel()
 
-	// Backend must not inject any UI placeholder text; an empty assistant
-	// message is the source of truth and the web client renders an i18n
-	// placeholder based on the acp_actions / acp_plan metadata.
-	tests := []struct {
-		name   string
-		result acpclient.PromptResult
-	}{
-		{
-			name: "actions without text",
-			result: acpclient.PromptResult{
-				ToolCalls: []acpclient.ToolSummary{{ID: "tool-1", Status: "completed"}},
-			},
-		},
-		{
-			name:   "no visible output",
-			result: acpclient.PromptResult{},
-		},
+	messages := &recordingMessageService{}
+	resolver := &Resolver{
+		messageService: messages,
+		logger:         slog.New(slog.DiscardHandler),
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			messages := &recordingMessageService{}
-			resolver := &Resolver{
-				messageService: messages,
-				logger:         slog.New(slog.DiscardHandler),
-			}
-			if err := resolver.persistACPRound(
-				context.Background(),
-				conversation.ChatRequest{BotID: "bot-1", SessionID: "session-1", Query: "run"},
-				"codex",
-				"/data/app",
-				tt.result,
-				nil,
-			); err != nil {
-				t.Fatalf("persistACPRound() error = %v", err)
-			}
-			if len(messages.persisted) != 2 {
-				t.Fatalf("persisted %d messages, want 2", len(messages.persisted))
-			}
-			if got := persistedText(t, messages.persisted[1].Content); got != "" {
-				t.Fatalf("assistant text = %q, want empty (frontend renders placeholder)", got)
-			}
-		})
+	if err := resolver.persistACPRound(
+		context.Background(),
+		conversation.ChatRequest{BotID: "bot-1", SessionID: "session-1", Query: "run"},
+		"codex",
+		"/data/app",
+		acpclient.PromptResult{},
+		nil,
+	); err != nil {
+		t.Fatalf("persistACPRound() error = %v", err)
+	}
+	if len(messages.persisted) != 2 {
+		t.Fatalf("persisted %d messages, want 2", len(messages.persisted))
+	}
+	if got := persistedText(t, messages.persisted[1].Content); got != "" {
+		t.Fatalf("assistant text = %q, want empty", got)
 	}
 }
 
@@ -316,19 +347,76 @@ func TestStreamACPAgentWSFailurePersistsRoundAndSkipsMemory(t *testing.T) {
 	}
 }
 
+func TestStreamACPAgentWSSuccessStoresMemory(t *testing.T) {
+	t.Parallel()
+
+	messages := &recordingMessageService{}
+	memory := &storeRoundMemoryProvider{afterChat: make(chan memprovider.AfterChatRequest, 1)}
+	registry := memprovider.NewRegistry(slog.New(slog.DiscardHandler))
+	registry.Register(storeRoundMemoryProviderID, memory)
+	pool := &recordingACPPrompter{
+		result: acpclient.PromptResult{
+			Events: []acpclient.StreamEvent{{Type: acpclient.StreamEventTextDelta, Delta: "done"}},
+		},
+	}
+	resolver := &Resolver{
+		messageService:  messages,
+		memoryRegistry:  registry,
+		settingsService: settings.NewService(slog.New(slog.DiscardHandler), &storeRoundSettingsQueries{}, nil, nil),
+		acpPool:         pool,
+		sessionService: &fakeBackgroundSessionService{
+			getFn: func(_ context.Context, sessionID string) (session.Session, error) {
+				return session.Session{
+					ID:    sessionID,
+					BotID: storeRoundBotID,
+					Type:  session.TypeACPAgent,
+					Metadata: map[string]any{
+						"acp_agent_id": "codex",
+						"project_path": "/data/app",
+					},
+				}, nil
+			},
+		},
+		logger: slog.New(slog.DiscardHandler),
+	}
+
+	if err := resolver.streamACPAgentWS(
+		context.Background(),
+		conversation.ChatRequest{
+			BotID:     storeRoundBotID,
+			SessionID: "session-1",
+			Query:     "inspect",
+		},
+		make(chan WSStreamEvent, 8),
+		make(chan struct{}),
+	); err != nil {
+		t.Fatalf("streamACPAgentWS() error = %v", err)
+	}
+
+	select {
+	case got := <-memory.afterChat:
+		if len(got.Messages) != 2 {
+			t.Fatalf("memory messages = %#v, want user + assistant", got.Messages)
+		}
+		if got.Messages[0].Role != "user" || got.Messages[0].Content != "inspect" {
+			t.Fatalf("memory user message = %#v", got.Messages[0])
+		}
+		if got.Messages[1].Role != "assistant" || got.Messages[1].Content != "done" {
+			t.Fatalf("memory assistant message = %#v", got.Messages[1])
+		}
+	case <-time.After(time.Second):
+		t.Fatal("memory was not called for successful ACP stream")
+	}
+}
+
 func TestACPFailureResultPreservesPartialOutput(t *testing.T) {
 	t.Parallel()
 
 	partial := acpclient.PromptResult{
 		Text: "partial answer",
-		ToolCalls: []acpclient.ToolSummary{{
-			ID:     "tool-1",
-			Title:  "Inspect file",
-			Status: "running",
-		}},
 	}
 	got, delta := acpFailureResult(partial, errors.New("adapter crashed"))
-	if !strings.Contains(got.Text, "partial answer") || !strings.Contains(got.Text, "adapter crashed") || len(got.ToolCalls) != 1 {
+	if !strings.Contains(got.Text, "partial answer") || !strings.Contains(got.Text, "adapter crashed") {
 		t.Fatalf("acpFailureResult() = %#v, want partial output preserved", got)
 	}
 	if !strings.Contains(delta, "adapter crashed") {
@@ -347,42 +435,21 @@ func TestACPFailureResultPreservesPartialOutput(t *testing.T) {
 	}
 }
 
-func TestMapACPToolUpdateTerminalStatusEndsTool(t *testing.T) {
+func TestMapACPStandardToolCallEvent(t *testing.T) {
 	t.Parallel()
 
 	events := mapACPStreamEvent(acpclient.StreamEvent{
-		Type: acpclient.StreamEventToolUpdate,
-		Tool: acpclient.ToolSummary{
-			ID:     "tool-1",
-			Title:  "Read file",
-			Kind:   "read",
-			Status: "completed",
-		},
+		Type:       acpclient.StreamEventToolCallEnd,
+		ToolCallID: "read-1",
+		ToolName:   "read",
+		Input:      map[string]any{"path": "README.md"},
+		Result:     map[string]any{"ok": true},
 	})
 	if len(events) != 1 {
 		t.Fatalf("events len = %d, want 1", len(events))
 	}
-	if events[0].Type != agentpkg.EventToolCallEnd {
-		t.Fatalf("event type = %q, want %q", events[0].Type, agentpkg.EventToolCallEnd)
-	}
-	result, ok := events[0].Result.(map[string]any)
-	if !ok || result["status"] != "completed" {
-		t.Fatalf("event result = %#v, want completed status", events[0].Result)
-	}
-}
-
-func TestMapACPPlanDoesNotLeaveRunningTool(t *testing.T) {
-	t.Parallel()
-
-	events := mapACPStreamEvent(acpclient.StreamEvent{
-		Type: acpclient.StreamEventPlan,
-		Plan: []acpclient.PlanItem{{Content: "Inspect", Status: "pending"}},
-	})
-	if len(events) != 1 {
-		t.Fatalf("events len = %d, want 1", len(events))
-	}
-	if events[0].Type != agentpkg.EventToolCallEnd || events[0].ToolName != "acp_plan" {
-		t.Fatalf("event = %#v, want acp_plan tool end", events[0])
+	if events[0].Type != agentpkg.EventToolCallEnd || events[0].ToolName != "read" || events[0].ToolCallID != "read-1" {
+		t.Fatalf("event = %#v, want standard read tool end", events[0])
 	}
 }
 
@@ -542,9 +609,14 @@ func waitForSessionGets(t *testing.T, ch <-chan string, want int) {
 
 func persistedText(t *testing.T, content json.RawMessage) string {
 	t.Helper()
+	return persistedModelMessage(t, content).TextContent()
+}
+
+func persistedModelMessage(t *testing.T, content json.RawMessage) conversation.ModelMessage {
+	t.Helper()
 	var msg conversation.ModelMessage
 	if err := json.Unmarshal(content, &msg); err != nil {
 		t.Fatalf("decode persisted content: %v", err)
 	}
-	return msg.TextContent()
+	return msg
 }

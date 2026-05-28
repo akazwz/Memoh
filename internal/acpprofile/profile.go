@@ -125,13 +125,9 @@ func List() []PublicProfile {
 	return out
 }
 
-// Lookup returns the registered profile for id (case-insensitive). An empty
-// id resolves to AgentCodexID to preserve historical behaviour.
+// Lookup returns the registered profile for id (case-insensitive).
 func Lookup(id string) (Profile, bool) {
 	id = NormalizeAgentID(id)
-	if id == "" {
-		id = AgentCodexID
-	}
 	profile, ok := registry[id]
 	return profile, ok
 }
@@ -165,13 +161,13 @@ func MetadataAgentEnabledRaw(raw []byte, agentID string) bool {
 
 func ParseAgentSetup(metadata map[string]any, agentID string) AgentSetup {
 	agentID = NormalizeAgentID(agentID)
-	if agentID == "" {
-		agentID = AgentCodexID
-	}
 	setup := AgentSetup{
 		AgentID: agentID,
 		Mode:    setupModeAPIKey,
 		Managed: map[string]string{},
+	}
+	if agentID == "" {
+		return setup
 	}
 	acpConfig, ok := metadataRecord(metadata[MetadataKeyACP])
 	if !ok {
@@ -179,10 +175,6 @@ func ParseAgentSetup(metadata map[string]any, agentID string) AgentSetup {
 	}
 
 	if agents, ok := metadataRecord(acpConfig["agents"]); ok {
-		if enabled, ok := metadataBool(agents[agentID]); ok {
-			setup.Enabled = enabled
-			return setup
-		}
 		if agentConfig, ok := metadataRecord(agents[agentID]); ok {
 			if enabled, ok := metadataBool(agentConfig["enabled"]); ok {
 				setup.Enabled = enabled
@@ -197,35 +189,19 @@ func ParseAgentSetup(metadata map[string]any, agentID string) AgentSetup {
 					}
 				}
 			}
-			setup.Mode = normalizeSetupMode(setup.Mode, setup.Managed)
+			setup.Mode = normalizeSetupMode(setup.Mode)
 			return setup
 		}
 	}
 
-	for _, enabledAgentID := range metadataStringSlice(acpConfig["enabled_agents"]) {
-		if NormalizeAgentID(enabledAgentID) == agentID {
-			setup.Enabled = true
-			break
-		}
-	}
-	if agentID == AgentCodexID {
-		if enabled, ok := metadataBool(acpConfig["codex_enabled"]); ok {
-			setup.Enabled = enabled
-		}
-	}
 	return setup
 }
 
-func normalizeSetupMode(mode string, managed map[string]string) string {
+func normalizeSetupMode(mode string) string {
 	mode = NormalizeAgentID(mode)
 	switch mode {
 	case setupModeOAuth, setupModeSelf:
 		return mode
-	case "managed":
-		if NormalizeAgentID(managed["auth_type"]) == "provider_oauth" || NormalizeAgentID(managed["auth_type"]) == setupModeOAuth {
-			return setupModeOAuth
-		}
-		return setupModeAPIKey
 	case setupModeAPIKey, "":
 		return setupModeAPIKey
 	default:
@@ -420,22 +396,5 @@ func metadataBool(value any) (bool, bool) {
 		}
 	default:
 		return false, false
-	}
-}
-
-func metadataStringSlice(value any) []string {
-	switch v := value.(type) {
-	case []string:
-		return append([]string(nil), v...)
-	case []any:
-		out := make([]string, 0, len(v))
-		for _, item := range v {
-			if s, ok := item.(string); ok && strings.TrimSpace(s) != "" {
-				out = append(out, s)
-			}
-		}
-		return out
-	default:
-		return nil
 	}
 }

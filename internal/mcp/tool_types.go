@@ -13,10 +13,15 @@ import (
 type ToolSessionContext struct {
 	BotID             string
 	ChatID            string
+	SessionID         string
+	StreamID          string
+	SessionType       string
+	RouteID           string
 	ChannelIdentityID string
 	SessionToken      string `json:"-"`
 	CurrentPlatform   string
 	ReplyTarget       string
+	ConversationType  string
 	IsSubagent        bool
 }
 
@@ -27,9 +32,9 @@ type ToolDescriptor struct {
 	InputSchema map[string]any `json:"inputSchema"`
 }
 
-// ToolSource represents external tool sources (federation/connectors).
-// Built-in tools are no longer managed through this interface — they are
-// loaded directly via agent ToolProviders.
+// ToolSource represents a tool source surfaced through the MCP gateway.
+// Implementations may wrap federated MCP connections or selected native Memoh
+// ToolProviders.
 type ToolSource interface {
 	ListTools(ctx context.Context, session ToolSessionContext) ([]ToolDescriptor, error)
 	CallTool(ctx context.Context, session ToolSessionContext, toolName string, arguments map[string]any) (map[string]any, error)

@@ -370,34 +370,6 @@ export function getToolDisplay(block: ToolCallBlock): ToolDisplay {
         detail: ToolCallDetailSpawn,
       }
     }
-    case 'acp_action': {
-      const output = structured(block)
-      const title = pickString(input, 'title') || pickString(output, 'title')
-      const kind = pickString(input, 'kind') || pickString(output, 'kind')
-      const status = pickString(output, 'status')
-      const target = title || kind || status
-      return {
-        icon: Wrench,
-        actionKey: 'acp_action',
-        target: truncate(target, 80),
-        fullTarget: target,
-        expandable: true,
-      }
-    }
-    case 'acp_plan': {
-      const output = structured(block)
-      const plan = Array.isArray(output.plan) ? output.plan as unknown[] : []
-      const first = asObject(plan[0])
-      const target = pickString(first, 'content')
-      return {
-        icon: ListChecks,
-        actionKey: 'acp_plan',
-        actionParams: { count: plan.length },
-        target: truncate(target, 80),
-        fullTarget: target,
-        expandable: true,
-      }
-    }
     case 'use_skill':
       return {
         icon: Sparkles,

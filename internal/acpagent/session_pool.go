@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"github.com/memohai/memoh/internal/acpclient"
 	"github.com/memohai/memoh/internal/acpprofile"
 	"github.com/memohai/memoh/internal/bots"
+	"github.com/memohai/memoh/internal/mcp"
 	"github.com/memohai/memoh/internal/session"
 	"github.com/memohai/memoh/internal/workspace/bridge"
 )
@@ -19,11 +21,13 @@ import (
 const idleTimeout = 30 * time.Minute
 
 type SessionPool struct {
-	logger  *slog.Logger
-	runner  sessionRunner
-	bots    botGetter
-	store   sessionGetter
-	timeout time.Duration
+	logger   *slog.Logger
+	runner   sessionRunner
+	bots     botGetter
+	store    sessionGetter
+	tools    *mcp.ToolGatewayService
+	contexts *mcp.ToolSessionContextStore
+	timeout  time.Duration
 
 	mu       sync.RWMutex
 	sessions map[string]*pooledSession
@@ -53,12 +57,22 @@ type pooledSession struct {
 }
 
 type PromptInput struct {
-	BotID       string
-	SessionID   string
-	AgentID     string
-	ProjectPath string
-	Prompt      string
-	Sink        acpclient.EventSink
+	BotID             string
+	ChatID            string
+	SessionID         string
+	StreamID          string
+	SessionType       string
+	RouteID           string
+	AgentID           string
+	ProjectPath       string
+	Prompt            string
+	ChannelIdentityID string
+	SessionToken      string //nolint:gosec // runtime session credential, not a hardcoded secret.
+	CurrentPlatform   string
+	ReplyTarget       string
+	ConversationType  string
+	ToolHTTPURL       string
+	Sink              acpclient.EventSink
 }
 
 // RuntimeStatus describes the live state of a pooled ACP session as exposed
@@ -91,6 +105,18 @@ func NewSessionPool(log *slog.Logger, runner *acpclient.Runner, botService *bots
 		sessionService = sessionServices[0]
 	}
 	return newSessionPool(log, runner, botService, sessionService)
+}
+
+func (p *SessionPool) SetToolGateway(gateway *mcp.ToolGatewayService) {
+	if p != nil {
+		p.tools = gateway
+	}
+}
+
+func (p *SessionPool) SetToolSessionContextStore(store *mcp.ToolSessionContextStore) {
+	if p != nil {
+		p.contexts = store
+	}
 }
 
 func newSessionPool(log *slog.Logger, runner sessionRunner, botService botGetter, sessionServices ...sessionGetter) *SessionPool {
@@ -160,7 +186,15 @@ func (p *SessionPool) Prompt(ctx context.Context, input PromptInput) (acpclient.
 		return acpclient.PromptResult{}, err
 	}
 
-	result, err := sess.Prompt(ctx, input.Prompt, input.Sink)
+	toolSink := newPromptToolEventSink(input.Sink)
+	unregisterToolSink := p.registerToolEventSink(input, toolSink)
+	defer unregisterToolSink()
+
+	result, err := sess.Prompt(ctx, input.Prompt, toolSink)
+	orderedEvents := toolSink.Events()
+	if len(orderedEvents) > 0 {
+		result.Events = orderedEvents
+	}
 	if err != nil {
 		// Prompt failures usually indicate the ACP process is in a bad state
 		// (transport hang, agent crash); drop the underlying session so the
@@ -240,9 +274,8 @@ func (p *SessionPool) resolveSessionMetadata(ctx context.Context, input PromptIn
 	if input.BotID == "" {
 		input.BotID = sess.BotID
 	}
+	input.SessionType = sess.Type
 	if agentID := metadataString(sess.Metadata, "acp_agent_id"); agentID != "" {
-		input.AgentID = agentID
-	} else if agentID := metadataString(sess.Metadata, "agent_id"); agentID != "" {
 		input.AgentID = agentID
 	}
 	if projectPath := metadataString(sess.Metadata, "project_path"); projectPath != "" {
@@ -350,6 +383,7 @@ func (p *SessionPool) CloseSession(sessionID string) error {
 	state := p.sessions[sessionID]
 	delete(p.sessions, sessionID)
 	p.mu.Unlock()
+	p.clearToolSessionContext(sessionID)
 	if state != nil && state.startCancel != nil {
 		state.startCancel()
 	}
@@ -382,6 +416,9 @@ func (p *SessionPool) CloseAll() {
 			}
 		}
 	}
+	for id := range states {
+		p.clearToolSessionContext(id)
+	}
 }
 
 func (p *SessionPool) dropSession(sessionID string, sess *acpclient.Session) {
@@ -397,6 +434,9 @@ func (p *SessionPool) dropSession(sessionID string, sess *acpclient.Session) {
 		removedState = state
 	}
 	p.mu.Unlock()
+	if removedState != nil {
+		p.clearToolSessionContext(sessionID)
+	}
 	if removedState != nil && removedState.startCancel != nil {
 		removedState.startCancel()
 	}
@@ -437,6 +477,7 @@ func (p *SessionPool) reapIdle(now time.Time) int {
 	p.mu.Unlock()
 
 	for _, item := range stale {
+		p.clearToolSessionContext(item.id)
 		if item.session != nil {
 			if err := item.session.Close(); err != nil {
 				p.logger.Warn("failed to close idle ACP session", slog.Any("error", err), slog.String("session_id", item.id))
@@ -454,6 +495,8 @@ func (p *SessionPool) getOrStart(ctx context.Context, input PromptInput) (*acpcl
 		agentID = acpprofile.AgentCodexID
 	}
 	projectPath := strings.TrimSpace(input.ProjectPath)
+	toolSession := toolSessionContext(input, sessionID)
+	p.storeToolSessionContext(toolSession)
 
 	p.mu.RLock()
 	existing := p.sessions[sessionID]
@@ -516,16 +559,25 @@ func (p *SessionPool) getOrStart(ctx context.Context, input PromptInput) (*acpcl
 		}
 	}
 
+	toolHTTPURL, err := p.resolveToolHTTPURL(startCtx, input, workspaceInfo)
+	if err != nil {
+		p.dropSession(sessionID, nil)
+		return nil, err
+	}
+
 	sess, err := p.runner.StartSession(startCtx, acpclient.StartRequest{
-		AgentID:      agentID,
-		BotID:        input.BotID,
-		ProjectPath:  projectPath,
-		Command:      profile.Command,
-		Args:         profile.Args,
-		LocalCommand: profile.LocalCommand,
-		LocalArgs:    profile.LocalArgs,
-		SetupMode:    mode,
-		Timeout:      0,
+		AgentID:         agentID,
+		BotID:           input.BotID,
+		ProjectPath:     projectPath,
+		Command:         profile.Command,
+		Args:            profile.Args,
+		LocalCommand:    profile.LocalCommand,
+		LocalArgs:       profile.LocalArgs,
+		SetupMode:       mode,
+		Timeout:         0,
+		ToolHTTPURL:     toolHTTPURL,
+		ToolHTTPHandler: p.toolHTTPHandler(toolSession),
+		ToolSession:     toolSession,
 	}, input.Sink)
 	if err != nil {
 		p.dropSession(sessionID, nil)
@@ -549,6 +601,152 @@ func (p *SessionPool) getOrStart(ctx context.Context, input PromptInput) (*acpcl
 	}
 	p.mu.Unlock()
 	return sess, nil
+}
+
+func toolSessionContext(input PromptInput, sessionID string) acpclient.ToolSessionContext {
+	return acpclient.ToolSessionContext{
+		BotID:             input.BotID,
+		ChatID:            firstNonEmpty(input.ChatID, input.BotID),
+		SessionID:         strings.TrimSpace(sessionID),
+		StreamID:          strings.TrimSpace(input.StreamID),
+		SessionType:       firstNonEmpty(input.SessionType, session.TypeACPAgent),
+		RouteID:           input.RouteID,
+		ChannelIdentityID: input.ChannelIdentityID,
+		SessionToken:      input.SessionToken,
+		CurrentPlatform:   input.CurrentPlatform,
+		ReplyTarget:       input.ReplyTarget,
+		ConversationType:  input.ConversationType,
+		IsSubagent:        false,
+	}
+}
+
+func (p *SessionPool) storeToolSessionContext(session acpclient.ToolSessionContext) {
+	if p == nil || p.contexts == nil {
+		return
+	}
+	p.contexts.Put(session)
+}
+
+func (p *SessionPool) clearToolSessionContext(sessionID string) {
+	if p == nil || p.contexts == nil {
+		return
+	}
+	p.contexts.CloseSession(sessionID)
+}
+
+func (p *SessionPool) registerToolEventSink(input PromptInput, sink *promptToolEventSink) func() {
+	if p == nil || p.contexts == nil || sink == nil {
+		return func() {}
+	}
+	return p.contexts.RegisterToolEventSink(acpclient.ToolSessionContext{
+		BotID:     input.BotID,
+		SessionID: input.SessionID,
+		StreamID:  input.StreamID,
+	}, sink.EmitToolStreamEvent)
+}
+
+func (p *SessionPool) resolveToolHTTPURL(_ context.Context, input PromptInput, workspaceInfo bridge.WorkspaceInfo) (string, error) {
+	if p == nil || p.tools == nil {
+		return "", nil
+	}
+	backend := strings.TrimSpace(workspaceInfo.Backend)
+	if backend == bridge.WorkspaceBackendLocal {
+		if raw := strings.TrimSpace(input.ToolHTTPURL); raw != "" {
+			return raw, nil
+		}
+		return "", nil
+	}
+	if backend == "" || backend == bridge.WorkspaceBackendContainer {
+		if raw := strings.TrimSpace(workspaceInfo.ACPToolsHTTPURL); raw != "" {
+			return raw, nil
+		}
+		return "", nil
+	}
+	if raw := strings.TrimSpace(input.ToolHTTPURL); raw != "" {
+		return raw, nil
+	}
+	return "", nil
+}
+
+func (p *SessionPool) toolHTTPHandler(trusted acpclient.ToolSessionContext) http.Handler {
+	if p == nil || p.tools == nil {
+		return nil
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		session := trustedToolSessionContext(req, trusted)
+		mcp.ServeToolMCPHTTP(w, req, p.logger, p.tools, p.contexts, session)
+	})
+}
+
+func trustedToolSessionContext(req *http.Request, trusted acpclient.ToolSessionContext) mcp.ToolSessionContext {
+	session := mcp.ToolSessionContextFromHTTP(req, trusted.BotID)
+	force := func(dst *string, value string) {
+		if value := strings.TrimSpace(value); value != "" {
+			*dst = value
+		}
+	}
+	force(&session.BotID, trusted.BotID)
+	force(&session.ChatID, trusted.ChatID)
+	force(&session.SessionID, trusted.SessionID)
+	force(&session.StreamID, trusted.StreamID)
+	force(&session.SessionType, trusted.SessionType)
+	force(&session.RouteID, trusted.RouteID)
+	force(&session.ChannelIdentityID, trusted.ChannelIdentityID)
+	force(&session.SessionToken, trusted.SessionToken)
+	force(&session.CurrentPlatform, trusted.CurrentPlatform)
+	force(&session.ReplyTarget, trusted.ReplyTarget)
+	force(&session.ConversationType, trusted.ConversationType)
+	session.IsSubagent = trusted.IsSubagent
+	return session
+}
+
+type promptToolEventSink struct {
+	mu     sync.Mutex
+	next   acpclient.EventSink
+	events []acpclient.StreamEvent
+}
+
+func newPromptToolEventSink(next acpclient.EventSink) *promptToolEventSink {
+	return &promptToolEventSink{next: next}
+}
+
+func (s *promptToolEventSink) EmitACPEvent(event acpclient.StreamEvent) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.events = append(s.events, event)
+	s.mu.Unlock()
+	if s.next != nil {
+		s.next.EmitACPEvent(event)
+	}
+}
+
+func (s *promptToolEventSink) EmitToolStreamEvent(event mcp.ToolStreamEvent) {
+	if s == nil {
+		return
+	}
+	typ := acpclient.StreamEventType(strings.TrimSpace(event.Type))
+	switch typ {
+	case acpclient.StreamEventToolCallStart, acpclient.StreamEventToolCallEnd:
+		s.EmitACPEvent(acpclient.StreamEvent{
+			Type:       typ,
+			ToolCallID: event.ToolCallID,
+			ToolName:   event.ToolName,
+			Input:      event.Input,
+			Result:     event.Result,
+			Error:      event.Error,
+		})
+	}
+}
+
+func (s *promptToolEventSink) Events() []acpclient.StreamEvent {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]acpclient.StreamEvent(nil), s.events...)
 }
 
 func validateManagedFields(profile acpprofile.Profile, values map[string]string, mode acpclient.SetupMode) error {
@@ -580,6 +778,15 @@ func metadataString(metadata map[string]any, key string) string {
 	}
 	value, _ := metadata[key].(string)
 	return strings.TrimSpace(value)
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
 }
 
 func (p *SessionPool) setStatus(sessionID, status string) {

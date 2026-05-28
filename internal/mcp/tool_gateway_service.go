@@ -18,9 +18,8 @@ type cachedToolRegistry struct {
 	registry  *ToolRegistry
 }
 
-// ToolGatewayService federates tools from external MCP sources (federation).
-// Built-in tools are no longer managed here — they are loaded directly
-// via agent ToolProviders.
+// ToolGatewayService federates tools from gateway sources, including external
+// MCP connections and selected native Memoh tools exposed to ACP runtimes.
 type ToolGatewayService struct {
 	logger   *slog.Logger
 	sources  []ToolSource
@@ -45,21 +44,6 @@ func NewToolGatewayService(log *slog.Logger, sources []ToolSource) *ToolGatewayS
 		sources:  filteredSources,
 		cacheTTL: defaultToolRegistryCacheTTL,
 		cache:    map[string]cachedToolRegistry{},
-	}
-}
-
-func (*ToolGatewayService) InitializeResult() map[string]any {
-	return map[string]any{
-		"protocolVersion": "2025-06-18",
-		"capabilities": map[string]any{
-			"tools": map[string]any{
-				"listChanged": false,
-			},
-		},
-		"serverInfo": map[string]any{
-			"name":    "memoh-tools-gateway",
-			"version": "1.0.0",
-		},
 	}
 }
 
@@ -115,9 +99,10 @@ func (s *ToolGatewayService) getRegistry(ctx context.Context, session ToolSessio
 	if botID == "" {
 		return nil, errors.New("bot id is required")
 	}
+	cacheKey := toolRegistryCacheKey(session)
 	if !force {
 		s.mu.Lock()
-		cached, ok := s.cache[botID]
+		cached, ok := s.cache[cacheKey]
 		if ok && time.Now().Before(cached.expiresAt) && cached.registry != nil {
 			s.mu.Unlock()
 			return cached.registry, nil
@@ -140,10 +125,24 @@ func (s *ToolGatewayService) getRegistry(ctx context.Context, session ToolSessio
 	}
 
 	s.mu.Lock()
-	s.cache[botID] = cachedToolRegistry{
+	s.cache[cacheKey] = cachedToolRegistry{
 		expiresAt: time.Now().Add(s.cacheTTL),
 		registry:  registry,
 	}
 	s.mu.Unlock()
 	return registry, nil
+}
+
+func toolRegistryCacheKey(session ToolSessionContext) string {
+	parts := []string{
+		strings.TrimSpace(session.BotID),
+		strings.TrimSpace(session.SessionType),
+		strings.TrimSpace(session.ChannelIdentityID),
+	}
+	if session.IsSubagent {
+		parts = append(parts, "subagent")
+	} else {
+		parts = append(parts, "agent")
+	}
+	return strings.Join(parts, "\x00")
 }

@@ -67,7 +67,9 @@ func main() {
 	// Container-native tools take priority since toolkit is appended at the end.
 	_ = os.Setenv("PATH", os.Getenv("PATH")+":/opt/memoh/toolkit/bin")
 
+	reverseHTTP := bridgesvc.NewReverseHTTPBroker()
 	startDisplaySupervisor(ctx)
+	startACPToolsProxy(ctx, reverseHTTP)
 
 	// PID 1 zombie reaping: when bridge runs as PID 1 inside a container,
 	// orphaned child processes become zombies unless reaped.
@@ -121,6 +123,7 @@ func main() {
 		DefaultWorkDir:    bridgesvc.DefaultWorkDir,
 		DataMount:         bridgesvc.DefaultWorkDir,
 		AllowHostAbsolute: true,
+		ReverseHTTP:       reverseHTTP,
 	}))
 	reflection.Register(srv)
 

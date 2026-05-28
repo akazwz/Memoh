@@ -40,6 +40,15 @@ type legacyRouteTestService struct {
 	setupNetworkErrs            []error
 }
 
+type workspaceInfoProviderTestService struct {
+	legacyRouteTestService
+	info bridge.WorkspaceInfo
+}
+
+func (s *workspaceInfoProviderTestService) WorkspaceInfo(context.Context, string) (bridge.WorkspaceInfo, error) {
+	return s.info, nil
+}
+
 func (s *legacyRouteTestService) PullImage(_ context.Context, ref string, _ *ctr.PullImageOptions) (ctr.ImageInfo, error) {
 	s.pullCalls++
 	s.pullRefs = append(s.pullRefs, ref)
@@ -238,6 +247,42 @@ func TestStartWithImageClearsLegacyRouteForBridgeContainer(t *testing.T) {
 	}
 	if svc.createCalls != 1 || svc.startCalls != 1 {
 		t.Fatalf("expected create/start once, got create=%d start=%d", svc.createCalls, svc.startCalls)
+	}
+}
+
+func TestWorkspaceInfoAddsACPToolsEndpointForProviderContainer(t *testing.T) {
+	svc := &workspaceInfoProviderTestService{
+		info: bridge.WorkspaceInfo{
+			Backend:        bridge.WorkspaceBackendContainer,
+			DefaultWorkDir: "/data",
+		},
+	}
+	m := newLegacyRouteTestManager(t, svc, config.WorkspaceConfig{DataRoot: t.TempDir()})
+
+	info, err := m.WorkspaceInfo(context.Background(), "bot-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.ACPToolsHTTPURL != ACPToolsProxyHTTPURL {
+		t.Fatalf("ACPToolsHTTPURL = %q", info.ACPToolsHTTPURL)
+	}
+}
+
+func TestWorkspaceInfoDoesNotAddACPToolsEndpointForLocalProvider(t *testing.T) {
+	svc := &workspaceInfoProviderTestService{
+		info: bridge.WorkspaceInfo{
+			Backend:        bridge.WorkspaceBackendLocal,
+			DefaultWorkDir: "/tmp/workspace",
+		},
+	}
+	m := newLegacyRouteTestManager(t, svc, config.WorkspaceConfig{DataRoot: t.TempDir()})
+
+	info, err := m.WorkspaceInfo(context.Background(), "bot-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.ACPToolsHTTPURL != "" {
+		t.Fatalf("local workspace should not receive ACP tools endpoint: %#v", info)
 	}
 }
 

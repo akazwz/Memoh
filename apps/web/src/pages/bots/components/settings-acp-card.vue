@@ -239,7 +239,6 @@ function visibleManagedFields(profile: AcpprofilePublicProfile): AcpprofileManag
     if (id === 'provider_id') return false
     if (isCodexProfile(profile)) {
       if (mode === 'oauth') return false
-      if (mode === 'api_key') return id !== 'auth_type'
     }
     return true
   })

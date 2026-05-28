@@ -711,7 +711,7 @@ func approvalResultMetadata(req toolapproval.Request) map[string]any {
 
 func isInteractiveApprovalSession(sessionType string) bool {
 	switch strings.ToLower(strings.TrimSpace(sessionType)) {
-	case "", "chat":
+	case "", "chat", "acp_agent":
 		return true
 	default:
 		return false

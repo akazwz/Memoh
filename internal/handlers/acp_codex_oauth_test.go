@@ -39,7 +39,7 @@ func TestParseCodexOAuthAuthRequiresDistinctIDToken(t *testing.T) {
 		t.Fatalf("account id = %q, want account-123", valid.AccountID)
 	}
 
-	legacyBad := parseCodexOAuthAuth(`{
+	invalidSameToken := parseCodexOAuthAuth(`{
   "auth_mode": "chatgpt",
   "tokens": {
     "id_token": "same.jwt.token",
@@ -48,7 +48,7 @@ func TestParseCodexOAuthAuthRequiresDistinctIDToken(t *testing.T) {
     "account_id": "account-123"
   }
 }`)
-	if legacyBad.Valid {
-		t.Fatalf("legacy auth.json with id_token equal to access_token should not be accepted")
+	if invalidSameToken.Valid {
+		t.Fatalf("auth.json with id_token equal to access_token should not be accepted")
 	}
 }

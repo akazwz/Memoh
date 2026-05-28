@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -21,6 +22,7 @@ import (
 	"github.com/memohai/memoh/internal/acpprofile"
 	"github.com/memohai/memoh/internal/bots"
 	"github.com/memohai/memoh/internal/config"
+	"github.com/memohai/memoh/internal/mcp"
 	sessionpkg "github.com/memohai/memoh/internal/session"
 	"github.com/memohai/memoh/internal/workspace/bridge"
 	pb "github.com/memohai/memoh/internal/workspace/bridgepb"
@@ -48,15 +50,19 @@ func TestSessionPoolKeyedBySessionIDReuseAndClose(t *testing.T) {
 			DefaultWorkDir: root,
 		},
 	})
-	pool := newSessionPool(nil, runner, fakeBotGetter{bot: enabledACPBot("bot-1", "managed", nil)})
+	pool := newSessionPool(nil, runner, fakeBotGetter{bot: enabledACPBot("bot-1", "api_key", nil)})
 	pool.timeout = time.Hour
+	contexts := mcp.NewToolSessionContextStore()
+	pool.SetToolSessionContextStore(contexts)
 
 	input := PromptInput{
-		BotID:       "bot-1",
-		SessionID:   "session-1",
-		AgentID:     acpprofile.AgentCodexID,
-		ProjectPath: "/data/project",
-		Prompt:      "first prompt",
+		BotID:           "bot-1",
+		SessionID:       "session-1",
+		StreamID:        "stream-1",
+		AgentID:         acpprofile.AgentCodexID,
+		ProjectPath:     "/data/project",
+		Prompt:          "first prompt",
+		CurrentPlatform: "web",
 	}
 	result, err := pool.Prompt(context.Background(), input)
 	if err != nil {
@@ -68,6 +74,10 @@ func TestSessionPoolKeyedBySessionIDReuseAndClose(t *testing.T) {
 	firstSession := pool.sessions["session-1"].session
 	if firstSession == nil {
 		t.Fatalf("session was not stored")
+	}
+	merged := contexts.Merge(mcp.ToolSessionContext{BotID: "bot-1", SessionID: "session-1"})
+	if merged.StreamID != "stream-1" || merged.CurrentPlatform != "web" {
+		t.Fatalf("stored tool session = %#v", merged)
 	}
 
 	input.Prompt = "second prompt"
@@ -97,6 +107,10 @@ func TestSessionPoolKeyedBySessionIDReuseAndClose(t *testing.T) {
 	if _, ok := pool.sessions["session-1"]; ok {
 		t.Fatalf("CloseSession did not remove the pooled session")
 	}
+	merged = contexts.Merge(mcp.ToolSessionContext{BotID: "bot-1", SessionID: "session-1"})
+	if merged.StreamID != "" || merged.CurrentPlatform != "" {
+		t.Fatalf("CloseSession did not clear stored tool session: %#v", merged)
+	}
 }
 
 func TestSessionPoolEnsureStartsRuntimeAndReportsModels(t *testing.T) {
@@ -121,7 +135,7 @@ func TestSessionPoolEnsureStartsRuntimeAndReportsModels(t *testing.T) {
 			DefaultWorkDir: root,
 		},
 	})
-	pool := newSessionPool(nil, runner, fakeBotGetter{bot: enabledACPBot("bot-1", "managed", nil)})
+	pool := newSessionPool(nil, runner, fakeBotGetter{bot: enabledACPBot("bot-1", "api_key", nil)})
 
 	status, err := pool.Ensure(context.Background(), PromptInput{
 		BotID:       "bot-1",
@@ -165,7 +179,7 @@ func TestSessionPoolSetModelUpdatesRuntimeModel(t *testing.T) {
 			DefaultWorkDir: root,
 		},
 	})
-	pool := newSessionPool(nil, runner, fakeBotGetter{bot: enabledACPBot("bot-1", "managed", nil)})
+	pool := newSessionPool(nil, runner, fakeBotGetter{bot: enabledACPBot("bot-1", "api_key", nil)})
 
 	status, err := pool.SetModel(context.Background(), PromptInput{
 		BotID:       "bot-1",
@@ -195,7 +209,7 @@ func TestSessionPoolRuntimeStatusReportsActiveDuringColdStart(t *testing.T) {
 	pool := newSessionPool(
 		nil,
 		runner,
-		fakeBotGetter{bot: enabledACPBot("bot-1", "managed", map[string]any{"api_key": "sk-test"})},
+		fakeBotGetter{bot: enabledACPBot("bot-1", "api_key", map[string]any{"api_key": "sk-test"})},
 	)
 
 	errCh := make(chan error, 1)
@@ -243,7 +257,7 @@ func TestSessionPoolCloseDuringColdStartPreventsReinsert(t *testing.T) {
 	pool := newSessionPool(
 		nil,
 		runner,
-		fakeBotGetter{bot: enabledACPBot("bot-1", "managed", map[string]any{"api_key": "sk-test"})},
+		fakeBotGetter{bot: enabledACPBot("bot-1", "api_key", map[string]any{"api_key": "sk-test"})},
 	)
 
 	type startResult struct {
@@ -300,7 +314,7 @@ func TestSessionPoolCloseDuringColdStartCancelsStartup(t *testing.T) {
 	pool := newSessionPool(
 		nil,
 		runner,
-		fakeBotGetter{bot: enabledACPBot("bot-1", "managed", map[string]any{"api_key": "sk-test"})},
+		fakeBotGetter{bot: enabledACPBot("bot-1", "api_key", map[string]any{"api_key": "sk-test"})},
 	)
 
 	type startResult struct {
@@ -400,7 +414,7 @@ func TestSessionPoolSerializesColdStartForSameSessionID(t *testing.T) {
 			DefaultWorkDir: root,
 		},
 	})
-	pool := newSessionPool(nil, runner, fakeBotGetter{bot: enabledACPBot("bot-1", "managed", nil)})
+	pool := newSessionPool(nil, runner, fakeBotGetter{bot: enabledACPBot("bot-1", "api_key", nil)})
 
 	var wg sync.WaitGroup
 	errs := make(chan error, 2)
@@ -451,7 +465,7 @@ func TestSessionPoolSetupModeResolution(t *testing.T) {
 	}
 
 	apiKeyRunner := &recordingRunner{
-		info:     bridge.WorkspaceInfo{Backend: bridge.WorkspaceBackendContainer, DefaultWorkDir: "/data"},
+		info:     bridge.WorkspaceInfo{Backend: bridge.WorkspaceBackendContainer, DefaultWorkDir: "/data", ACPToolsHTTPURL: "http://127.0.0.1:18732/mcp"},
 		startErr: errors.New("started"),
 	}
 	apiKeyPool := newSessionPool(nil, apiKeyRunner, fakeBotGetter{bot: enabledACPBot("bot-1", "api_key", map[string]any{"api_key": "sk-test", "base_url": "https://proxy.example.com/v1"})})
@@ -541,13 +555,13 @@ func TestSessionPoolSetupModeResolution(t *testing.T) {
 
 func TestSessionPoolUsesSessionMetadataAsRuntimeTruth(t *testing.T) {
 	runner := &recordingRunner{
-		info:     bridge.WorkspaceInfo{Backend: bridge.WorkspaceBackendContainer, DefaultWorkDir: "/data"},
+		info:     bridge.WorkspaceInfo{Backend: bridge.WorkspaceBackendContainer, DefaultWorkDir: "/data", ACPToolsHTTPURL: "http://127.0.0.1:18732/mcp"},
 		startErr: errors.New("started"),
 	}
 	pool := newSessionPool(
 		nil,
 		runner,
-		fakeBotGetter{bot: enabledACPBot("bot-1", "managed", map[string]any{"api_key": "sk-test"})},
+		fakeBotGetter{bot: enabledACPBot("bot-1", "api_key", map[string]any{"api_key": "sk-test"})},
 		fakeSessionGetter{session: sessionpkg.Session{
 			ID:    "session-1",
 			BotID: "bot-1",
@@ -574,6 +588,136 @@ func TestSessionPoolUsesSessionMetadataAsRuntimeTruth(t *testing.T) {
 	}
 	if runner.req.ProjectPath != "/data/from-session" {
 		t.Fatalf("runner project_path = %q, want session metadata project path", runner.req.ProjectPath)
+	}
+}
+
+func TestSessionPoolPassesToolHTTPURLAndSessionContext(t *testing.T) {
+	runner := &recordingRunner{
+		info:     bridge.WorkspaceInfo{Backend: bridge.WorkspaceBackendContainer, DefaultWorkDir: "/data", ACPToolsHTTPURL: "http://127.0.0.1:18732/mcp"},
+		startErr: errors.New("started"),
+	}
+	pool := newSessionPool(
+		nil,
+		runner,
+		fakeBotGetter{bot: enabledACPBot("bot-1", "api_key", map[string]any{"api_key": "sk-test"})},
+	)
+	pool.SetToolGateway(mcp.NewToolGatewayService(nil, nil))
+	contexts := mcp.NewToolSessionContextStore()
+	pool.SetToolSessionContextStore(contexts)
+
+	_, err := pool.Prompt(context.Background(), PromptInput{
+		BotID:             "bot-1",
+		ChatID:            "chat-1",
+		SessionID:         "session-1",
+		StreamID:          "stream-1",
+		RouteID:           "route-1",
+		AgentID:           "codex",
+		ProjectPath:       "/data/project",
+		Prompt:            "run",
+		ChannelIdentityID: "user-1",
+		SessionToken:      "token-1",
+		CurrentPlatform:   "web",
+		ReplyTarget:       "reply-1",
+		ConversationType:  "private",
+	})
+	if err == nil || err.Error() != "started" {
+		t.Fatalf("Prompt() error = %v, want runner start error", err)
+	}
+	if runner.req.ToolHTTPURL != "http://127.0.0.1:18732/mcp" {
+		t.Fatalf("ToolHTTPURL = %q", runner.req.ToolHTTPURL)
+	}
+	if runner.req.ToolSession.BotID != "bot-1" || runner.req.ToolSession.ChatID != "chat-1" || runner.req.ToolSession.SessionID != "session-1" || runner.req.ToolSession.RouteID != "route-1" {
+		t.Fatalf("ToolSession ids = %#v", runner.req.ToolSession)
+	}
+	if runner.req.ToolSession.StreamID != "stream-1" || runner.req.ToolSession.ChannelIdentityID != "user-1" || runner.req.ToolSession.SessionToken != "token-1" || runner.req.ToolSession.CurrentPlatform != "web" || runner.req.ToolSession.ReplyTarget != "reply-1" || runner.req.ToolSession.ConversationType != "private" {
+		t.Fatalf("ToolSession metadata = %#v", runner.req.ToolSession)
+	}
+	merged := contexts.Merge(mcp.ToolSessionContext{BotID: "bot-1", SessionID: "session-1"})
+	if merged.StreamID != "" || merged.ConversationType != "" {
+		t.Fatalf("failed start did not clear stored tool session: %#v", merged)
+	}
+}
+
+func TestSessionPoolUsesRequestToolURLForLocalWorkspace(t *testing.T) {
+	pool := newSessionPool(nil, nil, nil)
+	pool.SetToolGateway(mcp.NewToolGatewayService(nil, nil))
+
+	got, err := pool.resolveToolHTTPURL(context.Background(), PromptInput{
+		BotID:       "bot-1",
+		ToolHTTPURL: "http://127.0.0.1:18731/bots/bot-1/tools",
+	}, bridge.WorkspaceInfo{Backend: bridge.WorkspaceBackendLocal})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "http://127.0.0.1:18731/bots/bot-1/tools" {
+		t.Fatalf("local ToolHTTPURL = %q", got)
+	}
+}
+
+func TestSessionPoolUsesWorkspaceACPToolsEndpointForContainer(t *testing.T) {
+	pool := newSessionPool(nil, nil, nil)
+	pool.SetToolGateway(mcp.NewToolGatewayService(nil, nil))
+
+	got, err := pool.resolveToolHTTPURL(context.Background(), PromptInput{
+		BotID: "bot-1",
+	}, bridge.WorkspaceInfo{
+		Backend:         bridge.WorkspaceBackendContainer,
+		ACPToolsHTTPURL: "http://127.0.0.1:18732/mcp",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "http://127.0.0.1:18732/mcp" {
+		t.Fatalf("container ToolHTTPURL = %q", got)
+	}
+}
+
+func TestTrustedToolSessionContextForcesBaseIdentity(t *testing.T) {
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, "http://memoh.test/mcp", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set(mcp.ToolHeaderBotID, "spoofed-bot")
+	req.Header.Set(mcp.ToolHeaderSessionID, "spoofed-session")
+	req.Header.Set(mcp.ToolHeaderStreamID, "spoofed-stream")
+	req.Header.Set(mcp.ToolHeaderIsSubagent, "true")
+
+	got := trustedToolSessionContext(req, acpclient.ToolSessionContext{
+		BotID:       "bot-1",
+		SessionID:   "session-1",
+		StreamID:    "stream-1",
+		SessionType: "acp_agent",
+	})
+	if got.BotID != "bot-1" || got.SessionID != "session-1" || got.StreamID != "stream-1" || got.SessionType != "acp_agent" {
+		t.Fatalf("trusted context = %#v", got)
+	}
+	if got.IsSubagent {
+		t.Fatalf("trusted context should force is_subagent=false: %#v", got)
+	}
+}
+
+func TestPromptToolEventSinkPreservesACPAndHTTPToolEventOrder(t *testing.T) {
+	sink := newPromptToolEventSink(nil)
+	sink.EmitACPEvent(acpclient.StreamEvent{Type: acpclient.StreamEventTextDelta, Delta: "before"})
+	sink.EmitToolStreamEvent(mcp.ToolStreamEvent{
+		Type:       "tool_call_start",
+		ToolCallID: "call-1",
+		ToolName:   "schedule_list",
+	})
+	sink.EmitToolStreamEvent(mcp.ToolStreamEvent{
+		Type:       "tool_call_end",
+		ToolCallID: "call-1",
+		ToolName:   "schedule_list",
+		Result:     map[string]any{"ok": true},
+	})
+	sink.EmitACPEvent(acpclient.StreamEvent{Type: acpclient.StreamEventTextDelta, Delta: "after"})
+
+	events := sink.Events()
+	if len(events) != 4 {
+		t.Fatalf("events = %#v", events)
+	}
+	if events[0].Type != acpclient.StreamEventTextDelta || events[1].Type != acpclient.StreamEventToolCallStart || events[2].Type != acpclient.StreamEventToolCallEnd || events[3].Type != acpclient.StreamEventTextDelta {
+		t.Fatalf("events order = %#v", events)
 	}
 }
 

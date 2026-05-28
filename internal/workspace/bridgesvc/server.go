@@ -43,6 +43,7 @@ type Options struct {
 	WorkspaceRoot     string
 	DataMount         string
 	AllowHostAbsolute bool
+	ReverseHTTP       *ReverseHTTPBroker
 }
 
 type Server struct {
@@ -51,6 +52,7 @@ type Server struct {
 	workspaceRoot     string
 	dataMount         string
 	allowHostAbsolute bool
+	reverseHTTP       *ReverseHTTPBroker
 }
 
 func New(opts Options) *Server {
@@ -73,6 +75,7 @@ func New(opts Options) *Server {
 		workspaceRoot:     filepath.Clean(workspaceRoot),
 		dataMount:         filepath.Clean(dataMount),
 		allowHostAbsolute: opts.AllowHostAbsolute,
+		reverseHTTP:       opts.ReverseHTTP,
 	}
 }
 
@@ -346,6 +349,13 @@ func (*Server) Tunnel(stream pb.ContainerService_TunnelServer) error {
 			return status.Error(codes.InvalidArgument, "empty tunnel frame")
 		}
 	}
+}
+
+func (s *Server) ReverseHTTP(stream pb.ContainerService_ReverseHTTPServer) error {
+	if s.reverseHTTP == nil {
+		return status.Error(codes.Unavailable, "reverse HTTP stream is not configured")
+	}
+	return s.reverseHTTP.ServeReverseHTTP(stream)
 }
 
 func (s *Server) execPTY(stream pb.ContainerService_ExecServer, firstMsg *pb.ExecInput) error {

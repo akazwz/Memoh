@@ -320,9 +320,6 @@ func (h *SessionHandler) DeleteSession(c echo.Context) error {
 func validateACPCreate(bot bots.Bot, metadata map[string]any) error {
 	agentID := sessionMetadataString(metadata, "acp_agent_id")
 	if agentID == "" {
-		agentID = sessionMetadataString(metadata, "agent_id")
-	}
-	if agentID == "" {
 		return echo.NewHTTPError(http.StatusBadRequest, session.ErrACPAgentIDRequired.Error())
 	}
 	if sessionMetadataString(metadata, "project_path") == "" {
@@ -357,7 +354,7 @@ func sessionAgentConfigChanged(existingType string, existingMetadata map[string]
 	if targetType != session.TypeACPAgent {
 		return false
 	}
-	for _, key := range []string{"acp_agent_id", "agent_id", "project_path", "acp_project_mode"} {
+	for _, key := range []string{"acp_agent_id", "project_path", "acp_project_mode"} {
 		if sessionMetadataString(existingMetadata, key) != sessionMetadataString(targetMetadata, key) {
 			return true
 		}
@@ -368,7 +365,7 @@ func sessionAgentConfigChanged(existingType string, existingMetadata map[string]
 func stripACPMetadata(metadata map[string]any) map[string]any {
 	out := cloneSessionMetadata(metadata)
 	for key := range out {
-		if strings.HasPrefix(key, "acp_") || key == "agent_id" || key == "project_path" {
+		if strings.HasPrefix(key, "acp_") || key == "project_path" {
 			delete(out, key)
 		}
 	}

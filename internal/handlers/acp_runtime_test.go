@@ -159,6 +159,7 @@ func TestACPRuntimeHandlerEnsureStartsRuntimeAndReturnsModels(t *testing.T) {
 
 	e := echo.New()
 	req := httptest.NewRequest(http.MethodPost, "/bots/"+botID+"/sessions/"+sessionID+"/acp-runtime", nil)
+	req.Header.Set("Authorization", "Bearer token-1")
 	rec := httptest.NewRecorder()
 	ctx := testAuthContext(e, req, rec, "user-1")
 	ctx.SetPath("/bots/:bot_id/sessions/:session_id/acp-runtime")
@@ -173,6 +174,9 @@ func TestACPRuntimeHandlerEnsureStartsRuntimeAndReturnsModels(t *testing.T) {
 	}
 	if pool.ensureInput.BotID != botID || pool.ensureInput.SessionID != sessionID || pool.ensureInput.AgentID != acpprofile.AgentCodexID || pool.ensureInput.ProjectPath != "/data/app" {
 		t.Fatalf("Ensure input = %#v", pool.ensureInput)
+	}
+	if pool.ensureInput.SessionToken != "token-1" || pool.ensureInput.ToolHTTPURL != "http://example.com/bots/"+botID+"/tools" {
+		t.Fatalf("Ensure tool context = %#v", pool.ensureInput)
 	}
 	var got acpagent.RuntimeStatus
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
@@ -233,6 +237,7 @@ func TestACPRuntimeHandlerSetModel(t *testing.T) {
 		bytes.NewBufferString(`{"model_id":"gpt-5.1-codex-high"}`),
 	)
 	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	req.Header.Set("Authorization", "Bearer token-2")
 	rec := httptest.NewRecorder()
 	ctx := testAuthContext(e, req, rec, "user-1")
 	ctx.SetPath("/bots/:bot_id/sessions/:session_id/acp-runtime/model")
@@ -247,6 +252,9 @@ func TestACPRuntimeHandlerSetModel(t *testing.T) {
 	}
 	if pool.setModelInput.BotID != botID || pool.setModelInput.SessionID != sessionID || pool.setModelInput.AgentID != acpprofile.AgentCodexID || pool.setModelInput.ProjectPath != "/data/app" {
 		t.Fatalf("SetModel input = %#v", pool.setModelInput)
+	}
+	if pool.setModelInput.SessionToken != "token-2" || pool.setModelInput.ToolHTTPURL != "http://example.com/bots/"+botID+"/tools" {
+		t.Fatalf("SetModel tool context = %#v", pool.setModelInput)
 	}
 	if pool.setModelID != "gpt-5.1-codex-high" {
 		t.Fatalf("SetModel model id = %q", pool.setModelID)

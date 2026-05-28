@@ -33,10 +33,14 @@ const codexProfile: AcpprofilePublicProfile = {
 }
 
 describe('acp-metadata', () => {
-  it('builds ACP form state from profile schema and legacy metadata', () => {
+  it('builds ACP form state from profile schema and metadata', () => {
     const metadata = {
       acp: {
-        enabled_agents: ['codex'],
+        agents: {
+          codex: {
+            enabled: true,
+          },
+        },
       },
     }
 
@@ -129,31 +133,9 @@ describe('acp-metadata', () => {
     }, 'api_key')?.id).toBe('api_key')
   })
 
-  it('maps legacy managed OAuth metadata to oauth setup mode', () => {
-    const form = readACPConfig({
-      acp: {
-        agents: {
-          codex: {
-            enabled: true,
-            setup_mode: 'managed',
-            managed: {
-              auth_type: 'provider_oauth',
-            },
-          },
-        },
-      },
-    }, [codexProfile])
-
-    expect(form.agents.codex?.setup_mode).toBe('oauth')
-  })
-
-  it('writes ACP metadata without carrying old compatibility flags', () => {
+  it('writes ACP metadata into the agents map', () => {
     const next = withACPMetadata({
       workspace: { backend: 'docker' },
-      acp: {
-        codex_enabled: true,
-        enabled_agents: ['codex'],
-      },
     }, {
       agents: {
         codex: {

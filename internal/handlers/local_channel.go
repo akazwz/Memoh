@@ -663,6 +663,7 @@ func (h *LocalChannelHandler) HandleWebSocket(c echo.Context) error {
 						BotID:                   botID,
 						ChatID:                  botID,
 						SessionID:               sessionID,
+						StreamID:                streamID,
 						Token:                   bearerToken,
 						UserID:                  channelIdentityID,
 						SourceChannelIdentityID: channelIdentityID,
@@ -673,6 +674,7 @@ func (h *LocalChannelHandler) HandleWebSocket(c echo.Context) error {
 						Attachments:             chatAttachments,
 						Model:                   strings.TrimSpace(msg.ModelID),
 						ReasoningEffort:         strings.TrimSpace(msg.ReasoningEffort),
+						ToolHTTPURL:             buildACPMCPToolsURL(c, botID),
 					}
 					return h.resolver.StreamChatWS(ctx, req, eventCh, abortCh)
 				},

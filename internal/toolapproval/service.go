@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -203,6 +204,38 @@ func (s *Service) Reject(ctx context.Context, approvalID, actorID, reason string
 		DecidedByChannelIdentityID: decidedBy,
 	})
 	return requestFromRowOrErr(row, err)
+}
+
+func (s *Service) Get(ctx context.Context, approvalID string) (Request, error) {
+	if s == nil || s.queries == nil {
+		return Request{}, errors.New("tool approval queries not configured")
+	}
+	id, err := db.ParseUUID(approvalID)
+	if err != nil {
+		return Request{}, err
+	}
+	row, err := s.queries.GetToolApprovalRequest(ctx, id)
+	return requestFromRowOrErr(row, err)
+}
+
+func (s *Service) WaitForDecision(ctx context.Context, approvalID string) (Request, error) {
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		req, err := s.Get(ctx, approvalID)
+		if err != nil {
+			return Request{}, err
+		}
+		if req.Status != StatusPending {
+			return req, nil
+		}
+		select {
+		case <-ctx.Done():
+			return Request{}, ctx.Err()
+		case <-ticker.C:
+		}
+	}
 }
 
 func (s *Service) UpdatePromptMessage(ctx context.Context, approvalID, promptMessageID, externalID string) (Request, error) {

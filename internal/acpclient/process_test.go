@@ -305,7 +305,51 @@ func TestStartBridgeProcessUsesContainerToolkitFallback(t *testing.T) {
 	}
 }
 
+func TestStartBridgeProcessRetriesTransientMissingCommand(t *testing.T) {
+	oldWindow := commandResolveWindow
+	oldDelay := commandResolveDelay
+	commandResolveWindow = time.Second
+	commandResolveDelay = time.Millisecond
+	t.Cleanup(func() {
+		commandResolveWindow = oldWindow
+		commandResolveDelay = oldDelay
+	})
+
+	client, server := newRecordingBridgeClient(t)
+	server.setExitCodes("command -v codex-acp >/dev/null 2>&1", 127, 0)
+	server.setExitCode("test -x "+containerToolkitBin+"/codex-acp", 1)
+
+	proc, err := startBridgeProcess(context.Background(), client, "codex-acp", nil, "/data", time.Minute, processOptions{
+		Backend:   WorkspaceBackendContainer,
+		AgentID:   "codex",
+		SetupMode: SetupModeAPIKey,
+	})
+	if err != nil {
+		t.Fatalf("startBridgeProcess() error = %v", err)
+	}
+	server.waitForRecordWithTimeout(t, int32(time.Minute.Seconds()), 2*time.Second)
+	_ = proc.Close()
+
+	var checks int
+	for _, record := range server.records() {
+		if record.Command == "command -v codex-acp >/dev/null 2>&1" {
+			checks++
+		}
+	}
+	if checks < 2 {
+		t.Fatalf("command checks = %d, want retry; records=%#v", checks, server.records())
+	}
+	processRecord, ok := findRecordWithTimeout(server.records(), int32(time.Minute.Seconds()))
+	if !ok || processRecord.Command != "codex-acp" {
+		t.Fatalf("process record = %#v, ok=%v", processRecord, ok)
+	}
+}
+
 func TestStartBridgeProcessReportsToolkitFallbackFailure(t *testing.T) {
+	oldWindow := commandResolveWindow
+	commandResolveWindow = 0
+	t.Cleanup(func() { commandResolveWindow = oldWindow })
+
 	client, server := newRecordingBridgeClient(t)
 	server.setExitCode("command -v codex-acp >/dev/null 2>&1", 127)
 	server.setExitCode("test -x "+containerToolkitBin+"/codex-acp", 1)
@@ -346,6 +390,7 @@ type recordingBridgeServer struct {
 	files []writeRecord
 	dirs_ []string
 	exits map[string]int32
+	seqs  map[string][]int32
 }
 
 func (s *recordingBridgeServer) Exec(stream grpc.BidiStreamingServer[pb.ExecInput, pb.ExecOutput]) error {
@@ -355,6 +400,10 @@ func (s *recordingBridgeServer) Exec(stream grpc.BidiStreamingServer[pb.ExecInpu
 	}
 	s.mu.Lock()
 	exitCode := s.exits[input.GetCommand()]
+	if len(s.seqs[input.GetCommand()]) > 0 {
+		exitCode = s.seqs[input.GetCommand()][0]
+		s.seqs[input.GetCommand()] = s.seqs[input.GetCommand()][1:]
+	}
 	s.execs = append(s.execs, execRecord{
 		Command: input.GetCommand(),
 		WorkDir: input.GetWorkDir(),
@@ -366,6 +415,15 @@ func (s *recordingBridgeServer) Exec(stream grpc.BidiStreamingServer[pb.ExecInpu
 		return err
 	}
 	return nil
+}
+
+func (s *recordingBridgeServer) setExitCodes(command string, codes ...int32) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.seqs == nil {
+		s.seqs = make(map[string][]int32)
+	}
+	s.seqs[command] = append([]int32(nil), codes...)
 }
 
 func (s *recordingBridgeServer) setExitCode(command string, code int32) {

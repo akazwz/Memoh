@@ -17,6 +17,32 @@ func (p *gatewayTestProvider) ListTools(_ context.Context, _ ToolSessionContext)
 	return p.tools, nil
 }
 
+type sessionAwareGatewayTestProvider struct{}
+
+func (*sessionAwareGatewayTestProvider) ListTools(_ context.Context, session ToolSessionContext) ([]ToolDescriptor, error) {
+	if session.IsSubagent {
+		return []ToolDescriptor{{Name: "subagent_tool", InputSchema: map[string]any{"type": "object"}}}, nil
+	}
+	return []ToolDescriptor{{Name: "agent_tool", InputSchema: map[string]any{"type": "object"}}}, nil
+}
+
+func (*sessionAwareGatewayTestProvider) CallTool(context.Context, ToolSessionContext, string, map[string]any) (map[string]any, error) {
+	return nil, ErrToolNotFound
+}
+
+type countingGatewayTestProvider struct {
+	calls int
+}
+
+func (p *countingGatewayTestProvider) ListTools(_ context.Context, _ ToolSessionContext) ([]ToolDescriptor, error) {
+	p.calls++
+	return []ToolDescriptor{{Name: "cached_tool", InputSchema: map[string]any{"type": "object"}}}, nil
+}
+
+func (*countingGatewayTestProvider) CallTool(context.Context, ToolSessionContext, string, map[string]any) (map[string]any, error) {
+	return nil, ErrToolNotFound
+}
+
 func (p *gatewayTestProvider) CallTool(_ context.Context, _ ToolSessionContext, toolName string, _ map[string]any) (map[string]any, error) {
 	if err, ok := p.callErr[toolName]; ok {
 		return nil, err
@@ -25,6 +51,28 @@ func (p *gatewayTestProvider) CallTool(_ context.Context, _ ToolSessionContext, 
 		return result, nil
 	}
 	return nil, ErrToolNotFound
+}
+
+func TestToolGatewayServiceCacheIgnoresSessionID(t *testing.T) {
+	provider := &countingGatewayTestProvider{}
+	service := NewToolGatewayService(slog.Default(), []ToolSource{provider})
+	session := ToolSessionContext{
+		BotID:             "bot-1",
+		SessionID:         "session-1",
+		SessionType:       "acp_agent",
+		ChannelIdentityID: "user-1",
+	}
+
+	if _, err := service.ListTools(context.Background(), session); err != nil {
+		t.Fatalf("list tools failed: %v", err)
+	}
+	session.SessionID = "session-2"
+	if _, err := service.ListTools(context.Background(), session); err != nil {
+		t.Fatalf("list tools failed: %v", err)
+	}
+	if provider.calls != 1 {
+		t.Fatalf("ListTools calls = %d, want cache hit across session IDs", provider.calls)
+	}
 }
 
 func TestToolGatewayServiceListTools(t *testing.T) {
@@ -48,6 +96,26 @@ func TestToolGatewayServiceListTools(t *testing.T) {
 	}
 	if len(tools) != 3 {
 		t.Fatalf("expected 3 tools after dedupe, got %d", len(tools))
+	}
+}
+
+func TestToolGatewayServiceCacheSeparatesSessionToolScopes(t *testing.T) {
+	service := NewToolGatewayService(slog.Default(), []ToolSource{&sessionAwareGatewayTestProvider{}})
+
+	agentTools, err := service.ListTools(context.Background(), ToolSessionContext{BotID: "bot-1", SessionID: "session-1"})
+	if err != nil {
+		t.Fatalf("list agent tools failed: %v", err)
+	}
+	if len(agentTools) != 1 || agentTools[0].Name != "agent_tool" {
+		t.Fatalf("agent tools = %#v", agentTools)
+	}
+
+	subagentTools, err := service.ListTools(context.Background(), ToolSessionContext{BotID: "bot-1", SessionID: "session-1", IsSubagent: true})
+	if err != nil {
+		t.Fatalf("list subagent tools failed: %v", err)
+	}
+	if len(subagentTools) != 1 || subagentTools[0].Name != "subagent_tool" {
+		t.Fatalf("subagent tools = %#v", subagentTools)
 	}
 }
 

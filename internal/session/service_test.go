@@ -35,10 +35,6 @@ func TestValidateACPMetadata(t *testing.T) {
 			meta: map[string]any{"acp_agent_id": "codex", "project_path": "/data"},
 		},
 		{
-			name: "valid agent_id alias",
-			meta: map[string]any{"agent_id": "codex", "project_path": "/data"},
-		},
-		{
 			name:    "missing agent",
 			meta:    map[string]any{"project_path": "/data"},
 			wantErr: "acp_agent_id is required",
