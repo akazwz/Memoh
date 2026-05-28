@@ -172,9 +172,6 @@ func (r *Runner) StartSession(ctx context.Context, req StartRequest, sink EventS
 	}
 	callbacks := newClientCallbacks(lifecycleCtx, client, root, projectPath, timeout, sink, proc.env, backend == WorkspaceBackendContainer)
 	conn := newClientConnection(callbacks, proc, proc)
-	if r.logger != nil {
-		conn.SetLogger(r.logger.With(slog.String("protocol", "acp")))
-	}
 
 	initResp, err := conn.Initialize(ctx, acp.InitializeRequest{
 		ProtocolVersion: acp.ProtocolVersionNumber,

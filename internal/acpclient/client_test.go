@@ -125,6 +125,7 @@ func TestRunnerStartSessionStreamsEvents(t *testing.T) {
 		},
 	})
 
+	var streamedMu sync.Mutex
 	var streamed strings.Builder
 	var streamedEvents []StreamEvent
 	startupCtx, cancelStartup := context.WithCancel(context.Background())
@@ -134,6 +135,8 @@ func TestRunnerStartSessionStreamsEvents(t *testing.T) {
 		Command:     agentPath,
 		Timeout:     10 * time.Second,
 	}, EventSinkFunc(func(event StreamEvent) {
+		streamedMu.Lock()
+		defer streamedMu.Unlock()
 		streamedEvents = append(streamedEvents, event)
 		if event.Type == StreamEventTextDelta {
 			streamed.WriteString(event.Delta)
@@ -152,12 +155,16 @@ func TestRunnerStartSessionStreamsEvents(t *testing.T) {
 	if result.StopReason != string(acp.StopReasonEndTurn) {
 		t.Fatalf("StopReason = %q, want %q", result.StopReason, acp.StopReasonEndTurn)
 	}
-	if !strings.Contains(streamed.String(), "read: hello") {
-		t.Fatalf("streamed text = %q", streamed.String())
+	streamedMu.Lock()
+	streamedText := streamed.String()
+	streamedEventsSnapshot := append([]StreamEvent(nil), streamedEvents...)
+	streamedMu.Unlock()
+	if !strings.Contains(streamedText, "read: hello") {
+		t.Fatalf("streamed text = %q", streamedText)
 	}
 	for _, want := range []string{"read", "write", "exec"} {
-		if !hasStreamedToolEvent(streamedEvents, StreamEventToolCallEnd, want) {
-			t.Fatalf("streamed events missing %s tool end: %#v", want, streamedEvents)
+		if !hasStreamedToolEvent(streamedEventsSnapshot, StreamEventToolCallEnd, want) {
+			t.Fatalf("streamed events missing %s tool end: %#v", want, streamedEventsSnapshot)
 		}
 		if !hasStreamedToolEvent(result.Events, StreamEventToolCallEnd, want) {
 			t.Fatalf("result events missing %s tool end: %#v", want, result.Events)

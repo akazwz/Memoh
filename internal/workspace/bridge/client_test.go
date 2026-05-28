@@ -35,17 +35,22 @@ type tunnelEchoTestServer struct {
 
 type execCancelTestServer struct {
 	pb.UnimplementedContainerServiceServer
+	started   chan struct{}
 	cancelled chan struct{}
 }
 
 func newExecCancelTestServer() *execCancelTestServer {
-	return &execCancelTestServer{cancelled: make(chan struct{})}
+	return &execCancelTestServer{
+		started:   make(chan struct{}),
+		cancelled: make(chan struct{}),
+	}
 }
 
 func (s *execCancelTestServer) Exec(stream pb.ContainerService_ExecServer) error {
 	if _, err := stream.Recv(); err != nil {
 		return err
 	}
+	close(s.started)
 	<-stream.Context().Done()
 	close(s.cancelled)
 	return stream.Context().Err()
@@ -389,6 +394,11 @@ func TestExecStreamCloseCancelsServerContext(t *testing.T) {
 	stream, err := client.ExecStreamWithEnv(context.Background(), "sleep 60", "/tmp", -1, nil)
 	if err != nil {
 		t.Fatalf("ExecStreamWithEnv returned error: %v", err)
+	}
+	select {
+	case <-server.started:
+	case <-time.After(10 * time.Second):
+		t.Fatal("server stream did not receive exec config")
 	}
 	if err := stream.Close(); err != nil {
 		t.Fatalf("Close returned error: %v", err)

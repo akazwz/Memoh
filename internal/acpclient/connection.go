@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"log/slog"
 
 	acp "github.com/coder/acp-go-sdk"
 )
@@ -19,12 +18,6 @@ func newClientConnection(client *clientCallbacks, peerInput io.Writer, peerOutpu
 	c := &clientConnection{client: client}
 	c.conn = acp.NewConnection(c.handle, peerInput, peerOutput)
 	return c
-}
-
-func (c *clientConnection) SetLogger(log *slog.Logger) {
-	if c != nil && c.conn != nil {
-		c.conn.SetLogger(log)
-	}
 }
 
 func (c *clientConnection) Initialize(ctx context.Context, params acp.InitializeRequest) (acp.InitializeResponse, error) {

@@ -65,7 +65,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 FROM alpine:latest AS toolkit-assembly
 ARG TARGETARCH
 
-RUN apk add --no-cache ca-certificates wget xz
+RUN apk add --no-cache ca-certificates wget xz binutils
 COPY docker/toolkit/install.sh /tmp/install.sh
 COPY --from=a11y-cli-builder /out-a11y-cli /tmp/a11y-cli
 ENV MEMOH_A11Y_CLI_BINARY=/tmp/a11y-cli

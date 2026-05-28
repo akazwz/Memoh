@@ -243,10 +243,13 @@ func (c *Client) ExecStreamWithEnv(ctx context.Context, command, workDir string,
 type ExecStream struct {
 	stream pb.ContainerService_ExecClient
 	cancel context.CancelFunc
+	sendMu sync.Mutex
 }
 
 // SendStdin sends data to the process stdin.
 func (s *ExecStream) SendStdin(data []byte) error {
+	s.sendMu.Lock()
+	defer s.sendMu.Unlock()
 	return s.stream.Send(&pb.ExecInput{
 		StdinData: data,
 	})
@@ -259,6 +262,8 @@ func (s *ExecStream) Recv() (*pb.ExecOutput, error) {
 
 // Resize sends a terminal resize event to the running process.
 func (s *ExecStream) Resize(cols, rows uint32) error {
+	s.sendMu.Lock()
+	defer s.sendMu.Unlock()
 	return s.stream.Send(&pb.ExecInput{
 		Resize: &pb.TerminalResize{Cols: cols, Rows: rows},
 	})
@@ -266,11 +271,12 @@ func (s *ExecStream) Resize(cols, rows uint32) error {
 
 // Close closes the stream.
 func (s *ExecStream) Close() error {
-	err := s.stream.CloseSend()
 	if s.cancel != nil {
 		s.cancel()
 	}
-	return err
+	s.sendMu.Lock()
+	defer s.sendMu.Unlock()
+	return s.stream.CloseSend()
 }
 
 // ExecStreamPTY opens a bidirectional PTY exec stream.
