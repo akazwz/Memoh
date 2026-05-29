@@ -113,57 +113,6 @@ func TestSessionPoolKeyedBySessionIDReuseAndClose(t *testing.T) {
 	}
 }
 
-func TestSessionPoolRetriesPromptAfterACPProcessDisconnectsBeforeResponse(t *testing.T) {
-	root := t.TempDir()
-	project := filepath.Join(root, "project")
-	if err := os.MkdirAll(project, 0o750); err != nil {
-		t.Fatal(err)
-	}
-
-	client := newSessionPoolBridgeClient(t, root)
-	binDir := filepath.Join(root, "bin")
-	if err := os.MkdirAll(binDir, 0o750); err != nil {
-		t.Fatal(err)
-	}
-	writeSessionPoolFakeAgentScript(t, binDir, "npx")
-	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
-	startLog := filepath.Join(root, "starts.log")
-	t.Setenv("MEMOH_ACP_START_LOG", startLog)
-	t.Setenv("MEMOH_ACP_SESSION_POOL_FAKE_AGENT_EXIT_ONCE_FILE", filepath.Join(root, "exit-once"))
-
-	runner := acpclient.NewRunner(nil, sessionPoolWorkspace{
-		client: client,
-		info: bridge.WorkspaceInfo{
-			Backend:        bridge.WorkspaceBackendLocal,
-			DefaultWorkDir: root,
-		},
-	})
-	pool := newSessionPool(nil, runner, fakeBotGetter{bot: enabledACPBot("bot-1", "api_key", nil)})
-	pool.timeout = time.Hour
-
-	result, err := pool.Prompt(context.Background(), PromptInput{
-		BotID:       "bot-1",
-		SessionID:   "session-1",
-		StreamID:    "stream-1",
-		AgentID:     acpprofile.AgentCodexID,
-		ProjectPath: "/data/project",
-		Prompt:      "first prompt",
-	})
-	if err != nil {
-		t.Fatalf("Prompt() error = %v", err)
-	}
-	if !strings.Contains(result.Text, "session-pool-ok") {
-		t.Fatalf("result text = %q", result.Text)
-	}
-	data, err := os.ReadFile(startLog) //nolint:gosec // test reads a path created under t.TempDir.
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := strings.Count(string(data), "start\n"); got != 2 {
-		t.Fatalf("ACP process starts = %d, want 2", got)
-	}
-}
-
 func TestSessionPoolEnsureStartsRuntimeAndReportsModels(t *testing.T) {
 	root := t.TempDir()
 	project := filepath.Join(root, "project")
@@ -1020,12 +969,6 @@ func (*sessionPoolFakeAgent) UnstableSetSessionModel(_ context.Context, p acp.Un
 }
 
 func (a *sessionPoolFakeAgent) Prompt(ctx context.Context, p acp.PromptRequest) (acp.PromptResponse, error) {
-	if marker := strings.TrimSpace(os.Getenv("MEMOH_ACP_SESSION_POOL_FAKE_AGENT_EXIT_ONCE_FILE")); marker != "" {
-		if _, err := os.Stat(marker); errors.Is(err, os.ErrNotExist) { //nolint:gosec // test marker path is supplied by the parent test process.
-			_ = os.WriteFile(marker, []byte("exited\n"), 0o600) //nolint:gosec // test marker path is supplied by the parent test process.
-			os.Exit(0)
-		}
-	}
 	_ = a.conn.SessionUpdate(ctx, acp.SessionNotification{
 		SessionId: p.SessionId,
 		Update:    acp.UpdateAgentMessageText("session-pool-ok"),

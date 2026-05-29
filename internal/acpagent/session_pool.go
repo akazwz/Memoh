@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -189,9 +188,7 @@ func (p *SessionPool) Prompt(ctx context.Context, input PromptInput) (acpclient.
 
 	toolSink := newPromptToolEventSink(input.Sink)
 	unregisterToolSink := p.registerToolEventSink(input, toolSink)
-	defer func() {
-		unregisterToolSink()
-	}()
+	defer unregisterToolSink()
 
 	result, err := sess.Prompt(ctx, input.Prompt, toolSink)
 	orderedEvents := toolSink.Events()
@@ -199,31 +196,6 @@ func (p *SessionPool) Prompt(ctx context.Context, input PromptInput) (acpclient.
 		result.Events = orderedEvents
 	}
 	if err != nil {
-		if shouldRetryPromptAfterACPDisconnect(ctx, result, err) {
-			p.logger.Warn("retrying ACP prompt after disconnected peer",
-				slog.String("session_id", input.SessionID),
-				slog.Any("error", err),
-			)
-			p.dropSession(input.SessionID, sess)
-			unregisterToolSink()
-			unregisterToolSink = p.registerToolEventSink(input, toolSink)
-
-			retrySession, startErr := p.getOrStart(ctx, input)
-			if startErr != nil {
-				p.dropSession(input.SessionID, nil)
-				return result, startErr
-			}
-			result, err = retrySession.Prompt(ctx, input.Prompt, toolSink)
-			orderedEvents = toolSink.Events()
-			if len(orderedEvents) > 0 {
-				result.Events = orderedEvents
-			}
-			if err == nil {
-				p.setStatus(input.SessionID, stateIdle)
-				return result, nil
-			}
-			sess = retrySession
-		}
 		// Prompt failures usually indicate the ACP process is in a bad state
 		// (transport hang, agent crash); drop the underlying session so the
 		// next call starts fresh.
@@ -310,22 +282,6 @@ func (p *SessionPool) resolveSessionMetadata(ctx context.Context, input PromptIn
 		input.ProjectPath = projectPath
 	}
 	return input, nil
-}
-
-func shouldRetryPromptAfterACPDisconnect(ctx context.Context, result acpclient.PromptResult, err error) bool {
-	if err == nil || ctx.Err() != nil {
-		return false
-	}
-	if strings.TrimSpace(result.Text) != "" || len(result.Events) > 0 {
-		return false
-	}
-	if errors.Is(err, io.EOF) {
-		return true
-	}
-	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "peer disconnected before response") ||
-		strings.Contains(msg, "peer disconnected while waiting for pre-response notifications") ||
-		strings.Contains(msg, "broken pipe")
 }
 
 func (p *SessionPool) RuntimeStatus(sessionID, agentID, projectPath string) RuntimeStatus {
