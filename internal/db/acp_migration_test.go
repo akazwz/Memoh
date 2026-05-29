@@ -66,15 +66,15 @@ func TestPostgresACPAgentSessionTypeMigrationFiles(t *testing.T) {
 	if !strings.Contains(baseline, "type IN ('chat', 'heartbeat', 'schedule', 'subagent', 'discuss', 'acp_agent')") {
 		t.Fatal("postgres baseline bot_sessions type CHECK missing acp_agent")
 	}
-	up := readEmbeddedMigration(t, "postgres/migrations/0081_acp_agent_session_type.up.sql")
+	up := readEmbeddedMigration(t, "postgres/migrations/0082_acp_agent_session_type.up.sql")
 	if !strings.Contains(up, "DROP CONSTRAINT IF EXISTS bot_sessions_type_check") ||
 		!strings.Contains(up, "'acp_agent'") {
-		t.Fatal("postgres 0081 up migration does not widen bot_sessions_type_check to acp_agent")
+		t.Fatal("postgres 0082 up migration does not widen bot_sessions_type_check to acp_agent")
 	}
-	down := readEmbeddedMigration(t, "postgres/migrations/0081_acp_agent_session_type.down.sql")
+	down := readEmbeddedMigration(t, "postgres/migrations/0082_acp_agent_session_type.down.sql")
 	if !strings.Contains(down, "WHERE type = 'acp_agent'") ||
 		!strings.Contains(down, "RAISE EXCEPTION") {
-		t.Fatal("postgres 0081 down migration must guard existing acp_agent rows without touching tool approvals")
+		t.Fatal("postgres 0082 down migration must guard existing acp_agent rows without touching tool approvals")
 	}
 }
 
