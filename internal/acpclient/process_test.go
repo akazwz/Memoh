@@ -169,6 +169,7 @@ func TestWriteCodexManagedConfigWritesFixedContainerConfig(t *testing.T) {
 		`base_url = "https://proxy.example.com/v1"`,
 		`wire_api = "responses"`,
 		`requires_openai_auth = false`,
+		`supports_websockets = false`,
 	} {
 		if !strings.Contains(config, want) {
 			t.Fatalf("Codex config missing %q:\n%s", want, config)
@@ -205,11 +206,26 @@ func TestWriteCodexManagedConfigWritesOAuthAuth(t *testing.T) { //nolint:gosec /
 		t.Fatalf("WriteCodexManagedConfigWithAuth() error = %v", err)
 	}
 	writes := server.writes()
-	if len(writes) != 1 {
-		t.Fatalf("managed writes len = %d, want auth.json only for oauth: %#v", len(writes), writes)
+	if len(writes) != 2 {
+		t.Fatalf("managed writes len = %d, want config.toml + auth.json: %#v", len(writes), writes)
 	}
-	if _, ok := findWrite(writes, CodexManagedConfigDir+"/config.toml"); ok {
-		t.Fatalf("OAuth setup should not write Codex config.toml: %#v", writes)
+	configWrite, ok := findWrite(writes, CodexManagedConfigDir+"/config.toml")
+	if !ok {
+		t.Fatalf("missing Codex config.toml write: %#v", writes)
+	}
+	config := string(configWrite.Content)
+	for _, want := range []string{
+		`model_provider = "chatgpt-http"`,
+		`[model_providers.chatgpt-http]`,
+		`name = "ChatGPT HTTP"`,
+		`base_url = "https://chatgpt.com/backend-api/codex"`,
+		`wire_api = "responses"`,
+		`requires_openai_auth = true`,
+		`supports_websockets = false`,
+	} {
+		if !strings.Contains(config, want) {
+			t.Fatalf("Codex OAuth config missing %q:\n%s", want, config)
+		}
 	}
 	authWrite, ok := findWrite(writes, CodexManagedConfigDir+"/auth.json")
 	if !ok {

@@ -63,6 +63,7 @@ func TestPrepareACPWorkspaceConfigWritesCodexAPIKeyConfig(t *testing.T) {
 		`base_url = "https://proxy.example.com/v1"`,
 		`wire_api = "responses"`,
 		`requires_openai_auth = false`,
+		`supports_websockets = false`,
 	} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("config missing %q:\n%s", want, content)

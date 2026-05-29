@@ -824,7 +824,7 @@
           >
         </div>
       </div>
-      <ScrollArea class="flex-1 bg-muted/5 p-4">
+      <ScrollArea class="flex-1 min-h-0 bg-muted/5 p-4">
         <section class="space-y-3 max-w-3xl mx-auto pb-8">
           <div
             v-for="tool in filteredTools"
