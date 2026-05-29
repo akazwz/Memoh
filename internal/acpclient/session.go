@@ -209,7 +209,7 @@ func (r *Runner) StartSession(ctx context.Context, req StartRequest, sink EventS
 			slog.Bool("mcp_http", caps.Http),
 			slog.Bool("mcp_sse", caps.Sse),
 			slog.Bool("memoh_tools_http_configured", toolHTTPURL != ""),
-			slog.String("memoh_tools_http_url", toolHTTPURL),
+			slog.String("memoh_tools_http_url", redactedToolHTTPURL(toolHTTPURL)),
 			slog.Int("mcp_servers", len(mcpServers)),
 		)
 		if toolHTTPURL != "" && len(mcpServers) == 0 {
@@ -283,6 +283,36 @@ func guardedToolHTTPURL(rawURL string) (string, string, error) {
 	}
 	u.Path = basePath + "/" + uuid.NewString()
 	return u.String(), u.Path, nil
+}
+
+func redactedToolHTTPURL(rawURL string) string {
+	u, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return ""
+	}
+	trimmedPath := strings.Trim(u.Path, "/")
+	if trimmedPath != "" {
+		parts := strings.Split(trimmedPath, "/")
+		redacted := false
+		for i, part := range parts {
+			if i > 0 && strings.EqualFold(parts[i-1], "bots") {
+				parts[i] = "redacted"
+				redacted = true
+				continue
+			}
+			if _, err := uuid.Parse(part); err == nil {
+				parts[i] = "redacted"
+				redacted = true
+			}
+		}
+		if !redacted {
+			parts[len(parts)-1] = "redacted"
+		}
+		u.Path = "/" + strings.Join(parts, "/")
+	}
+	u.RawQuery = ""
+	u.Fragment = ""
+	return u.String()
 }
 
 func startLocalToolHTTPProxy(ctx context.Context, handler http.Handler) (string, func(), error) {

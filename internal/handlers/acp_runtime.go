@@ -192,7 +192,7 @@ func buildACPMCPToolsURLFromRequest(req *http.Request, botID string) string {
 	}
 	base := strings.TrimSpace(os.Getenv("MEMOH_ACP_MCP_HTTP_BASE_URL"))
 	if base == "" {
-		base = externalRequestBaseURL(req)
+		base = localRequestBaseURL(req)
 	}
 	base = strings.TrimRight(strings.TrimSpace(base), "/")
 	if base == "" {
@@ -201,46 +201,37 @@ func buildACPMCPToolsURLFromRequest(req *http.Request, botID string) string {
 	return base + "/bots/" + url.PathEscape(strings.TrimSpace(botID)) + "/tools"
 }
 
-func externalRequestBaseURL(req *http.Request) string {
+func localRequestBaseURL(req *http.Request) string {
 	if req == nil {
 		return ""
 	}
-	proto := firstForwardedHeader(req, "X-Forwarded-Proto", "X-Forwarded-Protocol", "X-Url-Scheme")
-	if proto == "" {
-		if req.TLS != nil {
-			proto = "https"
-		} else {
-			proto = "http"
-		}
+	proto := "http"
+	if req.TLS != nil {
+		proto = "https"
 	}
-	host := firstForwardedHeader(req, "X-Forwarded-Host")
-	if host == "" {
-		host = strings.TrimSpace(req.Host)
-	}
+	host := strings.TrimSpace(req.Host)
 	if host == "" {
 		return ""
 	}
-	if _, _, err := net.SplitHostPort(host); err != nil && strings.Contains(host, "/") {
+	if !isLoopbackRequestHost(host) {
 		return ""
 	}
-	return strings.TrimSpace(proto) + "://" + host
+	return proto + "://" + host
 }
 
-func firstForwardedHeader(req *http.Request, names ...string) string {
-	if req == nil {
-		return ""
+func isLoopbackRequestHost(host string) bool {
+	host = strings.TrimSpace(host)
+	if host == "" || strings.Contains(host, "/") {
+		return false
 	}
-	for _, name := range names {
-		value := strings.TrimSpace(req.Header.Get(name))
-		if value == "" {
-			continue
-		}
-		if before, _, ok := strings.Cut(value, ","); ok {
-			value = before
-		}
-		if value = strings.TrimSpace(value); value != "" {
-			return value
-		}
+	name := host
+	if splitHost, _, err := net.SplitHostPort(host); err == nil {
+		name = splitHost
 	}
-	return ""
+	name = strings.Trim(strings.TrimSpace(name), "[]")
+	if strings.EqualFold(name, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(name)
+	return ip != nil && ip.IsLoopback()
 }

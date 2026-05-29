@@ -432,6 +432,37 @@ func TestRunnerStartSessionInjectsHTTPToolServer(t *testing.T) {
 	}
 }
 
+func TestRedactedToolHTTPURLHidesRouteSecrets(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{
+			name: "bot route",
+			raw:  "http://memoh.test/bots/11111111-1111-1111-1111-111111111111/tools?token=secret#fragment",
+			want: "http://memoh.test/bots/redacted/tools",
+		},
+		{
+			name: "guard route",
+			raw:  "http://127.0.0.1:12345/mcp/22222222-2222-2222-2222-222222222222",
+			want: "http://127.0.0.1:12345/mcp/redacted",
+		},
+		{
+			name: "non uuid route",
+			raw:  "http://127.0.0.1:12345/mcp/local-secret",
+			want: "http://127.0.0.1:12345/mcp/redacted",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := redactedToolHTTPURL(tc.raw); got != tc.want {
+				t.Fatalf("redactedToolHTTPURL() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func hasCapturedHeader(headers []any, name, value string) bool {
 	for _, raw := range headers {
 		item, ok := raw.(map[string]any)

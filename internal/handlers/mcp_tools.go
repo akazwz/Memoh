@@ -58,7 +58,7 @@ func (h *ContainerdHandler) HandleMCPTools(c echo.Context) error {
 
 func (h *ContainerdHandler) handleMCPToolsWithBotID(c echo.Context, botID string) error {
 	session := h.buildToolSessionContext(c, botID)
-	mcpgw.ServeToolMCPHTTP(c.Response().Writer, c.Request(), h.logger, h.toolGateway, h.toolContexts, session)
+	mcpgw.ServeToolMCPHTTPWithoutContextMerge(c.Response().Writer, c.Request(), h.logger, h.toolGateway, h.toolContexts, session)
 	return nil
 }
 
@@ -68,14 +68,12 @@ func buildToolCallPayloadFromRaw(params *sdkmcp.CallToolParamsRaw) (mcpgw.ToolCa
 
 func (*ContainerdHandler) buildToolSessionContext(c echo.Context, botID string) mcpgw.ToolSessionContext {
 	botID = strings.TrimSpace(botID)
-	session := mcpgw.ToolSessionContext{
-		BotID:  botID,
-		ChatID: botID,
-	}
-	if strings.TrimSpace(session.ChannelIdentityID) == "" {
-		if ctxIdentityID, err := auth.UserIDFromContext(c); err == nil {
-			session.ChannelIdentityID = strings.TrimSpace(ctxIdentityID)
-		}
+	session := mcpgw.ToolSessionContextFromHTTP(c.Request(), botID)
+	session.BotID = botID
+	session.ChannelIdentityID = ""
+	session.SessionToken = ""
+	if ctxIdentityID, err := auth.UserIDFromContext(c); err == nil {
+		session.ChannelIdentityID = strings.TrimSpace(ctxIdentityID)
 	}
 	return session
 }

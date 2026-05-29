@@ -87,6 +87,10 @@ func main() {
 	network := "unix"
 	address := os.Getenv("BRIDGE_SOCKET_PATH")
 	if tcpAddr := os.Getenv("BRIDGE_TCP_ADDR"); tcpAddr != "" {
+		if !isLoopbackTCPAddr(tcpAddr) {
+			logger.Error("BRIDGE_TCP_ADDR must be a loopback address; non-loopback TCP exposes bridge gRPC without TLS/auth", slog.String("addr", tcpAddr))
+			return
+		}
 		network = "tcp"
 		address = tcpAddr
 	}

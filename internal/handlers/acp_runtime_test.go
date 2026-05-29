@@ -118,6 +118,8 @@ func TestACPRuntimeHandlerReturnsIdleStatus(t *testing.T) {
 }
 
 func TestACPRuntimeHandlerEnsureStartsRuntimeAndReturnsModels(t *testing.T) {
+	t.Setenv("MEMOH_ACP_MCP_HTTP_BASE_URL", "http://example.com")
+
 	botID := "11111111-1111-1111-1111-111111111111"
 	sessionID := "44444444-4444-4444-4444-444444444444"
 	queries := acpRuntimeQueries{
@@ -191,6 +193,8 @@ func TestACPRuntimeHandlerEnsureStartsRuntimeAndReturnsModels(t *testing.T) {
 }
 
 func TestACPRuntimeHandlerSetModel(t *testing.T) {
+	t.Setenv("MEMOH_ACP_MCP_HTTP_BASE_URL", "http://example.com")
+
 	botID := "11111111-1111-1111-1111-111111111111"
 	sessionID := "55555555-5555-5555-5555-555555555555"
 	queries := acpRuntimeQueries{
@@ -304,6 +308,40 @@ func TestACPRuntimeHandlerRejectsNonACPSession(t *testing.T) {
 	if !errors.As(err, &httpErr) || httpErr.Code != http.StatusBadRequest {
 		t.Fatalf("GetRuntime() error = %v, want HTTP 400", err)
 	}
+}
+
+func TestBuildACPMCPToolsURLUsesOnlyExplicitOrLoopbackBaseURL(t *testing.T) {
+	botID := "11111111-1111-1111-1111-111111111111"
+
+	t.Run("explicit base URL", func(t *testing.T) {
+		t.Setenv("MEMOH_ACP_MCP_HTTP_BASE_URL", "https://memoh.example")
+		req := httptest.NewRequest(http.MethodPost, "http://127.0.0.1/acp-runtime", nil)
+		req.Header.Set("X-Forwarded-Host", "evil.example")
+		got := buildACPMCPToolsURLFromRequest(req, botID)
+		want := "https://memoh.example/bots/" + botID + "/tools"
+		if got != want {
+			t.Fatalf("tools URL = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("loopback request host", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:18731/acp-runtime", nil)
+		req.Header.Set("X-Forwarded-Host", "evil.example")
+		req.Header.Set("X-Forwarded-Proto", "https")
+		got := buildACPMCPToolsURLFromRequest(req, botID)
+		want := "http://127.0.0.1:18731/bots/" + botID + "/tools"
+		if got != want {
+			t.Fatalf("tools URL = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("non-loopback request host", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "https://memoh.example/acp-runtime", nil)
+		req.Header.Set("X-Forwarded-Host", "evil.example")
+		if got := buildACPMCPToolsURLFromRequest(req, botID); got != "" {
+			t.Fatalf("tools URL = %q, want empty", got)
+		}
+	})
 }
 
 func testBotRow(botID string, metadata map[string]any) sqlc.GetBotByIDRow {

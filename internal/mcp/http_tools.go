@@ -66,12 +66,22 @@ func firstNonEmptyHTTPHeader(req *http.Request, names ...string) string {
 }
 
 func ServeToolMCPHTTP(w http.ResponseWriter, req *http.Request, log *slog.Logger, gateway *ToolGatewayService, contexts *ToolSessionContextStore, session ToolSessionContext) {
+	serveToolMCPHTTP(w, req, log, gateway, contexts, session, true)
+}
+
+// ServeToolMCPHTTPWithoutContextMerge serves a tool MCP request using the
+// request-carried session context without merging long-lived ACP session state.
+func ServeToolMCPHTTPWithoutContextMerge(w http.ResponseWriter, req *http.Request, log *slog.Logger, gateway *ToolGatewayService, contexts *ToolSessionContextStore, session ToolSessionContext) {
+	serveToolMCPHTTP(w, req, log, gateway, contexts, session, false)
+}
+
+func serveToolMCPHTTP(w http.ResponseWriter, req *http.Request, log *slog.Logger, gateway *ToolGatewayService, contexts *ToolSessionContextStore, session ToolSessionContext, mergeContext bool) {
 	if gateway == nil {
 		http.Error(w, "tool gateway not configured", http.StatusServiceUnavailable)
 		return
 	}
 	EnsureStreamableAcceptHeader(req)
-	if contexts != nil {
+	if contexts != nil && mergeContext {
 		session = contexts.Merge(session)
 	}
 	handler := sdkmcp.NewStreamableHTTPHandler(

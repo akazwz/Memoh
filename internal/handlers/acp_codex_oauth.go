@@ -55,9 +55,10 @@ type ACPCodexOAuthHandler struct {
 }
 
 type acpCodexOAuthState struct {
-	BotID        string
-	CodeVerifier string
-	ExpiresAt    time.Time
+	BotID             string
+	ChannelIdentityID string
+	CodeVerifier      string
+	ExpiresAt         time.Time
 }
 
 func NewACPCodexOAuthHandler(provider *providers.Service, botService *bots.Service, accountService *accounts.Service, acpWorkspace acpWorkspaceConfigProvider, callbackURL string) *ACPCodexOAuthHandler {
@@ -81,7 +82,7 @@ func (*ACPCodexOAuthHandler) HandlesCallbackState(state string) bool {
 }
 
 func (h *ACPCodexOAuthHandler) Authorize(c echo.Context) error {
-	botID, err := h.requireBotAccess(c)
+	botID, channelIdentityID, err := h.requireBotAccess(c)
 	if err != nil {
 		return err
 	}
@@ -110,9 +111,10 @@ func (h *ACPCodexOAuthHandler) Authorize(c echo.Context) error {
 	h.mu.Lock()
 	h.pruneExpiredLocked(time.Now())
 	h.states[state] = acpCodexOAuthState{
-		BotID:        botID,
-		CodeVerifier: codeVerifier,
-		ExpiresAt:    time.Now().Add(acpCodexOAuthStateTTL),
+		BotID:             botID,
+		ChannelIdentityID: channelIdentityID,
+		CodeVerifier:      codeVerifier,
+		ExpiresAt:         time.Now().Add(acpCodexOAuthStateTTL),
 	}
 	h.mu.Unlock()
 
@@ -120,7 +122,7 @@ func (h *ACPCodexOAuthHandler) Authorize(c echo.Context) error {
 }
 
 func (h *ACPCodexOAuthHandler) Status(c echo.Context) error {
-	botID, err := h.requireBotAccess(c)
+	botID, _, err := h.requireBotAccess(c)
 	if err != nil {
 		return err
 	}
@@ -171,6 +173,9 @@ func (h *ACPCodexOAuthHandler) Callback(c echo.Context) error {
 	if err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
+	if _, err := AuthorizeBotAccess(c.Request().Context(), h.botService, h.accountService, oauthState.ChannelIdentityID, oauthState.BotID); err != nil {
+		return err
+	}
 	creds, err := h.provider.ExchangeOpenAICodexACPCode(c.Request().Context(), h.callbackURL, code, oauthState.CodeVerifier)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
@@ -197,19 +202,19 @@ func (h *ACPCodexOAuthHandler) Callback(c echo.Context) error {
 	return c.HTML(http.StatusOK, executeHTMLTemplate(page, map[string]string{"BotID": oauthState.BotID}))
 }
 
-func (h *ACPCodexOAuthHandler) requireBotAccess(c echo.Context) (string, error) {
+func (h *ACPCodexOAuthHandler) requireBotAccess(c echo.Context) (string, string, error) {
 	botID := strings.TrimSpace(c.Param("bot_id"))
 	if botID == "" {
-		return "", echo.NewHTTPError(http.StatusBadRequest, "bot id is required")
+		return "", "", echo.NewHTTPError(http.StatusBadRequest, "bot id is required")
 	}
 	channelIdentityID, err := RequireChannelIdentityID(c)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	if _, err := AuthorizeBotAccess(c.Request().Context(), h.botService, h.accountService, channelIdentityID, botID); err != nil {
-		return "", err
+		return "", "", err
 	}
-	return botID, nil
+	return botID, channelIdentityID, nil
 }
 
 func (h *ACPCodexOAuthHandler) ensureManagedWorkspace(ctx context.Context, botID string) error {
