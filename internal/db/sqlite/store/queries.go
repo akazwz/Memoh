@@ -4119,6 +4119,58 @@ func (q *Queries) RejectToolApprovalRequest(ctx context.Context, arg pgsqlc.Reje
 	return result, nil
 }
 
+func (q *Queries) DeleteToolApprovalRequestsBySessionToolCall(ctx context.Context, arg pgsqlc.DeleteToolApprovalRequestsBySessionToolCallParams) error {
+	if q == nil || q.store == nil || q.store.queries == nil {
+		return errSQLiteQueriesNotConfigured
+	}
+	var sqliteArg sqlitesqlc.DeleteToolApprovalRequestsBySessionToolCallParams
+	if err := convertValue(arg, &sqliteArg); err != nil {
+		return err
+	}
+	if err := q.store.queries.DeleteToolApprovalRequestsBySessionToolCall(ctx, sqliteArg); err != nil {
+		return mapQueryErr(err)
+	}
+	return nil
+}
+
+func (q *Queries) CancelPendingToolApprovalsBySession(ctx context.Context, arg pgsqlc.CancelPendingToolApprovalsBySessionParams) ([]pgsqlc.ToolApprovalRequest, error) {
+	if q == nil || q.store == nil || q.store.queries == nil {
+		return nil, errSQLiteQueriesNotConfigured
+	}
+	var sqliteArg sqlitesqlc.CancelPendingToolApprovalsBySessionParams
+	if err := convertValue(arg, &sqliteArg); err != nil {
+		return nil, err
+	}
+	out, err := q.store.queries.CancelPendingToolApprovalsBySession(ctx, sqliteArg)
+	if err != nil {
+		return nil, mapQueryErr(err)
+	}
+	var result []pgsqlc.ToolApprovalRequest
+	if err := convertValue(out, &result); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func (q *Queries) ExpireStaleToolApprovals(ctx context.Context, arg pgsqlc.ExpireStaleToolApprovalsParams) ([]pgsqlc.ToolApprovalRequest, error) {
+	if q == nil || q.store == nil || q.store.queries == nil {
+		return nil, errSQLiteQueriesNotConfigured
+	}
+	var sqliteArg sqlitesqlc.ExpireStaleToolApprovalsParams
+	if err := convertValue(arg, &sqliteArg); err != nil {
+		return nil, err
+	}
+	out, err := q.store.queries.ExpireStaleToolApprovals(ctx, sqliteArg)
+	if err != nil {
+		return nil, mapQueryErr(err)
+	}
+	var result []pgsqlc.ToolApprovalRequest
+	if err := convertValue(out, &result); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
 func (q *Queries) RemoveChatParticipant(ctx context.Context, arg pgsqlc.RemoveChatParticipantParams) error {
 	if q == nil || q.store == nil || q.store.queries == nil {
 		return errSQLiteQueriesNotConfigured

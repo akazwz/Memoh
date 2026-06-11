@@ -376,12 +376,20 @@ func provideACPSessionPool(lc fx.Lifecycle, log *slog.Logger, runner *acpclient.
 	pool.SetToolSessionContextStore(toolContexts)
 	pool.SetToolApprovalService(toolApproval)
 	containerdHandler.SetACPRuntimeResolver(pool)
+	// Long-running loops must not inherit fx's OnStart context (it is scoped
+	// to startup); give them a process-lifetime context cancelled on stop —
+	// the same pattern the email manager uses.
+	runCtx, cancelRun := context.WithCancel(context.Background())
 	lc.Append(fx.Hook{
-		OnStart: func(ctx context.Context) error {
-			pool.StartReaper(ctx)
+		OnStart: func(context.Context) error {
+			pool.StartReaper(runCtx)
+			// Expire orphaned pending approvals (waiter died with its server
+			// or runtime); rides the same lifecycle as the runtime reaper.
+			toolApproval.StartExpirySweeper(runCtx)
 			return nil
 		},
 		OnStop: func(context.Context) error {
+			cancelRun()
 			pool.CloseAll() //nolint:contextcheck // ACP shutdown must close subprocesses even after lifecycle ctx cancellation.
 			return nil
 		},
@@ -610,13 +618,35 @@ func provideOAuthService(log *slog.Logger, queries dbstore.Queries, cfg config.C
 	return mcp.NewOAuthService(log, queries, callbackURL)
 }
 
-func provideACPToolSource(log *slog.Logger, toolApproval *toolapproval.Service, userInput *userinput.Service, toolContexts *mcp.ToolSessionContextStore, eventHub *event.Hub) *agenttools.NativeToolSource {
+func provideACPToolSource(log *slog.Logger, toolApproval *toolapproval.Service, userInput *userinput.Service, toolContexts *mcp.ToolSessionContextStore, eventHub *event.Hub, containerdHandler *handlers.ContainerdHandler) *agenttools.NativeToolSource {
 	return agenttools.NewNativeToolSource(log, nil, agenttools.NativeToolSourceOptions{
 		AllowAll:          true,
 		Approval:          toolApproval,
 		ApprovalPublisher: eventHub,
 		UserInput:         userInput,
 		ToolEvents:        toolContexts,
+		// Gateway-side skill loading: ACP runtimes calling Memoh tools over
+		// MCP have no resolver-provided RunConfig, so the source loads
+		// workspace skills itself (same backing store as the native path).
+		SkillLoader: func(ctx context.Context, botID string) (map[string]agenttools.SkillDetail, error) {
+			items, err := containerdHandler.LoadSkills(ctx, botID)
+			if err != nil {
+				return nil, err
+			}
+			skills := make(map[string]agenttools.SkillDetail, len(items))
+			for _, item := range items {
+				skillPath := ""
+				if item.SourcePath != "" {
+					skillPath = stdpath.Dir(item.SourcePath)
+				}
+				skills[item.Name] = agenttools.SkillDetail{
+					Description: item.Description,
+					Content:     item.Content,
+					Path:        skillPath,
+				}
+			}
+			return skills, nil
+		},
 	})
 }
 

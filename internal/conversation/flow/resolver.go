@@ -100,6 +100,7 @@ type Resolver struct {
 	continueUserInputFn func(ctx context.Context, req userinput.Request, input UserInputResponseInput, result sdk.ToolResultPart, eventCh chan<- WSStreamEvent) error
 	outboundFn          func(ctx context.Context, botID, channelType, target, text string) error
 	bgNotifDeferred     sync.Map // key: "botID:sessionID" → wake arrived while a session turn was active
+	acpTurnStreams      sync.Map // key: sessionID → *acpTurnStream (reconnect backfill snapshot)
 	sessionTurnMu       sync.Mutex
 	sessionTurnRefs     map[string]int // key: "botID:sessionID" → active turn refcount
 	timeout             time.Duration

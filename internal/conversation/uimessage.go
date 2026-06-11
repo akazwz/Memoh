@@ -4,6 +4,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/memohai/memoh/internal/streamevent"
 	"github.com/memohai/memoh/internal/userinput"
 )
 
@@ -117,7 +118,7 @@ type UIBackgroundTask struct {
 // UIMessageStreamEvent is the generic event shape accepted by the UI stream converter.
 // The handler layer adapts agent/channel events to this struct to avoid package cycles.
 type UIMessageStreamEvent struct {
-	Type        string
+	Type        streamevent.Type
 	Delta       string
 	ToolName    string
 	ToolCallID  string

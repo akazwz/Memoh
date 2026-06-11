@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log/slog"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -18,6 +19,7 @@ import (
 	"github.com/memohai/memoh/internal/db/postgres/sqlc"
 	dbstore "github.com/memohai/memoh/internal/db/store"
 	memprovider "github.com/memohai/memoh/internal/memory/adapters"
+	messageevent "github.com/memohai/memoh/internal/message/event"
 	"github.com/memohai/memoh/internal/session"
 	"github.com/memohai/memoh/internal/settings"
 	"github.com/memohai/memoh/internal/toolapproval"
@@ -390,6 +392,313 @@ func TestStreamACPAgentWSFailurePersistsRoundAndSkipsMemory(t *testing.T) {
 	}
 }
 
+// abortingACPPrompter blocks until the stream context is cancelled (the user
+// abort path) and then returns the partial result with the context error,
+// mirroring the pool's abort-keepalive behaviour.
+type abortingACPPrompter struct {
+	result acpclient.PromptResult
+}
+
+func (p *abortingACPPrompter) Prompt(ctx context.Context, _ acpagent.PromptInput) (acpclient.PromptResult, error) {
+	<-ctx.Done()
+	result := p.result
+	result.StopReason = "cancelled"
+	return result, ctx.Err()
+}
+
+func (*abortingACPPrompter) AbortTurn(string, string, string) (acpagent.RuntimeStatus, error) {
+	return acpagent.RuntimeStatus{}, acpagent.ErrNoActiveTurn
+}
+
+type recordingEventPublisher struct {
+	mu     sync.Mutex
+	events []messageevent.Event
+}
+
+func (p *recordingEventPublisher) Publish(event messageevent.Event) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.events = append(p.events, event)
+}
+
+func (p *recordingEventPublisher) byType(eventType messageevent.EventType) []map[string]any {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	var out []map[string]any
+	for _, event := range p.events {
+		if event.Type != eventType {
+			continue
+		}
+		var payload map[string]any
+		if json.Unmarshal(event.Data, &payload) == nil {
+			out = append(out, payload)
+		}
+	}
+	return out
+}
+
+func TestStreamACPAgentWSPublishesTurnStreamAndSnapshot(t *testing.T) {
+	t.Parallel()
+
+	messages := &recordingMessageService{}
+	publisher := &recordingEventPublisher{}
+	pool := &recordingACPPrompter{
+		result: acpclient.PromptResult{Text: "done", StopReason: "end_turn"},
+	}
+	resolver := &Resolver{
+		messageService: messages,
+		eventPublisher: publisher,
+		acpPool:        pool,
+		sessionService: &fakeBackgroundSessionService{
+			getFn: func(_ context.Context, sessionID string) (session.Session, error) {
+				return session.Session{
+					ID:    sessionID,
+					BotID: storeRoundBotID,
+					Type:  session.TypeACPAgent,
+					Metadata: map[string]any{
+						"acp_agent_id": "codex",
+						"project_path": "/data/app",
+					},
+				}, nil
+			},
+		},
+		logger: slog.New(slog.DiscardHandler),
+	}
+
+	eventCh := make(chan WSStreamEvent, 16)
+	if err := resolver.streamACPAgentWS(
+		context.Background(),
+		conversation.ChatRequest{
+			BotID:     storeRoundBotID,
+			SessionID: "session-1",
+			Query:     "inspect",
+		},
+		eventCh,
+		make(chan struct{}),
+	); err != nil {
+		t.Fatalf("streamACPAgentWS() error = %v", err)
+	}
+
+	// The hub mirror must carry the full lifecycle: start, the streamed UI
+	// message, and a terminal end marker with the outcome.
+	published := publisher.byType(messageevent.EventTypeACPTurnStream)
+	if len(published) < 3 {
+		t.Fatalf("published %d acp_turn_stream events, want >= 3 (start/message/end): %#v", len(published), published)
+	}
+	streamType := func(payload map[string]any) string {
+		stream, _ := payload["stream"].(map[string]any)
+		value, _ := stream["type"].(string)
+		return value
+	}
+	if streamType(published[0]) != "start" {
+		t.Fatalf("first published stream = %#v, want start", published[0])
+	}
+	if got, _ := published[0]["turn_id"].(string); got != "turn-test" {
+		t.Fatalf("published turn_id = %q, want turn-test", got)
+	}
+	last := published[len(published)-1]
+	lastStream, _ := last["stream"].(map[string]any)
+	if lastStream["type"] != "end" || lastStream["outcome"] != "end" {
+		t.Fatalf("last published stream = %#v, want end/end", last)
+	}
+	sawMessage := false
+	for _, payload := range published {
+		if streamType(payload) == "message" {
+			sawMessage = true
+		}
+	}
+	if !sawMessage {
+		t.Fatal("no message payload published to the hub mirror")
+	}
+
+	// The snapshot survives turn completion for reconnect backfill.
+	snapshot, ok := resolver.ACPTurnSnapshot("session-1")
+	if !ok {
+		t.Fatal("no turn snapshot recorded")
+	}
+	if snapshot.TurnID != "turn-test" || snapshot.Active {
+		t.Fatalf("snapshot = %#v, want finished turn-test", snapshot)
+	}
+	foundText := false
+	for _, message := range snapshot.Messages {
+		if strings.Contains(message.Content, "streamed from acp") {
+			foundText = true
+		}
+	}
+	if !foundText {
+		t.Fatalf("snapshot messages = %#v, want streamed text", snapshot.Messages)
+	}
+}
+
+func TestStreamACPAgentWSBusyEmitsErrorWithoutPersisting(t *testing.T) {
+	t.Parallel()
+
+	messages := &recordingMessageService{}
+	pool := &recordingACPPrompter{err: acpagent.ErrSessionBusy}
+	resolver := &Resolver{
+		messageService: messages,
+		acpPool:        pool,
+		sessionService: &fakeBackgroundSessionService{
+			getFn: func(_ context.Context, sessionID string) (session.Session, error) {
+				return session.Session{
+					ID:    sessionID,
+					BotID: storeRoundBotID,
+					Type:  session.TypeACPAgent,
+					Metadata: map[string]any{
+						"acp_agent_id": "codex",
+						"project_path": "/data/app",
+					},
+				}, nil
+			},
+		},
+		logger: slog.New(slog.DiscardHandler),
+	}
+
+	// The direct pipeline call surfaces busy honestly (the background
+	// notification path requeues on it)...
+	directCh := make(chan WSStreamEvent, 8)
+	err := resolver.streamACPAgentWS(
+		context.Background(),
+		conversation.ChatRequest{
+			BotID:     storeRoundBotID,
+			SessionID: "session-1",
+			Query:     "while busy",
+		},
+		directCh,
+		make(chan struct{}),
+	)
+	if !errors.Is(err, acpagent.ErrSessionBusy) {
+		t.Fatalf("streamACPAgentWS() error = %v, want ErrSessionBusy", err)
+	}
+
+	// ...while the WS entry point renders it as an in-stream error so the
+	// user sees the message and the abort affordance.
+	eventCh := make(chan WSStreamEvent, 8)
+	if err := resolver.StreamChatWS(
+		context.Background(),
+		conversation.ChatRequest{
+			BotID:     storeRoundBotID,
+			SessionID: "session-1",
+			Query:     "while busy",
+		},
+		eventCh,
+		make(chan struct{}),
+	); err != nil {
+		t.Fatalf("StreamChatWS() error = %v", err)
+	}
+
+	// The prompt was never delivered: no round may be persisted.
+	if len(messages.persisted) != 0 {
+		t.Fatalf("busy rejection persisted %d messages, want 0", len(messages.persisted))
+	}
+	events := drainAgentEvents(t, eventCh)
+	var sawBusyError bool
+	for _, event := range events {
+		if event.Type == agentpkg.EventError && strings.Contains(event.Error, "turn in progress") {
+			sawBusyError = true
+		}
+	}
+	if !sawBusyError {
+		t.Fatalf("events = %#v, want busy error event", events)
+	}
+	if !containsStreamEvent(events, agentpkg.EventAgentAbort) {
+		t.Fatalf("events = %#v, want agent abort after busy error", events)
+	}
+}
+
+type cancellingApprovalQueries struct {
+	dbstore.Queries
+	mu        sync.Mutex
+	cancelled []sqlc.CancelPendingToolApprovalsBySessionParams
+}
+
+func (q *cancellingApprovalQueries) CancelPendingToolApprovalsBySession(_ context.Context, arg sqlc.CancelPendingToolApprovalsBySessionParams) ([]sqlc.ToolApprovalRequest, error) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.cancelled = append(q.cancelled, arg)
+	return []sqlc.ToolApprovalRequest{{Status: toolapproval.StatusCancelled}}, nil
+}
+
+func TestStreamACPAgentWSAbortPersistsCleanCancelledRound(t *testing.T) {
+	t.Parallel()
+
+	const abortSessionID = "33333333-3333-3333-3333-333333333333"
+	messages := &recordingMessageService{}
+	memory := &storeRoundMemoryProvider{afterChat: make(chan memprovider.AfterChatRequest, 1)}
+	registry := memprovider.NewRegistry(slog.New(slog.DiscardHandler))
+	registry.Register(storeRoundMemoryProviderID, memory)
+	approvalQueries := &cancellingApprovalQueries{}
+	pool := &abortingACPPrompter{
+		result: acpclient.PromptResult{Text: "partial answer"},
+	}
+	resolver := &Resolver{
+		messageService:  messages,
+		memoryRegistry:  registry,
+		settingsService: settings.NewService(slog.New(slog.DiscardHandler), &storeRoundSettingsQueries{}, nil, nil),
+		toolApproval:    toolapproval.NewService(slog.New(slog.DiscardHandler), approvalQueries, nil),
+		acpPool:         pool,
+		sessionService: &fakeBackgroundSessionService{
+			getFn: func(_ context.Context, sessionID string) (session.Session, error) {
+				return session.Session{
+					ID:    sessionID,
+					BotID: storeRoundBotID,
+					Type:  session.TypeACPAgent,
+					Metadata: map[string]any{
+						"acp_agent_id": "codex",
+						"project_path": "/data/app",
+					},
+				}, nil
+			},
+		},
+		logger: slog.New(slog.DiscardHandler),
+	}
+
+	abortCh := make(chan struct{}, 1)
+	abortCh <- struct{}{}
+	eventCh := make(chan WSStreamEvent, 8)
+	if err := resolver.streamACPAgentWS(
+		context.Background(),
+		conversation.ChatRequest{
+			BotID:     storeRoundBotID,
+			SessionID: abortSessionID,
+			Query:     "inspect",
+		},
+		eventCh,
+		abortCh,
+	); err != nil {
+		t.Fatalf("streamACPAgentWS() error = %v", err)
+	}
+
+	// The aborted turn's pending approvals are cancelled with it: the waiter
+	// is gone, so a row left pending would stay actionable forever.
+	approvalQueries.mu.Lock()
+	cancelCalls := len(approvalQueries.cancelled)
+	approvalQueries.mu.Unlock()
+	if cancelCalls != 1 {
+		t.Fatalf("pending-approval cascade calls = %d, want 1", cancelCalls)
+	}
+
+	if len(messages.persisted) != 2 {
+		t.Fatalf("persisted %d messages, want user + assistant", len(messages.persisted))
+	}
+	// A user abort is not a failure: the partial text is stored verbatim, with
+	// no error suffix and no error metadata — unlike the failure path above.
+	if got := persistedText(t, messages.persisted[1].Content); got != "partial answer" {
+		t.Fatalf("assistant cancelled text = %q, want partial answer without error suffix", got)
+	}
+	if _, hasError := messages.persisted[1].Metadata["error"]; hasError {
+		t.Fatalf("cancelled round carries error metadata: %#v", messages.persisted[1].Metadata)
+	}
+	if got, _ := messages.persisted[1].Metadata["stop_reason"].(string); got != "cancelled" {
+		t.Fatalf("cancelled round stop_reason = %q, want cancelled", got)
+	}
+	select {
+	case got := <-memory.afterChat:
+		t.Fatalf("memory was called for an aborted ACP turn: %#v", got)
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
 func TestStreamACPAgentWSSuccessStoresMemory(t *testing.T) {
 	t.Parallel()
 
@@ -481,25 +790,25 @@ func TestACPFailureResultPreservesPartialOutput(t *testing.T) {
 func TestMapACPStandardToolCallEvent(t *testing.T) {
 	t.Parallel()
 
-	events := mapACPStreamEvent(acpclient.StreamEvent{
+	event, ok := MapACPStreamEvent(acpclient.StreamEvent{
 		Type:       acpclient.StreamEventToolCallEnd,
 		ToolCallID: "read-1",
 		ToolName:   "read",
 		Input:      map[string]any{"path": "README.md"},
 		Result:     map[string]any{"ok": true},
 	})
-	if len(events) != 1 {
-		t.Fatalf("events len = %d, want 1", len(events))
+	if !ok {
+		t.Fatal("tool_call_end did not map")
 	}
-	if events[0].Type != agentpkg.EventToolCallEnd || events[0].ToolName != "read" || events[0].ToolCallID != "read-1" {
-		t.Fatalf("event = %#v, want standard read tool end", events[0])
+	if event.Type != agentpkg.EventToolCallEnd || event.ToolName != "read" || event.ToolCallID != "read-1" {
+		t.Fatalf("event = %#v, want standard read tool end", event)
 	}
 }
 
 func TestMapACPUserInputRequestEvent(t *testing.T) {
 	t.Parallel()
 
-	events := mapACPStreamEvent(acpclient.StreamEvent{
+	event, ok := MapACPStreamEvent(acpclient.StreamEvent{
 		Type:        acpclient.StreamEventUserInputRequest,
 		ToolCallID:  "mcp-http-call-1",
 		ToolName:    "ask_user",
@@ -512,10 +821,9 @@ func TestMapACPUserInputRequestEvent(t *testing.T) {
 			"ui_payload":    map[string]any{"version": 2},
 		},
 	})
-	if len(events) != 1 {
-		t.Fatalf("events len = %d, want 1", len(events))
+	if !ok {
+		t.Fatal("user_input_request did not map")
 	}
-	event := events[0]
 	if event.Type != agentpkg.EventUserInputRequest || event.ToolCallID != "mcp-http-call-1" {
 		t.Fatalf("event = %#v, want user input request on same tool call", event)
 	}
@@ -729,15 +1037,15 @@ func TestACPResultOutputMessagesMergesApprovalBeforeToolStart(t *testing.T) {
 func TestMapACPReasoningDeltaEvent(t *testing.T) {
 	t.Parallel()
 
-	events := mapACPStreamEvent(acpclient.StreamEvent{
+	event, ok := MapACPStreamEvent(acpclient.StreamEvent{
 		Type:  acpclient.StreamEventReasoningDelta,
 		Delta: "I should inspect the workspace first.",
 	})
-	if len(events) != 1 {
-		t.Fatalf("events len = %d, want 1", len(events))
+	if !ok {
+		t.Fatal("reasoning_delta did not map")
 	}
-	if events[0].Type != agentpkg.EventReasoningDelta || events[0].Delta != "I should inspect the workspace first." {
-		t.Fatalf("event = %#v, want reasoning delta", events[0])
+	if event.Type != agentpkg.EventReasoningDelta || event.Delta != "I should inspect the workspace first." {
+		t.Fatalf("event = %#v, want reasoning delta", event)
 	}
 }
 
@@ -799,9 +1107,17 @@ type recordingACPPrompter struct {
 	err    error
 }
 
+func (*recordingACPPrompter) AbortTurn(string, string, string) (acpagent.RuntimeStatus, error) {
+	return acpagent.RuntimeStatus{}, acpagent.ErrNoActiveTurn
+}
+
 type storeRoundMemoryProvider struct {
 	memprovider.Provider
 	afterChat chan memprovider.AfterChatRequest
+}
+
+func (*storeRoundMemoryProvider) OnBeforeChat(context.Context, memprovider.BeforeChatRequest) (*memprovider.BeforeChatResult, error) {
+	return nil, nil
 }
 
 func (*storeRoundMemoryProvider) Type() string {
@@ -839,7 +1155,10 @@ func flowTestUUID(value string) pgtype.UUID {
 func (p *recordingACPPrompter) Prompt(_ context.Context, input acpagent.PromptInput) (acpclient.PromptResult, error) {
 	p.calls++
 	p.input = input
-	if input.Sink != nil {
+	if p.err == nil && input.OnTurnStart != nil {
+		input.OnTurnStart("turn-test")
+	}
+	if p.err == nil && input.Sink != nil {
 		input.Sink.EmitACPEvent(acpclient.StreamEvent{Type: acpclient.StreamEventTextDelta, Delta: "streamed from acp"})
 	}
 	return p.result, p.err

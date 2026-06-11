@@ -568,6 +568,23 @@ func (s *Session) ID() string {
 	return string(s.sessionID)
 }
 
+// Alive reports whether the agent process is still attached: false once the
+// session is closed or the process's output stream has terminated. The pool
+// uses it to avoid keeping a dead runtime warm when an abort races a crash.
+func (s *Session) Alive() bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	closed := s.closed
+	proc := s.proc
+	s.mu.Unlock()
+	if closed || proc == nil {
+		return false
+	}
+	return !proc.exited()
+}
+
 func (s *Session) ProjectPath() string {
 	if s == nil {
 		return ""
@@ -638,6 +655,11 @@ func (s *Session) PromptWithToolContext(ctx context.Context, prompt string, reso
 	if len(sinks) > 0 {
 		sink = sinks[0]
 	}
+	if sink != nil {
+		// The sink owner (the session pool) keeps the authoritative ordered
+		// event view; buffering a second copy here would be discarded anyway.
+		collector.skipEvents()
+	}
 	if callbacks != nil {
 		callbacks.setPromptState(collector, sink, toolSession)
 	}
@@ -656,6 +678,13 @@ func (s *Session) PromptWithToolContext(ctx context.Context, prompt string, reso
 		StopReason: string(resp.StopReason),
 		Text:       collected.Text,
 		Events:     collected.Events,
+	}
+	if err != nil && promptCtx.Err() != nil && result.StopReason == "" {
+		// The prompt was cancelled client-side (caller abort or session close)
+		// and connection.Prompt already sent session/cancel. ACP defines this
+		// outcome as the cancelled stop reason; record it so callers can tell
+		// an interrupted turn from a transport failure.
+		result.StopReason = string(acp.StopReasonCancelled)
 	}
 	if err != nil {
 		if proc != nil {

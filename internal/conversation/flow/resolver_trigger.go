@@ -11,6 +11,7 @@ import (
 
 	sdk "github.com/memohai/twilight-ai/sdk"
 
+	"github.com/memohai/memoh/internal/acpagent"
 	agentpkg "github.com/memohai/memoh/internal/agent"
 	"github.com/memohai/memoh/internal/channel/route"
 	"github.com/memohai/memoh/internal/conversation"
@@ -199,6 +200,49 @@ func (r *Resolver) TriggerBackgroundNotification(ctx context.Context, botID, ses
 	}
 	defer doneTurn()
 
+	isACP, acpErr := r.isACPAgentSession(ctx, sessionID)
+	if acpErr != nil {
+		// We can't tell whether this is an ACP session. Do NOT fall through to
+		// the native-LLM path: if it IS an ACP session that would inject a
+		// foreign model's output into an agent-owned conversation. Leave the
+		// notifications queued (undrained) so the next trigger retries.
+		r.logger.Warn("background notification trigger: ACP session check failed; deferring to avoid native fallback",
+			slog.String("bot_id", botID),
+			slog.String("session_id", sessionID),
+			slog.Any("error", acpErr),
+		)
+		return
+	}
+	if isACP {
+		// ACP sessions get their notifications as a real ACP prompt through
+		// the full turn pipeline (persistence, turn mirror, approvals) —
+		// never through the native LLM, which would inject a foreign model's
+		// output into an agent-owned conversation.
+		notifications := r.bgManager.DrainNotifications(botID, sessionID)
+		if len(notifications) == 0 {
+			return
+		}
+		if err := r.deliverACPBackgroundNotifications(ctx, botID, sessionID, notifications); err != nil {
+			r.bgManager.RequeueNotifications(notifications)
+			if errors.Is(err, acpagent.ErrSessionBusy) {
+				// A turn slipped in between the idle check and delivery; the
+				// turn-exit hook re-triggers us.
+				r.markDeferredBackgroundNotification(botID, sessionID)
+				r.logger.Info("ACP background notification deferred: turn in progress",
+					slog.String("bot_id", botID),
+					slog.String("session_id", sessionID),
+				)
+				return
+			}
+			r.logger.Warn("ACP background notification delivery failed",
+				slog.String("bot_id", botID),
+				slog.String("session_id", sessionID),
+				slog.Any("error", err),
+			)
+		}
+		return
+	}
+
 	notifications := r.bgManager.DrainNotifications(botID, sessionID)
 	if len(notifications) == 0 {
 		return
@@ -374,7 +418,7 @@ func (r *Resolver) deliverBackgroundNotifications(ctx context.Context, botID, se
 			continue
 		}
 
-		for _, uiMessage := range converter.HandleEvent(uiStreamEventFromAgentEvent(event)) {
+		for _, uiMessage := range converter.HandleEvent(conversation.UIStreamEventFromAgent(event)) {
 			r.publishBackgroundAgentStream(botID, sessionID, map[string]any{
 				"type": "message",
 				"data": uiMessage,
@@ -452,56 +496,4 @@ func (r *Resolver) publishBackgroundAgentStream(botID, sessionID string, stream 
 		BotID: botID,
 		Data:  data,
 	})
-}
-
-func uiStreamEventFromAgentEvent(event agentpkg.StreamEvent) conversation.UIMessageStreamEvent {
-	attachments := make([]conversation.UIAttachment, 0, len(event.Attachments))
-	for _, attachment := range event.Attachments {
-		attachments = append(attachments, conversation.UIAttachment{
-			ID:          strings.TrimSpace(attachment.ContentHash),
-			Type:        normalizeUIAttachmentType(attachment.Type, attachment.Mime),
-			Path:        strings.TrimSpace(attachment.Path),
-			URL:         strings.TrimSpace(attachment.URL),
-			Name:        strings.TrimSpace(attachment.Name),
-			ContentHash: strings.TrimSpace(attachment.ContentHash),
-			Mime:        strings.TrimSpace(attachment.Mime),
-			Size:        attachment.Size,
-			Metadata:    attachment.Metadata,
-		})
-	}
-
-	return conversation.UIMessageStreamEvent{
-		Type:        string(event.Type),
-		Delta:       event.Delta,
-		ToolName:    event.ToolName,
-		ToolCallID:  event.ToolCallID,
-		Input:       event.Input,
-		Output:      event.Result,
-		Progress:    event.Progress,
-		Attachments: attachments,
-		Error:       event.Error,
-		ApprovalID:  event.ApprovalID,
-		UserInputID: event.UserInputID,
-		ShortID:     event.ShortID,
-		Status:      event.Status,
-		Metadata:    event.Metadata,
-	}
-}
-
-func normalizeUIAttachmentType(kind, mime string) string {
-	normalizedKind := strings.ToLower(strings.TrimSpace(kind))
-	if normalizedKind != "" {
-		return normalizedKind
-	}
-	normalizedMime := strings.ToLower(strings.TrimSpace(mime))
-	switch {
-	case strings.HasPrefix(normalizedMime, "image/"):
-		return "image"
-	case strings.HasPrefix(normalizedMime, "audio/"):
-		return "audio"
-	case strings.HasPrefix(normalizedMime, "video/"):
-		return "video"
-	default:
-		return "file"
-	}
 }

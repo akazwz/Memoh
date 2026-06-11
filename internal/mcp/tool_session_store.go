@@ -3,6 +3,8 @@ package mcp
 import (
 	"strings"
 	"sync"
+
+	"github.com/memohai/memoh/internal/streamevent"
 )
 
 // ToolSessionContextStore keeps the latest per-prompt context for long-lived
@@ -29,14 +31,22 @@ type ToolStreamEvent struct {
 	Input      any    `json:"input,omitempty"`
 	Result     any    `json:"result,omitempty"`
 	Error      string `json:"error,omitempty"`
-	// Interactive request fields (Type "user_input_request"). Carrying the
-	// pending interaction over the same channel as tool_call_start lets the UI
-	// attach it to the existing tool call block instead of rendering a
-	// separate synthetic message.
+	// Interactive request fields (Type "user_input_request" /
+	// "tool_approval_request"). Carrying the pending interaction over the
+	// same channel as tool_call_start lets the UI attach it to the existing
+	// tool call block instead of rendering a separate synthetic message.
 	UserInputID string         `json:"user_input_id,omitempty"`
+	ApprovalID  string         `json:"approval_id,omitempty"`
 	ShortID     int            `json:"short_id,omitempty"`
 	Status      string         `json:"status,omitempty"`
 	Metadata    map[string]any `json:"metadata,omitempty"`
+	// Tool side-effect payloads (Type attachment_delta / reaction_delta /
+	// speech_delta): the gateway-side Emitter bridge carries them over the
+	// same channel as tool lifecycle events so ACP turns get the same
+	// attachment/reaction/TTS surfaces as the in-process agent loop.
+	Attachments []streamevent.FileAttachment `json:"attachments,omitempty"`
+	Reactions   []streamevent.ReactionItem   `json:"reactions,omitempty"`
+	Speeches    []streamevent.SpeechItem     `json:"speeches,omitempty"`
 }
 
 func (s *ToolSessionContextStore) Put(session ToolSessionContext) {
@@ -107,8 +117,17 @@ func (s *ToolSessionContextStore) AppendToolEvent(session ToolSessionContext, ev
 	event.Type = strings.TrimSpace(event.Type)
 	event.ToolCallID = strings.TrimSpace(event.ToolCallID)
 	event.ToolName = strings.TrimSpace(event.ToolName)
-	if event.Type == "" || event.ToolCallID == "" || event.ToolName == "" {
+	if event.Type == "" {
 		return false
+	}
+	switch event.Type {
+	case string(streamevent.Attachment), string(streamevent.Reaction), string(streamevent.Speech):
+		// Tool side-effects are turn-scoped, not tool-call-scoped: they carry
+		// no call identity by design (same as the in-process agent loop).
+	default:
+		if event.ToolCallID == "" || event.ToolName == "" {
+			return false
+		}
 	}
 	s.mu.RLock()
 	sink := s.sinks[key]
@@ -215,6 +234,12 @@ func MergeToolSessionContext(base, latest ToolSessionContext) ToolSessionContext
 	}
 	if latest.RuntimeActive {
 		merged.RuntimeActive = true
+	}
+	if latest.SupportsImageInput {
+		merged.SupportsImageInput = true
+	}
+	if value := strings.TrimSpace(latest.Timezone); value != "" {
+		merged.Timezone = value
 	}
 	return merged
 }

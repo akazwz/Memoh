@@ -3,18 +3,36 @@ package flow
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
 
 	sdk "github.com/memohai/twilight-ai/sdk"
 
+	"github.com/memohai/memoh/internal/acpagent"
 	agentpkg "github.com/memohai/memoh/internal/agent"
 	"github.com/memohai/memoh/internal/conversation"
 )
 
 // WSStreamEvent represents a raw JSON event forwarded from the agent.
 type WSStreamEvent = json.RawMessage
+
+// emitWSStreamEvents marshals and forwards events onto a WS stream channel,
+// stopping silently when the stream context is gone.
+func emitWSStreamEvents(ctx context.Context, eventCh chan<- WSStreamEvent, events ...agentpkg.StreamEvent) {
+	for _, event := range events {
+		data, err := json.Marshal(event)
+		if err != nil {
+			continue
+		}
+		select {
+		case eventCh <- json.RawMessage(data):
+		case <-ctx.Done():
+			return
+		}
+	}
+}
 
 // terminalSnapshot captures the partial state extracted from a terminal
 // agent event. It is used both for the success-path persistence and for the
@@ -222,7 +240,7 @@ func (r *Resolver) StreamChatWS(
 	eventCh chan<- WSStreamEvent,
 	abortCh <-chan struct{},
 ) error {
-	if ok, err := r.isACPAgentSession(ctx, req); err != nil {
+	if ok, err := r.isACPAgentSession(ctx, req.SessionID); err != nil {
 		r.logger.Error("StreamChatWS: ACP session check failed",
 			slog.String("bot_id", req.BotID),
 			slog.String("session_id", req.SessionID),
@@ -230,7 +248,20 @@ func (r *Resolver) StreamChatWS(
 		)
 		return err
 	} else if ok {
-		return r.streamACPAgentWS(ctx, req, eventCh, abortCh)
+		if err := r.streamACPAgentWS(ctx, req, eventCh, abortCh); err != nil {
+			if errors.Is(err, acpagent.ErrSessionBusy) {
+				// Render busy as an in-stream error so the WS protocol stays
+				// "events then done": the user sees the message and the abort
+				// affordance instead of a transport failure.
+				emitWSStreamEvents(ctx, eventCh,
+					agentpkg.StreamEvent{Type: agentpkg.EventError, Error: err.Error()},
+					agentpkg.StreamEvent{Type: agentpkg.EventAgentAbort},
+				)
+				return nil
+			}
+			return err
+		}
+		return nil
 	}
 
 	doneTurn := r.enterSessionTurn(ctx, req.BotID, req.SessionID)

@@ -7,12 +7,21 @@ import (
 	"strings"
 	"time"
 
+	"github.com/memohai/memoh/internal/acpclient"
 	agentpkg "github.com/memohai/memoh/internal/agent"
 	"github.com/memohai/memoh/internal/conversation"
 	"github.com/memohai/memoh/internal/prune"
 )
 
-const acpContextURI = "memoh://context/current-turn"
+const (
+	acpContextURI = "memoh://context/current-turn"
+	acpHistoryURI = "memoh://context/session-history"
+	// acpHistoryWindowMinutes bounds how far back the cold-start history
+	// replay reaches. Generous on purpose: a session resumed after days away
+	// should still recall its conversation; the byte budget below is what
+	// actually caps the payload.
+	acpHistoryWindowMinutes = 60 * 24 * 30
+)
 
 type acpContextRenderInput struct {
 	Now                       time.Time
@@ -33,6 +42,12 @@ type acpContextRenderInput struct {
 	Attachments               []conversation.ChatAttachment
 	Files                     []agentpkg.SystemFile
 	PlatformIdentitiesSection string
+	// SemanticMemory is the memory provider's per-turn recall (the same
+	// OnBeforeChat context the native pipeline injects), so ACP turns get
+	// parity on semantic memory, not just the file-based MEMORY.md.
+	SemanticMemory string
+	// SkillsSection lists executable workspace skills (names + descriptions).
+	SkillsSection string
 }
 
 func (r *Resolver) buildACPContextMarkdown(ctx context.Context, req conversation.ChatRequest, agentID, projectPath string) string {
@@ -64,6 +79,29 @@ func (r *Resolver) buildACPContextMarkdown(ctx context.Context, req conversation
 		}
 	}
 
+	// Per-turn semantic recall: the same provider hook the native pipeline
+	// injects before each turn. loadMemoryContextMessage is failure-tolerant
+	// (warn + nil), so a degraded memory provider never blocks the turn.
+	semanticMemory := ""
+	if memMsg := r.loadMemoryContextMessage(ctx, req); memMsg != nil {
+		semanticMemory = strings.TrimSpace(memMsg.TextContent())
+	}
+
+	// Workspace skills are executable through the MCP skill tools, but the
+	// agent only discovers them if the context says they exist.
+	skillsSection := ""
+	if r != nil && r.skillLoader != nil {
+		entries, skillErr := r.skillLoader.LoadSkills(ctx, req.BotID)
+		if skillErr != nil {
+			if r.logger != nil {
+				r.logger.Warn("load skills for ACP context failed",
+					slog.String("bot_id", req.BotID), slog.Any("error", skillErr))
+			}
+		} else {
+			skillsSection = renderACPSkillsSection(entries)
+		}
+	}
+
 	return renderACPContextMarkdown(acpContextRenderInput{
 		Now:                       now,
 		Timezone:                  timezoneName,
@@ -83,6 +121,106 @@ func (r *Resolver) buildACPContextMarkdown(ctx context.Context, req conversation
 		Attachments:               req.Attachments,
 		Files:                     files,
 		PlatformIdentitiesSection: platformIdentitiesSection,
+		SemanticMemory:            semanticMemory,
+		SkillsSection:             skillsSection,
+	})
+}
+
+// renderACPSkillsSection lists workspace skills by name and description so
+// the agent knows what the Memoh skill tools can execute. Content stays out:
+// it is loaded on demand when a skill runs.
+func renderACPSkillsSection(entries []SkillEntry) string {
+	lines := make([]string, 0, len(entries)+1)
+	for _, entry := range entries {
+		name := strings.TrimSpace(entry.Name)
+		if name == "" {
+			continue
+		}
+		line := "- " + name
+		if description := strings.TrimSpace(entry.Description); description != "" {
+			line += ": " + description
+		}
+		lines = append(lines, line)
+	}
+	if len(lines) == 0 {
+		return ""
+	}
+	header := "These workspace skills are executable via the Memoh MCP skill tools (use_skill / list_skills):\n"
+	return header + strings.Join(lines, "\n")
+}
+
+// buildACPHistoryResources renders the session's persisted conversation as an
+// embedded prompt resource. ACP agents keep conversation state in the agent
+// process; when the pool cold-starts a replacement runtime (server restart,
+// idle reap, crash, agent switch) that state is gone, so the first prompt the
+// new runtime serves replays the durable history. Returns nil when the
+// session has none. Invoked lazily by the session pool, at most once per
+// runtime (see acpagent.PromptInput.HistoryResources).
+func (r *Resolver) buildACPHistoryResources(ctx context.Context, req conversation.ChatRequest) ([]acpclient.PromptResource, error) {
+	if r == nil || r.messageService == nil {
+		return nil, nil
+	}
+	messages, err := r.loadMessages(ctx, req.ChatID, req.SessionID, acpHistoryWindowMinutes)
+	if err != nil {
+		if r.logger != nil {
+			r.logger.Warn("load ACP session history for replay failed",
+				slog.String("session_id", req.SessionID),
+				slog.Any("error", err))
+		}
+		// Distinguish "load failed" from "no history": the pool keeps its
+		// once-per-runtime flag unburned on error and retries next prompt.
+		return nil, err
+	}
+	markdown := renderACPHistoryMarkdown(messages)
+	if markdown == "" {
+		return nil, nil
+	}
+	return []acpclient.PromptResource{{
+		URI:      acpHistoryURI,
+		MimeType: "text/markdown",
+		Text:     markdown,
+	}}, nil
+}
+
+func renderACPHistoryMarkdown(messages []messageWithUsage) string {
+	var sb strings.Builder
+	for _, item := range messages {
+		var label string
+		switch strings.TrimSpace(item.Message.Role) {
+		case "user":
+			label = "User"
+		case "assistant":
+			label = "Assistant"
+		default:
+			// Tool results and system rows add bulk without continuity value.
+			continue
+		}
+		text := strings.TrimSpace(item.Message.TextContent())
+		if text == "" {
+			continue
+		}
+		sb.WriteString("### ")
+		sb.WriteString(label)
+		sb.WriteString("\n\n")
+		sb.WriteString(text)
+		sb.WriteString("\n\n")
+	}
+	body := strings.TrimSpace(sb.String())
+	if body == "" {
+		return ""
+	}
+	header := "# Previous Conversation\n\n" +
+		"The agent runtime for this session was restarted, so earlier turns are replayed below from Memoh's records. " +
+		"They are prior context only — do not re-execute them. The user prompt outside this resource is the actual task.\n\n"
+	// Tail-heavy pruning: the most recent turns matter most for continuity,
+	// but keep a slice of the beginning since it usually states the task.
+	return prune.PruneWithEdges(header+body, "ACP session history", prune.Config{
+		MaxBytes:  24 * 1024,
+		MaxLines:  600,
+		HeadBytes: 6 * 1024,
+		TailBytes: 18 * 1024,
+		HeadLines: 150,
+		TailLines: 450,
 	})
 }
 
@@ -128,6 +266,26 @@ func renderACPContextMarkdown(input acpContextRenderInput) string {
 		sb.WriteString(section)
 		sb.WriteString("\n\n")
 	}
+	if memory := strings.TrimSpace(input.SemanticMemory); memory != "" {
+		writeACPContextSection(&sb, "Relevant Memories", prune.PruneWithEdges(memory, "semantic memory", prune.Config{
+			MaxBytes:  14 * 1024,
+			MaxLines:  320,
+			HeadBytes: 9 * 1024,
+			TailBytes: 4 * 1024,
+			HeadLines: 220,
+			TailLines: 80,
+		}))
+	}
+	if skills := strings.TrimSpace(input.SkillsSection); skills != "" {
+		writeACPContextSection(&sb, "Available Skills", prune.PruneWithEdges(skills, "skills", prune.Config{
+			MaxBytes:  8 * 1024,
+			MaxLines:  200,
+			HeadBytes: 6 * 1024,
+			TailBytes: 2 * 1024,
+			HeadLines: 160,
+			TailLines: 40,
+		}))
+	}
 
 	files := acpContextSystemFiles(input.Files)
 	for _, file := range files {
@@ -157,9 +315,14 @@ type acpContextFileSection struct {
 }
 
 func acpContextSystemFiles(files []agentpkg.SystemFile) []acpContextFileSection {
+	// Pretty titles only — NOT a whitelist. Whatever FSClient.LoadSystemFiles
+	// returns must reach the agent (the native pipeline injects the whole set
+	// verbatim); filtering here is exactly how AGENTS.md silently went
+	// missing when the canonical file list changed under a hardcoded
+	// allowlist. Unknown names fall back to a title derived from the
+	// filename, never dropped.
 	titles := map[string]string{
-		"IDENTITY.md": "Bot Identity",
-		"SOUL.md":     "Bot Soul",
+		"AGENTS.md":   "Agent Instructions",
 		"MEMORY.md":   "Long-Term Memory",
 		"PROFILES.md": "Profiles",
 	}
@@ -167,7 +330,7 @@ func acpContextSystemFiles(files []agentpkg.SystemFile) []acpContextFileSection 
 	for _, file := range files {
 		name := strings.TrimSpace(file.Filename)
 		content := strings.TrimSpace(file.Content)
-		if content == "" {
+		if name == "" || content == "" {
 			continue
 		}
 		title, ok := titles[name]
@@ -175,7 +338,7 @@ func acpContextSystemFiles(files []agentpkg.SystemFile) []acpContextFileSection 
 			if strings.HasPrefix(name, "memory/") && strings.HasSuffix(name, ".md") {
 				title = "Daily Memory - " + strings.TrimPrefix(name, "memory/")
 			} else {
-				continue
+				title = acpContextFileTitle(name)
 			}
 		}
 		out = append(out, acpContextFileSection{
@@ -191,6 +354,30 @@ func acpContextSystemFiles(files []agentpkg.SystemFile) []acpContextFileSection 
 		})
 	}
 	return out
+}
+
+// acpContextFileTitle derives a human title from an unrecognized system-file
+// name (e.g. "CONTRIBUTING.md" -> "Contributing") so newly added workspace
+// files surface with a readable heading instead of being dropped.
+func acpContextFileTitle(name string) string {
+	base := strings.TrimSuffix(strings.TrimSpace(name), ".md")
+	base = strings.ReplaceAll(strings.ReplaceAll(base, "_", " "), "-", " ")
+	fields := strings.Fields(base)
+	for i, field := range fields {
+		if len(field) <= 4 && field == strings.ToUpper(field) {
+			continue // keep short acronyms (API, TODO) as-is
+		}
+		// Title-case on runes, not bytes: field[:1] would split a multi-byte
+		// rune (e.g. "über") and inject a mojibake heading into the agent's
+		// context.
+		r := []rune(field)
+		fields[i] = strings.ToUpper(string(r[0])) + strings.ToLower(string(r[1:]))
+	}
+	title := strings.Join(fields, " ")
+	if title == "" {
+		return name
+	}
+	return title
 }
 
 func formatACPContextFileExcerpt(name, content string) string {

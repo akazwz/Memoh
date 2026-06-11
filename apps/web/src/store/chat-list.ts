@@ -16,6 +16,8 @@ import {
   setACPRuntimeModel as requestSetACPRuntimeModel,
   setACPRuntimeModelByID as requestSetACPRuntimeModelByID,
   closeACPRuntime as requestCloseACPRuntime,
+  abortACPTurn as requestAbortACPTurn,
+  getACPTurnSnapshot as requestACPTurnSnapshot,
   updateSessionAgent as requestUpdateSessionAgent,
   updateSessionTitle as requestUpdateSessionTitle,
   fetchSessions,
@@ -243,6 +245,10 @@ export const useChatStore = defineStore('chat', () => {
   const streaming = computed(() => isSessionStreaming(sessionId.value))
   const sessions = ref<SessionSummary[]>([])
   const loading = ref(false)
+  // Remote (headless) ACP turns observed via the acp_turn_stream mirror or
+  // the turn snapshot: turns running server-side that this client's WS does
+  // not own. Keyed by session id; the abort button targets these over HTTP.
+  const acpRemoteTurns = ref<Record<string, { turnId: string }>>({})
   const loadingChats = ref(false)
   const loadingOlder = ref(false)
   const hasMoreOlder = ref(true)
@@ -1537,6 +1543,118 @@ export const useChatStore = defineStore('chat', () => {
     handleWSStreamEvent(stream, sid || undefined)
   }
 
+  const acpRemoteTurnStreamPrefix = 'acp-turn:'
+
+  function hasLocalStream(targetSessionId: string): boolean {
+    return activeStreamIdsForSession(targetSessionId)
+      .some((id) => !id.startsWith(acpRemoteTurnStreamPrefix))
+  }
+
+  // applyACPTurnStreamEvent renders the hub mirror of an ACP turn. The mirror
+  // exists for observers WITHOUT a live WS stream on the session (other tabs,
+  // reconnects, the busy case where another connection owns the turn); a
+  // client whose own WS is already rendering the turn ignores it, which is
+  // why the event type is distinct from agent_stream.
+  function applyACPTurnStreamEvent(event: MessageStreamEvent) {
+    const stream = event.stream
+    if (!stream) return
+    const sid = (event.session_id ?? '').trim()
+    const turnId = (event.turn_id ?? '').trim()
+    if (!sid || !turnId) return
+    if (hasLocalStream(sid)) return
+
+    const streamId = acpRemoteTurnStreamPrefix + turnId
+    const activeSid = (sessionId.value ?? '').trim()
+
+    // Self-heal a missed `end`: a new turn for the session supersedes the
+    // tracked one, so close the stale lane before rendering the new turn —
+    // otherwise the view stays stuck in streaming state forever.
+    const tracked = acpRemoteTurns.value[sid]?.turnId ?? ''
+    if (tracked && tracked !== turnId && sid === activeSid) {
+      handleWSStreamEvent({ type: 'end', stream_id: acpRemoteTurnStreamPrefix + tracked, session_id: sid }, sid)
+    }
+    switch (stream.type) {
+      case 'start':
+        acpRemoteTurns.value = { ...acpRemoteTurns.value, [sid]: { turnId } }
+        if (sid === activeSid) {
+          handleWSStreamEvent({ type: 'start', stream_id: streamId, session_id: sid }, sid)
+          loading.value = true
+        }
+        return
+      case 'message':
+        if (!stream.data) return
+        acpRemoteTurns.value = { ...acpRemoteTurns.value, [sid]: { turnId } }
+        if (sid === activeSid) {
+          handleWSStreamEvent({ type: 'message', stream_id: streamId, session_id: sid, data: stream.data }, sid)
+          loading.value = true
+        }
+        return
+      case 'end': {
+        const next = { ...acpRemoteTurns.value }
+        delete next[sid]
+        acpRemoteTurns.value = next
+        if (sid === activeSid) {
+          handleWSStreamEvent({ type: 'end', stream_id: streamId, session_id: sid }, sid)
+        }
+        return
+      }
+    }
+  }
+
+  // syncACPTurnSnapshot backfills the in-flight turn when an ACP session is
+  // opened: the server keeps the turn's accumulated UI messages so a client
+  // that (re)connects mid-turn sees what it missed and can abort it.
+  async function syncACPTurnSnapshot(sessionID?: string) {
+    const bid = currentBotId.value ?? ''
+    const sid = sessionID?.trim() || sessionId.value || ''
+    if (!bid || !sid) return undefined
+    const snapshot = await requestACPTurnSnapshot(bid, sid)
+    const turnId = (snapshot.turn_id ?? '').trim()
+    if (!snapshot.active || !turnId) {
+      // Finished turns are covered by persisted history; only live turns
+      // need the in-memory backfill. Close any lane we were still tracking
+      // (a missed `end` would otherwise leave the view streaming forever).
+      const tracked = acpRemoteTurns.value[sid]?.turnId ?? ''
+      if (tracked && sid === (sessionId.value ?? '').trim()) {
+        handleWSStreamEvent({ type: 'end', stream_id: acpRemoteTurnStreamPrefix + tracked, session_id: sid }, sid)
+      }
+      const next = { ...acpRemoteTurns.value }
+      delete next[sid]
+      acpRemoteTurns.value = next
+      return snapshot
+    }
+    acpRemoteTurns.value = { ...acpRemoteTurns.value, [sid]: { turnId } }
+    if (hasLocalStream(sid) || sid !== (sessionId.value ?? '').trim()) return snapshot
+
+    const streamId = acpRemoteTurnStreamPrefix + turnId
+    handleWSStreamEvent({ type: 'start', stream_id: streamId, session_id: sid }, sid)
+    for (const message of snapshot.messages ?? []) {
+      handleWSStreamEvent({ type: 'message', stream_id: streamId, session_id: sid, data: message as UIMessage }, sid)
+    }
+    loading.value = true
+    return snapshot
+  }
+
+  // abortACPTurn stops the session's in-flight turn out-of-band — the lever
+  // for turns this client does not own (started by a dead connection or
+  // another tab). The tracked turn id makes the abort precise: a stale view
+  // cannot kill a newer turn it never observed.
+  async function abortACPTurn(sessionID?: string) {
+    const bid = currentBotId.value ?? ''
+    const sid = sessionID?.trim() || sessionId.value || ''
+    if (!bid || !sid) return undefined
+    const turnId = acpRemoteTurns.value[sid]?.turnId ?? ''
+    try {
+      const runtime = await requestAbortACPTurn(bid, sid, turnId)
+      setACPRuntimeStatus(bid, sid, runtime)
+      return runtime
+    } finally {
+      const next = { ...acpRemoteTurns.value }
+      delete next[sid]
+      acpRemoteTurns.value = next
+    }
+  }
+
   function handleStreamEvent(targetBotId: string, event: MessageStreamEvent) {
     const eventType = (event.type ?? '').toLowerCase()
     const eBotId = (event.bot_id ?? '').trim()
@@ -1549,6 +1667,11 @@ export const useChatStore = defineStore('chat', () => {
 
     if (eventType === 'agent_stream') {
       applyAgentStreamEvent(event)
+      return
+    }
+
+    if (eventType === 'acp_turn_stream') {
+      applyACPTurnStreamEvent(event)
       return
     }
 
@@ -1595,12 +1718,22 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   function abort() {
-    const activeIds = activeStreamIdsForSession(sessionId.value)
+    const sid = (sessionId.value ?? '').trim()
+    const activeIds = activeStreamIdsForSession(sid)
     const abortError = new Error('aborted')
     abortError.name = 'AbortError'
+    let hadLocal = false
     for (const streamId of activeIds) {
+      if (!streamId.startsWith(acpRemoteTurnStreamPrefix)) hadLocal = true
       if (activeWs?.connected) activeWs.abort(streamId)
       rejectAssistantStream(streamId, abortError)
+    }
+    // A remote ACP turn (started by another connection, or surviving this
+    // one's disconnect) has no local stream to abort: stop it over HTTP.
+    if (sid && acpRemoteTurns.value[sid] && !hadLocal) {
+      void abortACPTurn(sid).catch(() => {
+        // 409 = the turn already finished; nothing to do either way.
+      })
     }
     loading.value = isSessionStreaming(sessionId.value)
   }
@@ -2482,6 +2615,9 @@ export const useChatStore = defineStore('chat', () => {
     acpRuntimeKey,
     ensureACPRuntime,
     setACPRuntimeModel,
+    acpRemoteTurns,
+    syncACPTurnSnapshot,
+    abortACPTurn,
     createNewSession,
     createNewChat: createNewSession,
     removeSession,

@@ -1,6 +1,11 @@
 package conversation
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/memohai/memoh/internal/streamevent"
+	"github.com/memohai/memoh/internal/toolapproval"
+)
 
 type uiTextStreamState struct {
 	ID      int
@@ -28,12 +33,12 @@ func NewUIMessageStreamConverter() *UIMessageStreamConverter {
 
 // HandleEvent updates converter state and returns zero or one complete UI messages.
 func (c *UIMessageStreamConverter) HandleEvent(event UIMessageStreamEvent) []UIMessage {
-	switch strings.ToLower(strings.TrimSpace(event.Type)) {
-	case "text_start":
+	switch streamevent.Type(strings.ToLower(strings.TrimSpace(string(event.Type)))) {
+	case streamevent.TextStart:
 		c.text = &uiTextStreamState{ID: c.nextMessageID()}
 		return nil
 
-	case "text_delta":
+	case streamevent.TextDelta:
 		if c.text == nil {
 			c.text = &uiTextStreamState{ID: c.nextMessageID()}
 		}
@@ -44,15 +49,15 @@ func (c *UIMessageStreamConverter) HandleEvent(event UIMessageStreamEvent) []UIM
 			Content: c.text.Content,
 		}}
 
-	case "text_end":
+	case streamevent.TextEnd:
 		c.text = nil
 		return nil
 
-	case "reasoning_start":
+	case streamevent.ReasoningStart:
 		c.reasoning = &uiTextStreamState{ID: c.nextMessageID()}
 		return nil
 
-	case "reasoning_delta":
+	case streamevent.ReasoningDelta:
 		if c.reasoning == nil {
 			c.reasoning = &uiTextStreamState{ID: c.nextMessageID()}
 		}
@@ -63,11 +68,11 @@ func (c *UIMessageStreamConverter) HandleEvent(event UIMessageStreamEvent) []UIM
 			Content: c.reasoning.Content,
 		}}
 
-	case "reasoning_end":
+	case streamevent.ReasoningEnd:
 		c.reasoning = nil
 		return nil
 
-	case "tool_call_start", "tool_call_input_start":
+	case streamevent.ToolCallStart, streamevent.ToolCallInputStart:
 		state := c.findToolState(event.ToolCallID, event.ToolName)
 		if state == nil {
 			state = &uiToolStreamState{
@@ -95,7 +100,7 @@ func (c *UIMessageStreamConverter) HandleEvent(event UIMessageStreamEvent) []UIM
 		c.text = nil
 		return []UIMessage{cloneToolStreamMessage(state.Message)}
 
-	case "tool_call_progress":
+	case streamevent.ToolCallProgress:
 		state := c.findToolState(event.ToolCallID, event.ToolName)
 		if state == nil {
 			state = &uiToolStreamState{
@@ -118,7 +123,7 @@ func (c *UIMessageStreamConverter) HandleEvent(event UIMessageStreamEvent) []UIM
 		}
 		return []UIMessage{cloneToolStreamMessage(state.Message)}
 
-	case "tool_approval_request":
+	case streamevent.ToolApprovalRequest:
 		state := c.findToolState(event.ToolCallID, event.ToolName)
 		if state == nil {
 			state = &uiToolStreamState{
@@ -144,20 +149,17 @@ func (c *UIMessageStreamConverter) HandleEvent(event UIMessageStreamEvent) []UIM
 			state.Message.ToolCallID = trimmed
 			c.tools[trimmed] = state
 		}
-		status := strings.TrimSpace(event.Status)
-		if status == "" {
-			status = "pending"
-		}
+		status := toolapproval.NormalizedStatus(event.Status)
 		state.Message.Running = uiBoolPtr(false)
 		state.Message.Approval = &UIToolApproval{
 			ApprovalID: strings.TrimSpace(event.ApprovalID),
 			ShortID:    event.ShortID,
 			Status:     status,
-			CanApprove: strings.EqualFold(status, "pending"),
+			CanApprove: toolapproval.CanApprove(status),
 		}
 		return []UIMessage{cloneToolStreamMessage(state.Message)}
 
-	case "user_input_request":
+	case streamevent.UserInputRequest:
 		state := c.findToolState(event.ToolCallID, event.ToolName)
 		if state == nil {
 			state = &uiToolStreamState{
@@ -201,7 +203,7 @@ func (c *UIMessageStreamConverter) HandleEvent(event UIMessageStreamEvent) []UIM
 		)
 		return []UIMessage{cloneToolStreamMessage(state.Message)}
 
-	case "tool_call_end":
+	case streamevent.ToolCallEnd:
 		state := c.findToolState(event.ToolCallID, event.ToolName)
 		if state == nil {
 			state = &uiToolStreamState{
@@ -223,7 +225,7 @@ func (c *UIMessageStreamConverter) HandleEvent(event UIMessageStreamEvent) []UIM
 		}
 		return []UIMessage{cloneToolStreamMessage(state.Message)}
 
-	case "attachment_delta":
+	case streamevent.Attachment:
 		if len(event.Attachments) == 0 {
 			return nil
 		}

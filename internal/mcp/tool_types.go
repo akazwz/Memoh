@@ -26,6 +26,15 @@ type ToolSessionContext struct {
 	ConversationType  string
 	IsSubagent        bool
 	RuntimeActive     bool
+	// SupportsImageInput reports whether the consuming agent accepts image
+	// content in tool results (MCP image content blocks). The in-process
+	// agent path derives this from the model; ACP runtimes opt in (MCP image
+	// content is protocol-standard).
+	SupportsImageInput bool
+	// Timezone is the IANA timezone resolved for the bot/user, carried as a
+	// string so the context stays serializable; executors parse it into a
+	// *time.Location.
+	Timezone string
 }
 
 // ToolDescriptor is the MCP tools/list item shape used by the gateway.

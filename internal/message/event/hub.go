@@ -25,6 +25,12 @@ const (
 	EventTypeBackgroundTask EventType = "background_task"
 	// EventTypeAgentStream is emitted for server-initiated agent stream updates.
 	EventTypeAgentStream EventType = "agent_stream"
+	// EventTypeACPTurnStream mirrors an ACP turn's UI message stream so any
+	// subscribed client — not just the WS connection that started the turn —
+	// can observe a running turn. Deliberately distinct from agent_stream:
+	// clients with a live WS on the session dedupe by turn_id, and legacy
+	// clients ignore the unknown type instead of double-rendering.
+	EventTypeACPTurnStream EventType = "acp_turn_stream"
 )
 
 // Event is the normalized payload emitted by the in-process message event hub.

@@ -54,18 +54,7 @@ func (f *FSClient) LoadSystemFiles(ctx context.Context) []SystemFile {
 	if f.now != nil {
 		now = f.now()
 	}
-	pad := func(n int) string { return fmt.Sprintf("%02d", n) }
-	today := fmt.Sprintf("%d-%s-%s", now.Year(), pad(int(now.Month())), pad(now.Day()))
-	yesterday := now.AddDate(0, 0, -1)
-	yesterdayStr := fmt.Sprintf("%d-%s-%s", yesterday.Year(), pad(int(yesterday.Month())), pad(yesterday.Day()))
-
-	filenames := []string{
-		"AGENTS.md",
-		"MEMORY.md",
-		"PROFILES.md",
-		"memory/" + today + ".md",
-		"memory/" + yesterdayStr + ".md",
-	}
+	filenames := SystemFileNames(now)
 
 	files := make([]SystemFile, len(filenames))
 	for i, name := range filenames {
@@ -76,4 +65,24 @@ func (f *FSClient) LoadSystemFiles(ctx context.Context) []SystemFile {
 		}
 	}
 	return files
+}
+
+// SystemFileNames returns the workspace instruction/memory files the agent
+// loads for the given time. Single source of truth: the native pipeline
+// injects this whole set, and the ACP context builder's parity guard asserts
+// every one of them is injected — so a name added here cannot silently go
+// missing from one pipeline (which is exactly how AGENTS.md was lost).
+func SystemFileNames(now time.Time) []string {
+	pad := func(n int) string { return fmt.Sprintf("%02d", n) }
+	today := fmt.Sprintf("%d-%s-%s", now.Year(), pad(int(now.Month())), pad(now.Day()))
+	yesterday := now.AddDate(0, 0, -1)
+	yesterdayStr := fmt.Sprintf("%d-%s-%s", yesterday.Year(), pad(int(yesterday.Month())), pad(yesterday.Day()))
+
+	return []string{
+		"AGENTS.md",
+		"MEMORY.md",
+		"PROFILES.md",
+		"memory/" + today + ".md",
+		"memory/" + yesterdayStr + ".md",
+	}
 }

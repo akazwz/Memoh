@@ -47,7 +47,11 @@ func TestCodexACPLiveContainerAPIKey(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	if err := WriteCodexManagedConfig(ctx, client, map[string]string{"api_key": apiKey}); err != nil {
+	managed := map[string]string{"api_key": apiKey}
+	if baseURL := strings.TrimSpace(os.Getenv("MEMOH_LIVE_CODEX_BASE_URL")); baseURL != "" {
+		managed["base_url"] = baseURL
+	}
+	if err := WriteCodexManagedConfig(ctx, client, managed); err != nil {
 		t.Fatalf("write live Codex managed config: %v", err)
 	}
 	result, err := runner.Run(ctx, RunRequest{

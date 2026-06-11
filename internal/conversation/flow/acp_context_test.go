@@ -29,12 +29,17 @@ func TestRenderACPContextMarkdownIncludesDynamicRuntimeAndMemory(t *testing.T) {
 			Path: "/data/uploads/spec.md",
 			Mime: "text/markdown",
 		}},
+		// The real source — agentpkg.FSClient.LoadSystemFiles — returns exactly
+		// this curated set (AGENTS.md / MEMORY.md / PROFILES.md / daily
+		// memory). ACP must inject the whole set verbatim, like the native
+		// pipeline does; a hardcoded allowlist here is precisely how AGENTS.md
+		// once went missing. NOTES.md stands in for a newly added workspace
+		// file: it must still surface, with a title derived from its name.
 		Files: []agentpkg.SystemFile{
-			{Filename: "IDENTITY.md", Content: "I am Memo."},
-			{Filename: "SOUL.md", Content: "Be concise."},
-			{Filename: "TOOLS.md", Content: "Do not inject normal tool prompt."},
+			{Filename: "AGENTS.md", Content: "Always run the linter before committing."},
 			{Filename: "MEMORY.md", Content: "User prefers small patches."},
 			{Filename: "PROFILES.md", Content: "Alice is the project owner."},
+			{Filename: "NOTES.md", Content: "Deploys happen on Fridays."},
 			{Filename: "memory/2026-06-01.md", Content: "Today we discussed ACP context."},
 		},
 	})
@@ -49,15 +54,17 @@ func TestRenderACPContextMarkdownIncludesDynamicRuntimeAndMemory(t *testing.T) {
 		"Sender: Alice",
 		"Conversation name: Dev Group",
 		"name=spec.md",
-		"## Bot Identity",
-		"Embedded excerpt from `/data/IDENTITY.md`",
-		"I am Memo.",
-		"## Bot Soul",
-		"Be concise.",
+		"## Agent Instructions",
+		"Embedded excerpt from `/data/AGENTS.md`",
+		"Always run the linter before committing.",
 		"## Long-Term Memory",
 		"User prefers small patches.",
 		"## Profiles",
 		"Alice is the project owner.",
+		// A file the allowlist never knew about still reaches the agent, under
+		// a title derived from its name.
+		"## Notes",
+		"Deploys happen on Fridays.",
 		"## Daily Memory - 2026-06-01.md",
 		"Today we discussed ACP context.",
 		"This virtual resource is already embedded",
@@ -65,8 +72,5 @@ func TestRenderACPContextMarkdownIncludesDynamicRuntimeAndMemory(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Fatalf("context missing %q:\n%s", want, got)
 		}
-	}
-	if strings.Contains(got, "Do not inject normal tool prompt.") {
-		t.Fatalf("TOOLS.md content should not be injected into ACP context:\n%s", got)
 	}
 }

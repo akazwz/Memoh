@@ -14,14 +14,12 @@ import (
 
 	"github.com/memohai/memoh/internal/mcp"
 	messageevent "github.com/memohai/memoh/internal/message/event"
+	"github.com/memohai/memoh/internal/streamevent"
 	"github.com/memohai/memoh/internal/toolapproval"
 	"github.com/memohai/memoh/internal/userinput"
 )
 
-const (
-	nativeToolApprovalWaitTimeout = 10 * time.Minute
-	nativeUserInputWaitTimeout    = 10 * time.Minute
-)
+const nativeUserInputWaitTimeout = 10 * time.Minute
 
 type NativeToolSourceOptions struct {
 	AllowAll          bool
@@ -30,6 +28,7 @@ type NativeToolSourceOptions struct {
 	ApprovalPublisher messageevent.Publisher
 	UserInput         NativeToolUserInputService
 	ToolEvents        NativeToolEventSink
+	SkillLoader       NativeToolSkillLoader
 }
 
 type NativeToolApprovalService interface {
@@ -68,7 +67,14 @@ type NativeToolSource struct {
 	publisher  messageevent.Publisher
 	userInput  NativeToolUserInputService
 	toolEvents NativeToolEventSink
+	skills     NativeToolSkillLoader
 }
+
+// NativeToolSkillLoader loads workspace skills for gateway-side tool
+// execution. The in-process agent path receives skills via RunConfig (loaded
+// by the resolver); the gateway path — ACP runtimes calling Memoh tools over
+// MCP — must load them itself or the skill tools see an empty workspace.
+type NativeToolSkillLoader func(ctx context.Context, botID string) (map[string]SkillDetail, error)
 
 func NewNativeToolSource(log *slog.Logger, providers []ToolProvider, opts NativeToolSourceOptions) *NativeToolSource {
 	if log == nil {
@@ -91,6 +97,7 @@ func NewNativeToolSource(log *slog.Logger, providers []ToolProvider, opts Native
 		publisher:  opts.ApprovalPublisher,
 		userInput:  opts.UserInput,
 		toolEvents: opts.ToolEvents,
+		skills:     opts.SkillLoader,
 	}
 	source.SetProviders(providers)
 	return source
@@ -166,9 +173,54 @@ func (s *NativeToolSource) CallTool(ctx context.Context, session mcp.ToolSession
 		if err != nil {
 			return nil, err
 		}
-		return mcp.BuildToolSuccessResult(result), nil
+		return buildGatewayToolResult(result), nil
 	}
 	return nil, mcp.ErrToolNotFound
+}
+
+// buildGatewayToolResult builds the MCP result for a tool the gateway
+// executed. read_media returns its image out-of-band (the in-process agent
+// loop injects it as a follow-up image message); over MCP the equivalent is a
+// standard image content block, which is how an external ACP agent receives
+// visual input. Everything else uses the plain success result.
+func buildGatewayToolResult(result any) map[string]any {
+	if media, ok := readMediaImageResult(result); ok {
+		return media
+	}
+	return mcp.BuildToolSuccessResult(result)
+}
+
+func readMediaImageResult(result any) (map[string]any, bool) {
+	var output ReadMediaToolOutput
+	switch v := result.(type) {
+	case ReadMediaToolOutput:
+		output = v
+	case *ReadMediaToolOutput:
+		if v == nil {
+			return nil, false
+		}
+		output = *v
+	default:
+		return nil, false
+	}
+	if strings.TrimSpace(output.ImageBase64) == "" {
+		return nil, false
+	}
+	mediaType := strings.TrimSpace(output.ImageMediaType)
+	if mediaType == "" {
+		mediaType = "image/png"
+	}
+	// structuredContent + text carry the public (non-image) result; the image
+	// rides a standard MCP image content block so the agent gets visual input
+	// instead of just a textual description.
+	res := mcp.BuildToolSuccessResult(output.Public)
+	content, _ := res["content"].([]map[string]any)
+	res["content"] = append(content, map[string]any{
+		"type":     "image",
+		"data":     output.ImageBase64,
+		"mimeType": mediaType,
+	})
+	return res, true
 }
 
 func (s *NativeToolSource) callAskUser(ctx context.Context, session mcp.ToolSessionContext, arguments map[string]any) (map[string]any, error) {
@@ -312,80 +364,40 @@ func (s *NativeToolSource) requireApproval(ctx context.Context, session mcp.Tool
 	if toolCallID == "" {
 		toolCallID = "mcp-" + uuid.NewString()
 	}
-	input := toolapproval.CreatePendingInput{
-		BotID:                        session.BotID,
-		SessionID:                    session.SessionID,
-		RouteID:                      session.RouteID,
-		ChannelIdentityID:            session.ChannelIdentityID,
-		RequestedByChannelIdentityID: session.ChannelIdentityID,
-		ToolCallID:                   toolCallID,
-		ToolName:                     toolName,
-		ToolInput:                    arguments,
-		SourcePlatform:               session.CurrentPlatform,
-		ReplyTarget:                  session.ReplyTarget,
-		ConversationType:             session.ConversationType,
-	}
-	eval, err := s.approval.EvaluatePolicy(ctx, input)
-	if err != nil {
-		return nativeApprovalResult{}, err
-	}
-	if eval.Decision == toolapproval.DecisionBypass {
-		return nativeApprovalResult{approved: true}, nil
-	}
-
-	req, err := s.approval.CreatePending(ctx, input)
-	if err != nil {
-		return nativeApprovalResult{}, err
-	}
-	if strings.TrimSpace(session.StreamID) == "" {
-		reason := "tool execution requires approval, but this ACP tool call is not attached to an interactive stream"
-		rejected, rejectErr := s.approval.Reject(ctx, req.ID, session.ChannelIdentityID, reason)
-		if rejectErr != nil {
-			return nativeApprovalResult{}, rejectErr
-		}
-		return nativeApprovalResult{message: rejectedToolApprovalText(rejected.DecisionReason)}, nil
-	}
-
-	s.publishToolApprovalRequest(session, req)
-	waitCtx, cancel := context.WithTimeout(ctx, nativeToolApprovalWaitTimeout)
-	defer cancel()
-	decided, err := s.approval.WaitForDecision(waitCtx, req.ID)
-	if err != nil {
-		if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
-			rejectCtx, rejectCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-			defer rejectCancel()
-			rejected, rejectErr := s.approval.Reject(rejectCtx, req.ID, session.ChannelIdentityID, "tool approval timed out")
-			if rejectErr != nil {
-				return nativeApprovalResult{}, rejectErr
+	result, err := toolapproval.RunFlow(ctx, s.approval, toolapproval.FlowRequest{
+		Input: toolapproval.CreatePendingInput{
+			BotID:                        session.BotID,
+			SessionID:                    session.SessionID,
+			RouteID:                      session.RouteID,
+			ChannelIdentityID:            session.ChannelIdentityID,
+			RequestedByChannelIdentityID: session.ChannelIdentityID,
+			ToolCallID:                   toolCallID,
+			ToolName:                     toolName,
+			ToolInput:                    arguments,
+			SourcePlatform:               session.CurrentPlatform,
+			ReplyTarget:                  session.ReplyTarget,
+			ConversationType:             session.ConversationType,
+		},
+		Interactive: strings.TrimSpace(session.StreamID) != "",
+		Emit: func(req toolapproval.Request) {
+			// Prefer the canonical tool-event channel (the same one
+			// tool_call_start travels): it reaches the calling runtime's live
+			// stream AND its persisted round, exactly like the ACP client's
+			// own approval emits. The hub publish is the fallback for
+			// sessions without a live sink.
+			if s.appendApprovalEvent(session, req) {
+				return
 			}
-			timeoutReq := req
-			timeoutReq.Status = toolapproval.StatusRejected
-			timeoutReq.DecisionReason = rejected.DecisionReason
-			s.publishToolApprovalRequest(session, timeoutReq)
-			return nativeApprovalResult{message: rejectedToolApprovalText(rejected.DecisionReason)}, nil
-		}
+			s.publishToolApprovalRequest(session, req)
+		},
+	})
+	if err != nil {
 		return nativeApprovalResult{}, err
 	}
-	decisionReq := req
-	if status := strings.TrimSpace(decided.Status); status != "" {
-		decisionReq.Status = status
-	} else {
-		decisionReq.Status = toolapproval.StatusRejected
-	}
-	decisionReq.DecisionReason = decided.DecisionReason
-	s.publishToolApprovalRequest(session, decisionReq)
-	switch strings.ToLower(strings.TrimSpace(decisionReq.Status)) {
-	case toolapproval.StatusApproved:
+	if result.Approved {
 		return nativeApprovalResult{approved: true}, nil
-	case toolapproval.StatusRejected:
-		return nativeApprovalResult{message: rejectedToolApprovalText(decided.DecisionReason)}, nil
-	default:
-		msg := "tool execution was not approved"
-		if status := strings.TrimSpace(decided.Status); status != "" {
-			msg += ": " + status
-		}
-		return nativeApprovalResult{message: msg}, nil
 	}
+	return nativeApprovalResult{message: toolapproval.RejectionMessage(result)}, nil
 }
 
 // emitUserInputRequest delivers the pending question over the same tool event
@@ -413,6 +425,28 @@ func (s *NativeToolSource) emitUserInputRequest(session mcp.ToolSessionContext, 
 	return delivered
 }
 
+// appendApprovalEvent delivers the approval state change over the canonical
+// tool-event channel, mirroring acpclient's emitToolApprovalRequest shape so
+// the two emitters cannot drift. Returns false when the runtime has no live
+// sink (caller falls back to the hub publish).
+func (s *NativeToolSource) appendApprovalEvent(session mcp.ToolSessionContext, req toolapproval.Request) bool {
+	if s == nil || s.toolEvents == nil {
+		return false
+	}
+	return s.toolEvents.AppendToolEvent(session, mcp.ToolStreamEvent{
+		Type:       string(streamevent.ToolApprovalRequest),
+		ToolCallID: req.ToolCallID,
+		ToolName:   req.ToolName,
+		Input:      req.ToolInput,
+		ApprovalID: req.ID,
+		ShortID:    req.ShortID,
+		Status:     toolapproval.NormalizedStatus(req.Status),
+		Metadata: map[string]any{
+			"approval": toolapproval.RequestMetadata(req),
+		},
+	})
+}
+
 func (s *NativeToolSource) publishToolApprovalRequest(session mcp.ToolSessionContext, req toolapproval.Request) {
 	if s == nil || s.publisher == nil {
 		return
@@ -425,11 +459,6 @@ func (s *NativeToolSource) publishToolApprovalRequest(session mcp.ToolSessionCon
 	}
 
 	running := false
-	status := strings.TrimSpace(req.Status)
-	if status == "" {
-		status = toolapproval.StatusPending
-	}
-	canApprove := strings.EqualFold(status, toolapproval.StatusPending)
 	messageID := 1000000 + req.ShortID
 	message := map[string]any{
 		"id":           messageID,
@@ -438,12 +467,7 @@ func (s *NativeToolSource) publishToolApprovalRequest(session mcp.ToolSessionCon
 		"input":        req.ToolInput,
 		"tool_call_id": req.ToolCallID,
 		"running":      &running,
-		"approval": map[string]any{
-			"approval_id": req.ID,
-			"short_id":    req.ShortID,
-			"status":      status,
-			"can_approve": canApprove,
-		},
+		"approval":     toolapproval.RequestMetadata(req),
 	}
 	s.publishAgentStream(botID, sessionID, map[string]any{
 		"type":       "start",
@@ -479,14 +503,6 @@ func (s *NativeToolSource) publishAgentStream(botID, sessionID string, stream ma
 	})
 }
 
-func rejectedToolApprovalText(reason string) string {
-	reason = strings.TrimSpace(reason)
-	if reason == "" {
-		return "tool execution rejected by user"
-	}
-	return "tool execution rejected by user: " + reason
-}
-
 func (s *NativeToolSource) loadTools(ctx context.Context, session mcp.ToolSessionContext) []sdk.Tool {
 	if s == nil {
 		return nil
@@ -494,17 +510,26 @@ func (s *NativeToolSource) loadTools(ctx context.Context, session mcp.ToolSessio
 	s.mu.RLock()
 	providers := append([]ToolProvider(nil), s.providers...)
 	s.mu.RUnlock()
+	// Parity with the in-process agent path (agent.go assembleTools): the
+	// gateway-side SessionContext must carry the same capability fields —
+	// image support, skills, timezone, and a live emitter — or tools degrade
+	// silently for ACP callers (read_media refuses images, skill tools see an
+	// empty workspace, attachments never reach the stream).
 	toolSession := SessionContext{
-		BotID:             session.BotID,
-		ChatID:            firstNonEmpty(session.ChatID, session.BotID),
-		SessionID:         session.SessionID,
-		SessionType:       session.SessionType,
-		ChannelIdentityID: session.ChannelIdentityID,
-		SessionToken:      session.SessionToken,
-		CurrentPlatform:   session.CurrentPlatform,
-		ReplyTarget:       session.ReplyTarget,
-		ConversationType:  session.ConversationType,
-		IsSubagent:        session.IsSubagent,
+		BotID:              session.BotID,
+		ChatID:             firstNonEmpty(session.ChatID, session.BotID),
+		SessionID:          session.SessionID,
+		SessionType:        session.SessionType,
+		ChannelIdentityID:  session.ChannelIdentityID,
+		SessionToken:       session.SessionToken,
+		CurrentPlatform:    session.CurrentPlatform,
+		ReplyTarget:        session.ReplyTarget,
+		ConversationType:   session.ConversationType,
+		IsSubagent:         session.IsSubagent,
+		SupportsImageInput: session.SupportsImageInput,
+		TimezoneLocation:   timezoneLocation(session.Timezone),
+		Skills:             s.loadSkillDetails(ctx, session.BotID),
+		Emitter:            s.streamEmitterFor(session),
 	}
 	var out []sdk.Tool
 	for _, provider := range providers {
@@ -516,6 +541,87 @@ func (s *NativeToolSource) loadTools(ctx context.Context, session mcp.ToolSessio
 		out = append(out, providerTools...)
 	}
 	return out
+}
+
+func timezoneLocation(name string) *time.Location {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return nil
+	}
+	loc, err := time.LoadLocation(name)
+	if err != nil {
+		return nil
+	}
+	return loc
+}
+
+func (s *NativeToolSource) loadSkillDetails(ctx context.Context, botID string) map[string]SkillDetail {
+	if s == nil || s.skills == nil || strings.TrimSpace(botID) == "" {
+		return nil
+	}
+	skills, err := s.skills(ctx, botID)
+	if err != nil {
+		s.logger.Warn("load skills for gateway tool session failed",
+			slog.String("bot_id", botID), slog.Any("error", err))
+		return nil
+	}
+	return skills
+}
+
+// streamEmitterFor bridges tool side-effect events (attachments, reactions,
+// TTS speech) into the calling runtime's live tool-event channel — the same
+// path tool_call_start travels — translating the tools vocabulary into the
+// shared streamevent one.
+func (s *NativeToolSource) streamEmitterFor(session mcp.ToolSessionContext) StreamEmitter {
+	if s == nil || s.toolEvents == nil {
+		return nil
+	}
+	return func(event ToolStreamEvent) {
+		converted := mcp.ToolStreamEvent{}
+		switch event.Type {
+		case StreamEventAttachment:
+			if len(event.Attachments) == 0 {
+				return
+			}
+			converted.Type = string(streamevent.Attachment)
+			converted.Attachments = make([]streamevent.FileAttachment, 0, len(event.Attachments))
+			for _, attachment := range event.Attachments {
+				converted.Attachments = append(converted.Attachments, streamevent.FileAttachment{
+					Type:        attachment.Type,
+					Base64:      attachment.Base64,
+					Path:        attachment.Path,
+					URL:         attachment.URL,
+					PlatformKey: attachment.PlatformKey,
+					Mime:        attachment.Mime,
+					Name:        attachment.Name,
+					ContentHash: attachment.ContentHash,
+					Size:        attachment.Size,
+					Metadata:    attachment.Metadata,
+				})
+			}
+		case StreamEventReaction:
+			if len(event.Reactions) == 0 {
+				return
+			}
+			converted.Type = string(streamevent.Reaction)
+			converted.Reactions = make([]streamevent.ReactionItem, 0, len(event.Reactions))
+			for _, reaction := range event.Reactions {
+				converted.Reactions = append(converted.Reactions, streamevent.ReactionItem{Emoji: reaction.Emoji})
+			}
+		case StreamEventSpeech:
+			if len(event.Speeches) == 0 {
+				return
+			}
+			converted.Type = string(streamevent.Speech)
+			converted.Speeches = make([]streamevent.SpeechItem, 0, len(event.Speeches))
+			for _, speech := range event.Speeches {
+				converted.Speeches = append(converted.Speeches, streamevent.SpeechItem{Text: speech.Text})
+			}
+		default:
+			return
+		}
+		s.toolEvents.AppendToolEvent(session, converted)
+	}
 }
 
 func (s *NativeToolSource) allowed(name string) bool {

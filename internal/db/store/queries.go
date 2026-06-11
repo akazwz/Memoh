@@ -66,7 +66,10 @@ type Queries interface {
 	CreateSession(ctx context.Context, arg dbsqlc.CreateSessionParams) (dbsqlc.BotSession, error)
 	CreateSessionEvent(ctx context.Context, arg dbsqlc.CreateSessionEventParams) (pgtype.UUID, error)
 	CreateStorageProvider(ctx context.Context, arg dbsqlc.CreateStorageProviderParams) (dbsqlc.StorageProvider, error)
+	CancelPendingToolApprovalsBySession(ctx context.Context, arg dbsqlc.CancelPendingToolApprovalsBySessionParams) ([]dbsqlc.ToolApprovalRequest, error)
 	CreateToolApprovalRequest(ctx context.Context, arg dbsqlc.CreateToolApprovalRequestParams) (dbsqlc.ToolApprovalRequest, error)
+	DeleteToolApprovalRequestsBySessionToolCall(ctx context.Context, arg dbsqlc.DeleteToolApprovalRequestsBySessionToolCallParams) error
+	ExpireStaleToolApprovals(ctx context.Context, arg dbsqlc.ExpireStaleToolApprovalsParams) ([]dbsqlc.ToolApprovalRequest, error)
 	CreateUserInputRequest(ctx context.Context, arg dbsqlc.CreateUserInputRequestParams) (dbsqlc.UserInputRequest, error)
 	CreateUser(ctx context.Context, arg dbsqlc.CreateUserParams) (dbsqlc.User, error)
 	DeleteBotACLRuleByID(ctx context.Context, id pgtype.UUID) error

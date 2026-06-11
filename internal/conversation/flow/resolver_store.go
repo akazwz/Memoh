@@ -21,7 +21,12 @@ type storeRoundOptions struct {
 	AllowPendingToolCalls   bool
 	SkipMemory              bool
 	AllowEmptyAssistantText bool
-	MessageMetadataByIndex  map[int]map[string]any
+	// AssistantMessageMetadata is merged into the persisted metadata of every
+	// assistant message in the round. Role-keyed on purpose: the round is
+	// mutated (tool-closure repair inserts, dedupe/filtering removes) between
+	// the caller and persistence, so positional keys would attach to the
+	// wrong rows.
+	AssistantMessageMetadata map[string]any
 }
 
 func (r *Resolver) storeRoundWithOptions(ctx context.Context, req conversation.ChatRequest, messages []conversation.ModelMessage, modelID string, opts storeRoundOptions) error {
@@ -205,8 +210,8 @@ func (r *Resolver) storeMessages(ctx context.Context, req conversation.ChatReque
 		if i == lastAssistantIdx && len(outboundAssets) > 0 {
 			assets = append(assets, outboundAssets...)
 		}
-		if extraMeta := opts.MessageMetadataByIndex[i]; len(extraMeta) > 0 {
-			persistMeta = mergeMetadata(persistMeta, extraMeta)
+		if msg.Role == "assistant" && len(opts.AssistantMessageMetadata) > 0 {
+			persistMeta = mergeMetadata(persistMeta, opts.AssistantMessageMetadata)
 		}
 		if _, err := r.messageService.Persist(ctx, messagepkg.PersistInput{
 			BotID:                   req.BotID,

@@ -17,6 +17,33 @@ const (
 	setupModeAPIKey = "api_key"
 	setupModeOAuth  = "oauth"
 	setupModeSelf   = "self"
+
+	// SetupModeAPIKey/OAuth name the managed setup modes for
+	// RequiredManagedFields declarations.
+	SetupModeAPIKey = setupModeAPIKey
+	SetupModeOAuth  = setupModeOAuth
+
+	// ContainerHomePersistent keeps the managed container HOME on the
+	// workspace data mount: the agent stores config and session state under
+	// $HOME and it should survive runtime recycles (Codex). The empty default
+	// gives each managed session a disposable HOME for credential isolation
+	// (Claude Code).
+	ContainerHomePersistent = "persistent"
+
+	// ManagedSettingsClaude marks agents that need the Claude-style managed
+	// settings file written into their config dir (the explicit ask/deny
+	// rules that make Memoh policy the single authority — see
+	// acpclient.WriteClaudeManagedSettings).
+	ManagedSettingsClaude = "claude"
+
+	// ManagedEnvClaude marks agents whose managed credentials are injected
+	// via the Anthropic/Claude env contract (acpagent.managedProcessEnv).
+	ManagedEnvClaude = "claude"
+
+	// ManagedConfigCodex marks agents whose managed credentials are written
+	// as CODEX_HOME config files via the workspace bridge
+	// (acpclient.WriteCodexManagedConfig*).
+	ManagedConfigCodex = "codex"
 )
 
 type Profile struct {
@@ -39,6 +66,40 @@ type Profile struct {
 	ManagedFields       []ManagedField
 	SupportedBackends   []string
 	SetupModes          []string
+
+	// Containment declarations (architecture doc §5.6). Per-agent managed-mode
+	// behavior is data here, so onboarding an agent with known shapes is
+	// declaration-only: the owning packages switch on these capabilities,
+	// never on agent IDs.
+
+	// ContainerHomeStrategy selects the managed container HOME:
+	// ContainerHomePersistent or "" (disposable per-session HOME, default).
+	ContainerHomeStrategy string
+	// LocalIsolationEnv/LocalIsolationDir: for local (desktop) BYOK, the env
+	// var pointed at a bot-scoped config dir under the workspace root so
+	// managed credentials never touch the host's real config (CODEX_HOME →
+	// .codex, CLAUDE_CONFIG_DIR → .memoh/claude). Empty = no isolation env.
+	LocalIsolationEnv string
+	LocalIsolationDir string
+	// ManagedSettings selects the managed settings writer (ManagedSettingsClaude
+	// or empty).
+	ManagedSettings string
+	// ManagedEnv selects the managed credential env contract (ManagedEnvClaude
+	// or empty).
+	ManagedEnv string
+	// ManagedThinkingTokens, when > 0, pins the agent's thinking budget in the
+	// managed env (Claude's MAX_THINKING_TOKENS — the older-model thinking
+	// control; newer models gate on effort/SessionConfigValues instead). 0
+	// leaves the agent's own default. Declared here so per-agent tuning never
+	// becomes a code conditional.
+	ManagedThinkingTokens int
+	// ManagedConfig selects the managed config-file reconciler
+	// (ManagedConfigCodex or empty).
+	ManagedConfig string
+	// RequiredManagedFields lists, per managed setup mode, the managed field
+	// IDs that must be non-empty before a session may start. Modes absent
+	// from the map fall back to the ManagedFields Required flags.
+	RequiredManagedFields map[string][]string
 }
 
 type ManagedField struct {
@@ -128,6 +189,17 @@ func codexProfile() Profile {
 		},
 		SupportedBackends: []string{"local", "container"},
 		SetupModes:        []string{setupModeAPIKey, setupModeOAuth, setupModeSelf},
+		// Codex stores config and session state under $HOME; keep it on the
+		// persistent mount. Managed credentials are CODEX_HOME config files,
+		// isolated under the workspace root on local backends.
+		ContainerHomeStrategy: ContainerHomePersistent,
+		LocalIsolationEnv:     "CODEX_HOME",
+		LocalIsolationDir:     ".codex",
+		ManagedConfig:         ManagedConfigCodex,
+		RequiredManagedFields: map[string][]string{
+			SetupModeAPIKey: {"api_key"},
+			SetupModeOAuth:  {},
+		},
 	}
 }
 
@@ -183,6 +255,20 @@ func claudeCodeProfile() Profile {
 		},
 		SupportedBackends: []string{"local", "container"},
 		SetupModes:        []string{setupModeAPIKey, setupModeOAuth, setupModeSelf},
+		// Claude Code gets a disposable HOME (credential isolation), the
+		// managed settings file (ask/deny pins), env-injected credentials,
+		// and a scoped CLAUDE_CONFIG_DIR on local backends. The dir is
+		// deliberately not ".claude": the project's own .claude (a settings
+		// source) must stay distinct from Memoh's managed config.
+		LocalIsolationEnv: "CLAUDE_CONFIG_DIR",
+		LocalIsolationDir: ".memoh/claude",
+		ManagedSettings:       ManagedSettingsClaude,
+		ManagedEnv:            ManagedEnvClaude,
+		ManagedThinkingTokens: 16000,
+		RequiredManagedFields: map[string][]string{
+			SetupModeAPIKey: {"api_key"},
+			SetupModeOAuth:  {"oauth_token"},
+		},
 	}
 }
 

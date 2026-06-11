@@ -25,17 +25,18 @@ func TestCodexACPLiveLocal(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	client := newTestBridgeClient(t, root)
 	runner := NewRunner(nil, testWorkspace{
-		client: newTestBridgeClient(t, root),
+		client: client,
 		info: bridge.WorkspaceInfo{
 			Backend:        bridge.WorkspaceBackendLocal,
 			DefaultWorkDir: root,
 		},
 	})
 
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
 	defer cancel()
-	result, err := runner.Run(ctx, RunRequest{
+	runReq := RunRequest{
 		BotID:       "bot-live",
 		Task:        "Reply with exactly this text and do not modify files: memoh-acp-live-ok",
 		ProjectPath: "/data/project",
@@ -44,8 +45,24 @@ func TestCodexACPLiveLocal(t *testing.T) {
 			"-y",
 			"@zed-industries/codex-acp@0.15.0",
 		},
-		Timeout: 90 * time.Second,
-	})
+		Timeout: 180 * time.Second,
+	}
+	// By default the smoke rides the host's own Codex login (self-style).
+	// With OPENAI_API_KEY set it exercises the managed BYOK path instead:
+	// scoped CODEX_HOME + managed config, optionally against an alternate
+	// OpenAI-compatible endpoint (MEMOH_LIVE_CODEX_BASE_URL).
+	if apiKey := strings.TrimSpace(os.Getenv("OPENAI_API_KEY")); apiKey != "" {
+		managed := map[string]string{"api_key": apiKey}
+		if baseURL := strings.TrimSpace(os.Getenv("MEMOH_LIVE_CODEX_BASE_URL")); baseURL != "" {
+			managed["base_url"] = baseURL
+		}
+		if err := WriteCodexManagedConfig(ctx, client, managed); err != nil {
+			t.Fatalf("write live Codex managed config: %v", err)
+		}
+		runReq.AgentID = "codex"
+		runReq.SetupMode = SetupModeAPIKey
+	}
+	result, err := runner.Run(ctx, runReq)
 	if err != nil {
 		skipIfExternalCodexLimit(t, err)
 		t.Fatalf("live Codex ACP run failed: %v", err)

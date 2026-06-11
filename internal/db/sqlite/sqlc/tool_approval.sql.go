@@ -56,6 +56,68 @@ func (q *Queries) ApproveToolApprovalRequest(ctx context.Context, arg ApproveToo
 	return i, err
 }
 
+const cancelPendingToolApprovalsBySession = `-- name: CancelPendingToolApprovalsBySession :many
+UPDATE tool_approval_requests
+SET status = 'cancelled',
+    decision_reason = ?1,
+    decided_at = CURRENT_TIMESTAMP
+WHERE bot_id = ?2
+  AND session_id = ?3
+  AND status = 'pending'
+RETURNING id, bot_id, session_id, route_id, channel_identity_id, tool_call_id, tool_name, tool_input, short_id, status, decision_reason, requested_by_channel_identity_id, decided_by_channel_identity_id, requested_message_id, prompt_message_id, prompt_external_message_id, source_platform, reply_target, conversation_type, created_at, decided_at
+`
+
+type CancelPendingToolApprovalsBySessionParams struct {
+	Reason    string `json:"reason"`
+	BotID     string `json:"bot_id"`
+	SessionID string `json:"session_id"`
+}
+
+func (q *Queries) CancelPendingToolApprovalsBySession(ctx context.Context, arg CancelPendingToolApprovalsBySessionParams) ([]ToolApprovalRequest, error) {
+	rows, err := q.db.QueryContext(ctx, cancelPendingToolApprovalsBySession, arg.Reason, arg.BotID, arg.SessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ToolApprovalRequest
+	for rows.Next() {
+		var i ToolApprovalRequest
+		if err := rows.Scan(
+			&i.ID,
+			&i.BotID,
+			&i.SessionID,
+			&i.RouteID,
+			&i.ChannelIdentityID,
+			&i.ToolCallID,
+			&i.ToolName,
+			&i.ToolInput,
+			&i.ShortID,
+			&i.Status,
+			&i.DecisionReason,
+			&i.RequestedByChannelIdentityID,
+			&i.DecidedByChannelIdentityID,
+			&i.RequestedMessageID,
+			&i.PromptMessageID,
+			&i.PromptExternalMessageID,
+			&i.SourcePlatform,
+			&i.ReplyTarget,
+			&i.ConversationType,
+			&i.CreatedAt,
+			&i.DecidedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const createToolApprovalRequest = `-- name: CreateToolApprovalRequest :one
 INSERT INTO tool_approval_requests (
   id, bot_id, session_id, route_id, channel_identity_id,
@@ -86,8 +148,6 @@ INSERT INTO tool_approval_requests (
   ?11,
   ?12
 )
-ON CONFLICT (session_id, tool_call_id) DO UPDATE
-SET tool_input = EXCLUDED.tool_input
 RETURNING id, bot_id, session_id, route_id, channel_identity_id, tool_call_id, tool_name, tool_input, short_id, status, decision_reason, requested_by_channel_identity_id, decided_by_channel_identity_id, requested_message_id, prompt_message_id, prompt_external_message_id, source_platform, reply_target, conversation_type, created_at, decided_at
 `
 
@@ -146,6 +206,88 @@ func (q *Queries) CreateToolApprovalRequest(ctx context.Context, arg CreateToolA
 		&i.DecidedAt,
 	)
 	return i, err
+}
+
+const deleteToolApprovalRequestsBySessionToolCall = `-- name: DeleteToolApprovalRequestsBySessionToolCall :exec
+DELETE FROM tool_approval_requests
+WHERE bot_id = ?1
+  AND session_id = ?2
+  AND tool_call_id = ?3
+`
+
+type DeleteToolApprovalRequestsBySessionToolCallParams struct {
+	BotID      string `json:"bot_id"`
+	SessionID  string `json:"session_id"`
+	ToolCallID string `json:"tool_call_id"`
+}
+
+func (q *Queries) DeleteToolApprovalRequestsBySessionToolCall(ctx context.Context, arg DeleteToolApprovalRequestsBySessionToolCallParams) error {
+	_, err := q.db.ExecContext(ctx, deleteToolApprovalRequestsBySessionToolCall, arg.BotID, arg.SessionID, arg.ToolCallID)
+	return err
+}
+
+const expireStaleToolApprovals = `-- name: ExpireStaleToolApprovals :many
+UPDATE tool_approval_requests
+SET status = 'expired',
+    decision_reason = ?1,
+    decided_at = CURRENT_TIMESTAMP
+WHERE status = 'pending'
+  -- datetime() normalizes both sides: created_at is CURRENT_TIMESTAMP text
+  -- ('YYYY-MM-DD HH:MM:SS') while the bound cutoff arrives as RFC3339
+  -- ('...T...Z'); raw text comparison would order ' ' before 'T' and expire
+  -- every same-day row.
+  AND datetime(created_at) < datetime(?2)
+RETURNING id, bot_id, session_id, route_id, channel_identity_id, tool_call_id, tool_name, tool_input, short_id, status, decision_reason, requested_by_channel_identity_id, decided_by_channel_identity_id, requested_message_id, prompt_message_id, prompt_external_message_id, source_platform, reply_target, conversation_type, created_at, decided_at
+`
+
+type ExpireStaleToolApprovalsParams struct {
+	Reason    string      `json:"reason"`
+	CreatedAt interface{} `json:"created_at"`
+}
+
+func (q *Queries) ExpireStaleToolApprovals(ctx context.Context, arg ExpireStaleToolApprovalsParams) ([]ToolApprovalRequest, error) {
+	rows, err := q.db.QueryContext(ctx, expireStaleToolApprovals, arg.Reason, arg.CreatedAt)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ToolApprovalRequest
+	for rows.Next() {
+		var i ToolApprovalRequest
+		if err := rows.Scan(
+			&i.ID,
+			&i.BotID,
+			&i.SessionID,
+			&i.RouteID,
+			&i.ChannelIdentityID,
+			&i.ToolCallID,
+			&i.ToolName,
+			&i.ToolInput,
+			&i.ShortID,
+			&i.Status,
+			&i.DecisionReason,
+			&i.RequestedByChannelIdentityID,
+			&i.DecidedByChannelIdentityID,
+			&i.RequestedMessageID,
+			&i.PromptMessageID,
+			&i.PromptExternalMessageID,
+			&i.SourcePlatform,
+			&i.ReplyTarget,
+			&i.ConversationType,
+			&i.CreatedAt,
+			&i.DecidedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const getLatestPendingToolApprovalBySession = `-- name: GetLatestPendingToolApprovalBySession :one

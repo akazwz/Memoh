@@ -4,15 +4,17 @@ import {
   deleteBotsByBotIdAcpRuntimesByRuntimeId,
   getBotsByBotIdSessions,
   getBotsByBotIdSessionsBySessionIdAcpRuntime,
+  getBotsByBotIdSessionsBySessionIdAcpRuntimeTurn,
   postBotsByBotIdAcpRuntimes,
   postBotsByBotIdSessions,
   postBotsByBotIdSessionsBySessionIdAcpRuntime,
+  postBotsByBotIdSessionsBySessionIdAcpRuntimeAbortTurn,
   deleteBotsByBotIdSessionsBySessionId,
   patchBotsByBotIdAcpRuntimesByRuntimeIdModel,
   patchBotsByBotIdSessionsBySessionId,
   patchBotsByBotIdSessionsBySessionIdAcpRuntimeModel,
 } from '@memohai/sdk'
-import type { AcpagentRuntimeStatus } from '@memohai/sdk'
+import type { AcpagentRuntimeStatus, FlowAcpTurnSnapshot } from '@memohai/sdk'
 import type { Bot, SessionSummary } from './useChat.types'
 
 export interface CreateSessionOptions {
@@ -95,6 +97,34 @@ export async function getACPRuntime(botId: string, sessionId: string): Promise<A
     throwOnError: true,
   })
   return data as AcpagentRuntimeStatus
+}
+
+/**
+ * Abort the session's in-flight ACP turn out-of-band: works from any client
+ * or connection, not just the one that started the turn. The runtime stays
+ * warm and the round persists as cancelled. Passing turnId makes the abort
+ * precise — a stale client cannot kill a newer turn it never saw.
+ */
+export async function abortACPTurn(botId: string, sessionId: string, turnId?: string): Promise<AcpagentRuntimeStatus> {
+  const { data } = await postBotsByBotIdSessionsBySessionIdAcpRuntimeAbortTurn({
+    path: { bot_id: botId.trim(), session_id: sessionId.trim() },
+    body: turnId?.trim() ? { turn_id: turnId.trim() } : {},
+    throwOnError: true,
+  })
+  return data as AcpagentRuntimeStatus
+}
+
+/**
+ * Reconnect backfill: the UI messages accumulated server-side for the
+ * in-flight (or most recent) ACP turn, plus the turn identity used to dedupe
+ * the live `acp_turn_stream` mirror and target an abort.
+ */
+export async function getACPTurnSnapshot(botId: string, sessionId: string): Promise<FlowAcpTurnSnapshot> {
+  const { data } = await getBotsByBotIdSessionsBySessionIdAcpRuntimeTurn({
+    path: { bot_id: botId.trim(), session_id: sessionId.trim() },
+    throwOnError: true,
+  })
+  return data as FlowAcpTurnSnapshot
 }
 
 export async function setACPRuntimeModel(botId: string, sessionId: string, modelId: string): Promise<AcpagentRuntimeStatus> {

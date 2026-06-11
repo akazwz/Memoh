@@ -6110,6 +6110,71 @@ const docTemplate = `{
                 }
             }
         },
+        "/bots/{bot_id}/sessions/{session_id}/acp-runtime/abort-turn": {
+            "post": {
+                "description": "Cancels the running turn out-of-band: works from any client or connection, not just the one that started the turn. The runtime stays warm and the round persists as cancelled. Pass turn_id to abort only that exact turn (a stale client then cannot kill a newer one).",
+                "tags": [
+                    "acp"
+                ],
+                "summary": "Abort the session's in-flight ACP turn",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Session ID",
+                        "name": "session_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Abort target",
+                        "name": "body",
+                        "in": "body",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.acpAbortTurnRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/acpagent.RuntimeStatus"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/bots/{bot_id}/sessions/{session_id}/acp-runtime/model": {
             "patch": {
                 "tags": [
@@ -6146,6 +6211,57 @@ const docTemplate = `{
                         "description": "OK",
                         "schema": {
                             "$ref": "#/definitions/acpagent.RuntimeStatus"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/bots/{bot_id}/sessions/{session_id}/acp-runtime/turn": {
+            "get": {
+                "description": "Reconnect backfill: the UI messages accumulated server-side for the in-flight (or most recent) turn, plus the turn identity for live-stream dedupe and abort targeting. active=false with no messages means no turn ran in this server process — persisted history is the whole story.",
+                "tags": [
+                    "acp"
+                ],
+                "summary": "Get the session's current ACP turn snapshot",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Session ID",
+                        "name": "session_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/flow.ACPTurnSnapshot"
                         }
                     },
                     "400": {
@@ -10991,6 +11107,12 @@ const docTemplate = `{
                             "$ref": "#/definitions/handlers.ErrorResponse"
                         }
                     },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
@@ -11745,6 +11867,13 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "state": {
+                    "type": "string"
+                },
+                "turn_id": {
+                    "description": "TurnID/TurnState describe the in-flight turn, when any (running or\ncancelling). Clients use them to render busy state and offer abort.",
+                    "type": "string"
+                },
+                "turn_state": {
                     "type": "string"
                 }
             }
@@ -13688,6 +13817,185 @@ const docTemplate = `{
                 "usage": {}
             }
         },
+        "conversation.UIAttachment": {
+            "type": "object",
+            "properties": {
+                "base64": {
+                    "type": "string"
+                },
+                "bot_id": {
+                    "type": "string"
+                },
+                "content_hash": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "metadata": {
+                    "type": "object",
+                    "additionalProperties": {}
+                },
+                "mime": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "path": {
+                    "type": "string"
+                },
+                "size": {
+                    "type": "integer"
+                },
+                "storage_key": {
+                    "type": "string"
+                },
+                "type": {
+                    "type": "string"
+                },
+                "url": {
+                    "type": "string"
+                }
+            }
+        },
+        "conversation.UIBackgroundTask": {
+            "type": "object",
+            "properties": {
+                "chunk": {
+                    "type": "string"
+                },
+                "command": {
+                    "type": "string"
+                },
+                "duration": {
+                    "type": "string"
+                },
+                "exit_code": {
+                    "type": "integer"
+                },
+                "output_file": {
+                    "type": "string"
+                },
+                "output_tail": {
+                    "type": "string"
+                },
+                "stalled": {
+                    "type": "boolean"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "stream": {
+                    "type": "string"
+                },
+                "task_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "conversation.UIMessage": {
+            "type": "object",
+            "properties": {
+                "approval": {
+                    "$ref": "#/definitions/conversation.UIToolApproval"
+                },
+                "attachments": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/conversation.UIAttachment"
+                    }
+                },
+                "background_task": {
+                    "$ref": "#/definitions/conversation.UIBackgroundTask"
+                },
+                "content": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "integer"
+                },
+                "input": {},
+                "name": {
+                    "type": "string"
+                },
+                "output": {},
+                "progress": {
+                    "type": "array",
+                    "items": {}
+                },
+                "running": {
+                    "type": "boolean"
+                },
+                "tool_call_id": {
+                    "type": "string"
+                },
+                "type": {
+                    "$ref": "#/definitions/conversation.UIMessageType"
+                },
+                "user_input": {
+                    "$ref": "#/definitions/conversation.UIUserInput"
+                }
+            }
+        },
+        "conversation.UIMessageType": {
+            "type": "string",
+            "enum": [
+                "text",
+                "reasoning",
+                "tool",
+                "attachments"
+            ],
+            "x-enum-varnames": [
+                "UIMessageText",
+                "UIMessageReasoning",
+                "UIMessageTool",
+                "UIMessageAttachments"
+            ]
+        },
+        "conversation.UIToolApproval": {
+            "type": "object",
+            "properties": {
+                "approval_id": {
+                    "type": "string"
+                },
+                "can_approve": {
+                    "type": "boolean"
+                },
+                "decision_reason": {
+                    "type": "string"
+                },
+                "short_id": {
+                    "type": "integer"
+                },
+                "status": {
+                    "type": "string"
+                }
+            }
+        },
+        "conversation.UIUserInput": {
+            "type": "object",
+            "properties": {
+                "can_respond": {
+                    "type": "boolean"
+                },
+                "questions": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/userinput.UIQuestion"
+                    }
+                },
+                "short_id": {
+                    "type": "integer"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "user_input_id": {
+                    "type": "string"
+                }
+            }
+        },
         "display.SessionInfo": {
             "type": "object",
             "properties": {
@@ -13942,6 +14250,29 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "provider": {
+                    "type": "string"
+                }
+            }
+        },
+        "flow.ACPTurnSnapshot": {
+            "type": "object",
+            "properties": {
+                "active": {
+                    "type": "boolean"
+                },
+                "messages": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/conversation.UIMessage"
+                    }
+                },
+                "session_id": {
+                    "type": "string"
+                },
+                "turn_id": {
+                    "type": "string"
+                },
+                "updated_at": {
                     "type": "string"
                 }
             }
@@ -15243,6 +15574,15 @@ const docTemplate = `{
                 },
                 "storage_bytes": {
                     "type": "integer"
+                }
+            }
+        },
+        "handlers.acpAbortTurnRequest": {
+            "type": "object",
+            "properties": {
+                "turn_id": {
+                    "description": "TurnID, when set, makes the abort precise: it only cancels this exact\nturn, so a stale client cannot kill a newer turn it never saw.",
+                    "type": "string"
                 }
             }
         },
@@ -17255,6 +17595,46 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "tts_model_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "userinput.UIOption": {
+            "type": "object",
+            "properties": {
+                "description": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "label": {
+                    "type": "string"
+                }
+            }
+        },
+        "userinput.UIQuestion": {
+            "type": "object",
+            "properties": {
+                "allow_custom": {
+                    "type": "boolean"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "kind": {
+                    "type": "string"
+                },
+                "options": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/userinput.UIOption"
+                    }
+                },
+                "placeholder": {
+                    "type": "string"
+                },
+                "text": {
                     "type": "string"
                 }
             }

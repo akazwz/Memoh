@@ -89,6 +89,10 @@ func (p *fakeACPRuntimePool) CloseRuntime(botID, runtimeID string) error {
 	return p.closeErr
 }
 
+func (p *fakeACPRuntimePool) AbortTurn(string, string, string) (acpagent.RuntimeStatus, error) {
+	return p.status, nil
+}
+
 func (q acpRuntimeQueries) GetBotByID(_ context.Context, _ pgtype.UUID) (sqlc.GetBotByIDRow, error) {
 	return q.bot, nil
 }
@@ -118,6 +122,7 @@ func TestACPRuntimeHandlerReturnsIdleStatus(t *testing.T) {
 		session.NewService(nil, queries),
 		bots.NewService(nil, queries),
 		newTestAdminAccountService("admin"),
+		nil,
 	)
 
 	e := echo.New()
@@ -576,6 +581,7 @@ func TestACPRuntimeHandlerRejectsNonACPSession(t *testing.T) {
 		session.NewService(nil, queries),
 		bots.NewService(nil, queries),
 		newTestAdminAccountService("admin"),
+		nil,
 	)
 
 	e := echo.New()

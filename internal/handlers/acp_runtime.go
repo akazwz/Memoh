@@ -16,6 +16,8 @@ import (
 	"github.com/memohai/memoh/internal/acpclient"
 	"github.com/memohai/memoh/internal/acpprofile"
 	"github.com/memohai/memoh/internal/bots"
+	"github.com/memohai/memoh/internal/conversation"
+	"github.com/memohai/memoh/internal/conversation/flow"
 	"github.com/memohai/memoh/internal/session"
 )
 
@@ -24,6 +26,13 @@ type ACPRuntimeHandler struct {
 	sessionService *session.Service
 	botService     *bots.Service
 	accountService *accounts.Service
+	turns          acpTurnSnapshotSource
+}
+
+// acpTurnSnapshotSource serves reconnect backfill for in-flight ACP turns
+// (satisfied by *flow.Resolver).
+type acpTurnSnapshotSource interface {
+	ACPTurnSnapshot(sessionID string) (flow.ACPTurnSnapshot, bool)
 }
 
 type acpRuntimePool interface {
@@ -34,6 +43,13 @@ type acpRuntimePool interface {
 	RuntimeStatusByID(botID, runtimeID string) (acpagent.RuntimeStatus, error)
 	SetRuntimeModel(ctx context.Context, botID, runtimeID, modelID string) (acpagent.RuntimeStatus, error)
 	CloseRuntime(botID, runtimeID string) error
+	AbortTurn(botID, sessionID, turnID string) (acpagent.RuntimeStatus, error)
+}
+
+type acpAbortTurnRequest struct {
+	// TurnID, when set, makes the abort precise: it only cancels this exact
+	// turn, so a stale client cannot kill a newer turn it never saw.
+	TurnID string `json:"turn_id,omitempty"`
 }
 
 type acpRuntimeCreateRequest struct {
@@ -45,8 +61,12 @@ type acpRuntimeModelRequest struct {
 	ModelID string `json:"model_id"`
 }
 
-func NewACPRuntimeHandler(pool *acpagent.SessionPool, sessionService *session.Service, botService *bots.Service, accountService *accounts.Service) *ACPRuntimeHandler {
-	return newACPRuntimeHandler(pool, sessionService, botService, accountService)
+func NewACPRuntimeHandler(pool *acpagent.SessionPool, sessionService *session.Service, botService *bots.Service, accountService *accounts.Service, resolver *flow.Resolver) *ACPRuntimeHandler {
+	h := newACPRuntimeHandler(pool, sessionService, botService, accountService)
+	if resolver != nil {
+		h.turns = resolver
+	}
+	return h
 }
 
 func newACPRuntimeHandler(pool acpRuntimePool, sessionService *session.Service, botService *bots.Service, accountService *accounts.Service) *ACPRuntimeHandler {
@@ -66,6 +86,76 @@ func (h *ACPRuntimeHandler) Register(e *echo.Echo) {
 	e.GET("/bots/:bot_id/sessions/:session_id/acp-runtime", h.GetRuntime)
 	e.POST("/bots/:bot_id/sessions/:session_id/acp-runtime", h.EnsureRuntime)
 	e.PATCH("/bots/:bot_id/sessions/:session_id/acp-runtime/model", h.SetModel)
+	e.POST("/bots/:bot_id/sessions/:session_id/acp-runtime/abort-turn", h.AbortTurn)
+	e.GET("/bots/:bot_id/sessions/:session_id/acp-runtime/turn", h.GetTurn)
+}
+
+// GetTurn godoc
+// @Summary Get the session's current ACP turn snapshot
+// @Description Reconnect backfill: the UI messages accumulated server-side for the in-flight (or most recent) turn, plus the turn identity for live-stream dedupe and abort targeting. active=false with no messages means no turn ran in this server process — persisted history is the whole story.
+// @Tags acp
+// @Param bot_id path string true "Bot ID"
+// @Param session_id path string true "Session ID"
+// @Success 200 {object} flow.ACPTurnSnapshot
+// @Failure 400 {object} ErrorResponse
+// @Failure 403 {object} ErrorResponse
+// @Failure 404 {object} ErrorResponse
+// @Router /bots/{bot_id}/sessions/{session_id}/acp-runtime/turn [get].
+func (h *ACPRuntimeHandler) GetTurn(c echo.Context) error {
+	_, sessionID, _, err := h.authorizedACPSession(c)
+	if err != nil {
+		return err
+	}
+	if h.turns != nil {
+		if snapshot, ok := h.turns.ACPTurnSnapshot(sessionID); ok {
+			return c.JSON(http.StatusOK, snapshot)
+		}
+	}
+	return c.JSON(http.StatusOK, flow.ACPTurnSnapshot{
+		SessionID: sessionID,
+		Active:    false,
+		Messages:  []conversation.UIMessage{},
+	})
+}
+
+// AbortTurn godoc
+// @Summary Abort the session's in-flight ACP turn
+// @Description Cancels the running turn out-of-band: works from any client or connection, not just the one that started the turn. The runtime stays warm and the round persists as cancelled. Pass turn_id to abort only that exact turn (a stale client then cannot kill a newer one).
+// @Tags acp
+// @Param bot_id path string true "Bot ID"
+// @Param session_id path string true "Session ID"
+// @Param body body acpAbortTurnRequest false "Abort target"
+// @Success 200 {object} acpagent.RuntimeStatus
+// @Failure 400 {object} ErrorResponse
+// @Failure 403 {object} ErrorResponse
+// @Failure 404 {object} ErrorResponse
+// @Failure 409 {object} ErrorResponse
+// @Router /bots/{bot_id}/sessions/{session_id}/acp-runtime/abort-turn [post].
+func (h *ACPRuntimeHandler) AbortTurn(c echo.Context) error {
+	botID, sessionID, _, err := h.authorizedACPSession(c)
+	if err != nil {
+		return err
+	}
+	// The body is optional (an empty abort targets whatever turn is running),
+	// so a bind failure on an absent/empty body is fine — but a present,
+	// malformed body is a client bug, not a license to broadcast-abort: a
+	// stale client that meant to target a specific turn must not silently
+	// fall back to killing whatever is running.
+	var req acpAbortTurnRequest
+	if err := c.Bind(&req); err != nil && c.Request().ContentLength > 0 {
+		return echo.NewHTTPError(http.StatusBadRequest, "invalid abort request body")
+	}
+	status, err := h.pool.AbortTurn(botID, sessionID, strings.TrimSpace(req.TurnID))
+	switch {
+	case err == nil:
+		return c.JSON(http.StatusOK, status)
+	case errors.Is(err, acpagent.ErrNoActiveTurn):
+		return echo.NewHTTPError(http.StatusConflict, "no turn in progress for this session")
+	case errors.Is(err, acpagent.ErrRuntimeNotFound):
+		return echo.NewHTTPError(http.StatusNotFound, "no live runtime for this session")
+	default:
+		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+	}
 }
 
 // CreateRuntime godoc

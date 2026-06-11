@@ -23,7 +23,11 @@ import (
 const (
 	DefaultRunTimeout          = 20 * time.Minute
 	maxWriteToolContentPreview = 64 * 1024
-	acpToolApprovalWaitTimeout = 10 * time.Minute
+	// approvalGrantTTL bounds how long a RequestPermission grant stays
+	// consumable by the follow-up client-capability callback. Deliberately its
+	// own constant: it is unrelated to how long the approval flow waits for a
+	// user decision, even though both happen to be generous.
+	approvalGrantTTL = 10 * time.Minute
 )
 
 type Workspace interface {
@@ -229,6 +233,12 @@ func (c *clientCallbacks) setPromptState(collector *eventCollector, sink EventSi
 	c.promptSession = toolSession
 	c.approvalGrants = nil
 	c.mu.Unlock()
+	if collector != nil && c.toolMapper != nil {
+		// A new prompt is starting: drop tool state left by the previous
+		// (possibly cancelled) turn so trailing agent notifications cannot
+		// attribute to this turn's tools.
+		c.toolMapper.reset()
+	}
 	if c.events != nil {
 		c.events.setPromptState(collector, sink)
 	}
@@ -243,12 +253,12 @@ func (c *clientCallbacks) ReadTextFile(ctx context.Context, p acp.ReadTextFileRe
 	if p.Limit != nil && *p.Limit > 0 {
 		input["limit"] = *p.Limit
 	}
-	toolID, approved, err := c.approveCallbackTool(ctx, toolID, "read", input)
+	toolID, approval, err := c.approveCallbackTool(ctx, toolID, "read", input)
 	if err != nil {
 		return acp.ReadTextFileResponse{}, err
 	}
-	if !approved {
-		err := errors.New("tool execution rejected by user")
+	if !approval.Approved {
+		err := errors.New(toolapproval.RejectionMessage(approval))
 		c.emitToolCallEnd(toolID, "read", input, toolErrorResult(err), err)
 		return acp.ReadTextFileResponse{}, err
 	}
@@ -294,12 +304,12 @@ func (c *clientCallbacks) ReadTextFile(ctx context.Context, p acp.ReadTextFileRe
 func (c *clientCallbacks) WriteTextFile(ctx context.Context, p acp.WriteTextFileRequest) (acp.WriteTextFileResponse, error) {
 	toolID := "write-" + uuid.NewString()
 	input := writeToolInput(p.Path, p.Content)
-	toolID, approved, err := c.approveCallbackTool(ctx, toolID, "write", input)
+	toolID, approval, err := c.approveCallbackTool(ctx, toolID, "write", input)
 	if err != nil {
 		return acp.WriteTextFileResponse{}, err
 	}
-	if !approved {
-		err := errors.New("tool execution rejected by user")
+	if !approval.Approved {
+		err := errors.New(toolapproval.RejectionMessage(approval))
 		c.emitToolCallEnd(toolID, "write", input, toolErrorResult(err), err)
 		return acp.WriteTextFileResponse{}, err
 	}
@@ -402,40 +412,99 @@ func (c *clientCallbacks) RequestPermission(ctx context.Context, p acp.RequestPe
 		return cancelledPermission(), nil
 	}
 	if err := c.validatePermissionScope(p); err != nil {
+		// Security-relevant rejection: an agent asked to act outside the
+		// workspace root. Log it (an agent probing the boundary is exactly what
+		// we want visibility into) before cancelling.
+		if c.logger != nil {
+			c.logger.Warn("cancelling out-of-scope ACP permission request", slog.Any("error", err))
+		}
 		return cancelledPermission(), nil
 	}
 	if c.approval == nil {
 		return allowOncePermission(p), nil
 	}
-	toolCallID, toolName, input, ok := permissionNativeTool(p)
-	if !ok {
-		// Fail closed: permission requests that don't map onto an approvable
-		// native tool are cancelled rather than silently allowed. Logged so a
-		// shape change in an agent's permission requests is diagnosable.
+	toolCallID, toolName, input, native := permissionNativeTool(p)
+	if !native {
+		// Permissions that don't map onto a client-capability tool (plan-mode
+		// switches, agent-specific actions) still go through Memoh approval
+		// under a generic name instead of being silently cancelled. The
+		// generic name means nothing to the per-tool policy, so the flow is
+		// forced to ask the user — bypassing here would be fail-open.
+		toolCallID, toolName, input = genericPermissionTool(p)
 		if c.logger != nil {
-			title, kind := "", ""
-			if p.ToolCall.Title != nil {
-				title = *p.ToolCall.Title
-			}
-			if p.ToolCall.Kind != nil {
-				kind = string(*p.ToolCall.Kind)
-			}
-			c.logger.Warn("cancelling ACP permission request that maps to no approvable tool",
-				slog.String("tool_call_id", strings.TrimSpace(string(p.ToolCall.ToolCallId))),
-				slog.String("title", title),
-				slog.String("kind", kind))
+			c.logger.Info("routing unmapped ACP permission request through generic approval",
+				slog.String("tool_call_id", toolCallID),
+				slog.String("tool_name", toolName),
+				slog.String("title", stringFromAny(input["title"])))
 		}
-		return cancelledPermission(), nil
 	}
-	approved, err := c.requireToolApproval(ctx, toolCallID, toolName, input)
+	result, err := c.requireToolApproval(ctx, toolCallID, toolName, input, !native)
 	if err != nil {
 		return acp.RequestPermissionResponse{}, err
 	}
-	if !approved {
+	if !result.Approved {
+		if result.DecidedByUser {
+			// A live user said no: select the agent's reject option so the
+			// turn continues with a clean refusal (for ExitPlanMode that is
+			// "keep planning").
+			return rejectOncePermission(p), nil
+		}
+		// System outcomes (no session identity, non-interactive auto-reject)
+		// cancel the request: there was no user decision to report.
 		return cancelledPermission(), nil
 	}
-	c.rememberApprovalGrant(toolCallID, toolName, input)
-	return allowOncePermission(p), nil
+	resp := allowOncePermission(p)
+	if resp.Outcome.Cancelled != nil {
+		// The user approved but the agent offered no allow_once option, so the
+		// agent sees a cancellation and will not act — leaving a consumable
+		// grant behind would let a later callback run on a permission the
+		// agent believes was cancelled.
+		if c.logger != nil {
+			c.logger.Warn("approval granted but the agent offered no allow_once option; cancelling",
+				slog.String("tool_call_id", toolCallID),
+				slog.String("tool_name", toolName))
+		}
+		return resp, nil
+	}
+	if native {
+		// One-shot grants only make sense for tools that arrive again as a
+		// client-capability callback; generic permissions have no follow-up.
+		c.rememberApprovalGrant(toolCallID, toolName, input)
+	}
+	return resp, nil
+}
+
+const genericPermissionToolName = "acp_permission"
+
+// genericPermissionTool describes an unmappable ACP permission request as a
+// generic approvable tool, preserving the agent's title/kind/raw input so the
+// user can still judge what they are approving. The name is namespaced by the
+// agent's tool kind (acp_permission:switch_mode, acp_permission:fetch, ...)
+// so different action classes stay distinguishable in the UI and in future
+// policy rules. Callers must pair this with ForceApproval: the per-tool
+// policy does not know these synthetic names and would otherwise bypass them.
+func genericPermissionTool(p acp.RequestPermissionRequest) (string, string, map[string]any) {
+	toolCallID := strings.TrimSpace(string(p.ToolCall.ToolCallId))
+	if toolCallID == "" {
+		toolCallID = "acp-permission-" + uuid.NewString()
+	}
+	toolName := genericPermissionToolName
+	input := map[string]any{}
+	if p.ToolCall.Title != nil {
+		if title := strings.TrimSpace(*p.ToolCall.Title); title != "" {
+			input["title"] = title
+		}
+	}
+	if p.ToolCall.Kind != nil {
+		if kind := strings.TrimSpace(string(*p.ToolCall.Kind)); kind != "" {
+			input["kind"] = kind
+			toolName += ":" + kind
+		}
+	}
+	if raw, ok := p.ToolCall.RawInput.(map[string]any); ok && len(raw) > 0 {
+		input["raw_input"] = raw
+	}
+	return toolCallID, toolName, input
 }
 
 func allowOncePermission(p acp.RequestPermissionRequest) acp.RequestPermissionResponse {
@@ -447,93 +516,65 @@ func allowOncePermission(p acp.RequestPermissionRequest) acp.RequestPermissionRe
 	return cancelledPermission()
 }
 
+// rejectOncePermission selects the agent's reject_once option so a denied
+// approval reads as a clean user rejection (for ExitPlanMode that is "keep
+// planning") instead of an aborted turn; cancellation is the fallback.
+func rejectOncePermission(p acp.RequestPermissionRequest) acp.RequestPermissionResponse {
+	for _, opt := range p.Options {
+		if opt.Kind == acp.PermissionOptionKindRejectOnce {
+			return selectedPermission(opt.OptionId)
+		}
+	}
+	return cancelledPermission()
+}
+
 // approveCallbackTool resolves the approval for a client-capability tool call,
 // consuming the one-shot grant left by RequestPermission when one matches. It
 // returns the tool call ID the events should be emitted under.
-func (c *clientCallbacks) approveCallbackTool(ctx context.Context, fallbackToolCallID, toolName string, input map[string]any) (string, bool, error) {
+func (c *clientCallbacks) approveCallbackTool(ctx context.Context, fallbackToolCallID, toolName string, input map[string]any) (string, toolapproval.FlowResult, error) {
 	fallbackToolCallID = strings.TrimSpace(fallbackToolCallID)
 	if fallbackToolCallID == "" {
 		fallbackToolCallID = "acp-callback-" + uuid.NewString()
 	}
 	if grantedID, ok := c.consumeApprovalGrant(toolName, input); ok {
-		return grantedID, true, nil
+		// The grant exists because the user approved the matching
+		// RequestPermission moments ago.
+		return grantedID, toolapproval.FlowResult{
+			Approved:      true,
+			Status:        toolapproval.StatusApproved,
+			DecidedByUser: true,
+		}, nil
 	}
-	approved, err := c.requireToolApproval(ctx, fallbackToolCallID, toolName, input)
-	return fallbackToolCallID, approved, err
+	result, err := c.requireToolApproval(ctx, fallbackToolCallID, toolName, input, false)
+	return fallbackToolCallID, result, err
 }
 
-func (c *clientCallbacks) requireToolApproval(ctx context.Context, toolCallID, toolName string, input map[string]any) (bool, error) {
+func (c *clientCallbacks) requireToolApproval(ctx context.Context, toolCallID, toolName string, input map[string]any, forceApproval bool) (toolapproval.FlowResult, error) {
 	if c == nil || c.approval == nil {
-		return true, nil
+		return toolapproval.FlowResult{Approved: true}, nil
 	}
 	session := c.currentToolSession()
 	if strings.TrimSpace(session.BotID) == "" || strings.TrimSpace(session.SessionID) == "" {
-		return false, nil
+		return toolapproval.FlowResult{}, nil
 	}
-	approvalInput := toolapproval.CreatePendingInput{
-		BotID:                        session.BotID,
-		SessionID:                    session.SessionID,
-		RouteID:                      session.RouteID,
-		ChannelIdentityID:            session.ChannelIdentityID,
-		RequestedByChannelIdentityID: session.ChannelIdentityID,
-		ToolCallID:                   toolCallID,
-		ToolName:                     toolName,
-		ToolInput:                    input,
-		SourcePlatform:               session.CurrentPlatform,
-		ReplyTarget:                  session.ReplyTarget,
-		ConversationType:             session.ConversationType,
-	}
-	eval, err := c.approval.EvaluatePolicy(ctx, approvalInput)
-	if err != nil {
-		return false, err
-	}
-	if eval.Decision == toolapproval.DecisionBypass {
-		return true, nil
-	}
-
-	req, err := c.approval.CreatePending(ctx, approvalInput)
-	if err != nil {
-		return false, err
-	}
-	if strings.TrimSpace(session.StreamID) == "" {
-		reason := "tool execution requires approval, but this ACP permission request is not attached to an interactive stream"
-		if _, rejectErr := c.approval.Reject(ctx, req.ID, session.ChannelIdentityID, reason); rejectErr != nil {
-			return false, rejectErr
-		}
-		return false, nil
-	}
-	c.emitToolApprovalRequest(req)
-
-	waitCtx, cancel := context.WithTimeout(ctx, acpToolApprovalWaitTimeout)
-	defer cancel()
-	decided, err := c.approval.WaitForDecision(waitCtx, req.ID)
-	if err != nil {
-		if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
-			rejectCtx, rejectCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-			defer rejectCancel()
-			if _, rejectErr := c.approval.Reject(rejectCtx, req.ID, session.ChannelIdentityID, "tool approval timed out"); rejectErr != nil {
-				return false, rejectErr
-			}
-			timeoutReq := req
-			timeoutReq.Status = toolapproval.StatusRejected
-			timeoutReq.DecisionReason = "tool approval timed out"
-			c.emitToolApprovalRequest(timeoutReq)
-			return false, nil
-		}
-		return false, err
-	}
-	decisionReq := req
-	if status := strings.TrimSpace(decided.Status); status != "" {
-		decisionReq.Status = status
-	} else {
-		decisionReq.Status = toolapproval.StatusRejected
-	}
-	decisionReq.DecisionReason = decided.DecisionReason
-	c.emitToolApprovalRequest(decisionReq)
-	if strings.EqualFold(strings.TrimSpace(decisionReq.Status), toolapproval.StatusApproved) {
-		return true, nil
-	}
-	return false, nil
+	return toolapproval.RunFlow(ctx, c.approval, toolapproval.FlowRequest{
+		Input: toolapproval.CreatePendingInput{
+			BotID:                        session.BotID,
+			SessionID:                    session.SessionID,
+			RouteID:                      session.RouteID,
+			ChannelIdentityID:            session.ChannelIdentityID,
+			RequestedByChannelIdentityID: session.ChannelIdentityID,
+			ToolCallID:                   toolCallID,
+			ToolName:                     toolName,
+			ToolInput:                    input,
+			SourcePlatform:               session.CurrentPlatform,
+			ReplyTarget:                  session.ReplyTarget,
+			ConversationType:             session.ConversationType,
+		},
+		Interactive:   strings.TrimSpace(session.StreamID) != "",
+		ForceApproval: forceApproval,
+		Emit:          c.emitToolApprovalRequest,
+	})
 }
 
 func (c *clientCallbacks) rememberApprovalGrant(toolCallID, toolName string, input map[string]any) {
@@ -551,7 +592,7 @@ func (c *clientCallbacks) rememberApprovalGrant(toolCallID, toolName string, inp
 	}
 	c.approvalGrants[key] = approvedToolGrant{
 		ToolCallID: strings.TrimSpace(toolCallID),
-		ExpiresAt:  time.Now().Add(acpToolApprovalWaitTimeout),
+		ExpiresAt:  time.Now().Add(approvalGrantTTL),
 	}
 }
 
@@ -648,12 +689,12 @@ func permissionNativeTool(p acp.RequestPermissionRequest) (toolCallID, toolName 
 	if p.ToolCall.Status != nil {
 		state.status = strings.TrimSpace(string(*p.ToolCall.Status))
 	}
+	// nativeToolFromACPState now applies the edit→write title reclassification
+	// itself, so the approval name here always matches the streamed tool-event
+	// name for the same call.
 	toolName, input, ok = nativeToolFromACPState(state)
 	if !ok {
 		return "", "", nil, false
-	}
-	if toolName == "edit" && looksLikeWritePermission(state.title) {
-		toolName = "write"
 	}
 	return toolCallID, toolName, input, true
 }
@@ -669,11 +710,6 @@ func (c *clientCallbacks) emitToolApprovalRequest(req toolapproval.Request) {
 	if c == nil || c.events == nil {
 		return
 	}
-	status := strings.TrimSpace(req.Status)
-	if status == "" {
-		status = toolapproval.StatusPending
-	}
-	canApprove := strings.EqualFold(status, toolapproval.StatusPending)
 	c.events.emit(StreamEvent{
 		Type:       StreamEventToolApprovalRequest,
 		ToolCallID: req.ToolCallID,
@@ -681,14 +717,9 @@ func (c *clientCallbacks) emitToolApprovalRequest(req toolapproval.Request) {
 		Input:      req.ToolInput,
 		ApprovalID: req.ID,
 		ShortID:    req.ShortID,
-		Status:     status,
+		Status:     toolapproval.NormalizedStatus(req.Status),
 		Metadata: map[string]any{
-			"approval": map[string]any{
-				"approval_id": req.ID,
-				"short_id":    req.ShortID,
-				"status":      status,
-				"can_approve": canApprove,
-			},
+			"approval": toolapproval.RequestMetadata(req),
 		},
 	})
 }
@@ -715,8 +746,12 @@ func (c *clientCallbacks) SessionUpdate(_ context.Context, p acp.SessionNotifica
 
 func (c *clientCallbacks) CreateTerminal(ctx context.Context, p acp.CreateTerminalRequest) (acp.CreateTerminalResponse, error) {
 	return c.terminals.CreateTerminal(ctx, p, func(toolCallID string, input map[string]any) (terminalApprovalResult, error) {
-		id, approved, err := c.approveCallbackTool(ctx, toolCallID, "exec", input)
-		return terminalApprovalResult{Approved: approved, ToolCallID: id}, err
+		id, approval, err := c.approveCallbackTool(ctx, toolCallID, "exec", input)
+		return terminalApprovalResult{
+			Approved:         approval.Approved,
+			ToolCallID:       id,
+			RejectionMessage: toolapproval.RejectionMessage(approval),
+		}, err
 	})
 }
 
@@ -743,6 +778,19 @@ func (c *clientCallbacks) resolvePath(path string) (string, error) {
 	return ResolvePathUnderRoot(c.root, path)
 }
 
+// scopePathKeys is the union of every RawInput key any extraction layer reads
+// a path from (pathFromACPInput plus the callback layer's cwd/old/new keys).
+// The scope guard must validate at least the projection that later gets
+// approved and executed: a key read by extraction but not validated here
+// would let an out-of-root path through the pre-ask gate, and a thick agent
+// executes the approved action itself — there is no later callback to catch
+// it.
+var scopePathKeys = []string{
+	"cwd", "work_dir",
+	"path", "file_path", "filePath", "file", "filename",
+	"old_path", "new_path",
+}
+
 func (c *clientCallbacks) validatePermissionScope(p acp.RequestPermissionRequest) error {
 	for _, loc := range p.ToolCall.Locations {
 		if strings.TrimSpace(loc.Path) == "" {
@@ -753,7 +801,7 @@ func (c *clientCallbacks) validatePermissionScope(p acp.RequestPermissionRequest
 		}
 	}
 	if raw, ok := p.ToolCall.RawInput.(map[string]any); ok {
-		for _, key := range []string{"cwd", "work_dir", "path", "old_path", "new_path"} {
+		for _, key := range scopePathKeys {
 			value, ok := raw[key].(string)
 			if !ok || strings.TrimSpace(value) == "" {
 				continue
@@ -761,6 +809,16 @@ func (c *clientCallbacks) validatePermissionScope(p acp.RequestPermissionRequest
 			if _, err := c.resolvePath(value); err != nil {
 				return err
 			}
+		}
+	}
+	// Edit permissions can carry their target path only inside a content
+	// diff (editToolFromACPState falls back to it), so validate those too.
+	for _, content := range p.ToolCall.Content {
+		if content.Diff == nil || strings.TrimSpace(content.Diff.Path) == "" {
+			continue
+		}
+		if _, err := c.resolvePath(content.Diff.Path); err != nil {
+			return err
 		}
 	}
 	return nil

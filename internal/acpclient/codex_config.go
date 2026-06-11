@@ -270,7 +270,3 @@ func renderCodexManagedOAuthAuth(creds *CodexOAuthCredentials) ([]byte, error) {
 	}
 	return append(content, '\n'), nil
 }
-
-func isCodexAgent(agentID string) bool {
-	return strings.EqualFold(strings.TrimSpace(agentID), codexAgentID)
-}

@@ -382,7 +382,10 @@ func mergeToolApprovals(turns []conversation.UITurn, approvals []toolapproval.Re
 				ShortID:        approval.ShortID,
 				Status:         approval.Status,
 				DecisionReason: approval.DecisionReason,
-				CanApprove:     approval.Status == toolapproval.StatusPending,
+				// Persisted rows always carry a status; unlike stream events
+				// (where an omitted status implies pending), an empty status
+				// here is malformed data and must not render as approvable.
+				CanApprove: strings.EqualFold(approval.Status, toolapproval.StatusPending),
 			}
 		}
 	}
@@ -626,6 +629,19 @@ func (h *MessageHandler) StreamMessageEvents(c echo.Context) error {
 					continue
 				}
 				payload["type"] = string(messageevent.EventTypeAgentStream)
+				payload["bot_id"] = botID
+				if err := writeSSEJSON(writer, flusher, payload); err != nil {
+					return nil
+				}
+			case messageevent.EventTypeACPTurnStream:
+				var payload map[string]any
+				if err := json.Unmarshal(event.Data, &payload); err != nil {
+					continue
+				}
+				if !h.canReadPayloadSession(c, channelIdentityID, botID, perms, payload) {
+					continue
+				}
+				payload["type"] = string(messageevent.EventTypeACPTurnStream)
 				payload["bot_id"] = botID
 				if err := writeSSEJSON(writer, flusher, payload); err != nil {
 					return nil

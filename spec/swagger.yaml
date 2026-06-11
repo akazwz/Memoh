@@ -242,6 +242,13 @@ definitions:
         type: string
       state:
         type: string
+      turn_id:
+        description: |-
+          TurnID/TurnState describe the in-flight turn, when any (running or
+          cancelling). Clients use them to render busy state and offer abort.
+        type: string
+      turn_state:
+        type: string
     type: object
   acpclient.ModelInfo:
     properties:
@@ -1563,6 +1570,127 @@ definitions:
         type: string
       usage: {}
     type: object
+  conversation.UIAttachment:
+    properties:
+      base64:
+        type: string
+      bot_id:
+        type: string
+      content_hash:
+        type: string
+      id:
+        type: string
+      metadata:
+        additionalProperties: {}
+        type: object
+      mime:
+        type: string
+      name:
+        type: string
+      path:
+        type: string
+      size:
+        type: integer
+      storage_key:
+        type: string
+      type:
+        type: string
+      url:
+        type: string
+    type: object
+  conversation.UIBackgroundTask:
+    properties:
+      chunk:
+        type: string
+      command:
+        type: string
+      duration:
+        type: string
+      exit_code:
+        type: integer
+      output_file:
+        type: string
+      output_tail:
+        type: string
+      stalled:
+        type: boolean
+      status:
+        type: string
+      stream:
+        type: string
+      task_id:
+        type: string
+    type: object
+  conversation.UIMessage:
+    properties:
+      approval:
+        $ref: '#/definitions/conversation.UIToolApproval'
+      attachments:
+        items:
+          $ref: '#/definitions/conversation.UIAttachment'
+        type: array
+      background_task:
+        $ref: '#/definitions/conversation.UIBackgroundTask'
+      content:
+        type: string
+      id:
+        type: integer
+      input: {}
+      name:
+        type: string
+      output: {}
+      progress:
+        items: {}
+        type: array
+      running:
+        type: boolean
+      tool_call_id:
+        type: string
+      type:
+        $ref: '#/definitions/conversation.UIMessageType'
+      user_input:
+        $ref: '#/definitions/conversation.UIUserInput'
+    type: object
+  conversation.UIMessageType:
+    enum:
+    - text
+    - reasoning
+    - tool
+    - attachments
+    type: string
+    x-enum-varnames:
+    - UIMessageText
+    - UIMessageReasoning
+    - UIMessageTool
+    - UIMessageAttachments
+  conversation.UIToolApproval:
+    properties:
+      approval_id:
+        type: string
+      can_approve:
+        type: boolean
+      decision_reason:
+        type: string
+      short_id:
+        type: integer
+      status:
+        type: string
+    type: object
+  conversation.UIUserInput:
+    properties:
+      can_respond:
+        type: boolean
+      questions:
+        items:
+          $ref: '#/definitions/userinput.UIQuestion'
+        type: array
+      short_id:
+        type: integer
+      status:
+        type: string
+      user_input_id:
+        type: string
+    type: object
   display.SessionInfo:
     properties:
       codec:
@@ -1732,6 +1860,21 @@ definitions:
       name:
         type: string
       provider:
+        type: string
+    type: object
+  flow.ACPTurnSnapshot:
+    properties:
+      active:
+        type: boolean
+      messages:
+        items:
+          $ref: '#/definitions/conversation.UIMessage'
+        type: array
+      session_id:
+        type: string
+      turn_id:
+        type: string
+      updated_at:
         type: string
     type: object
   github_com_memohai_memoh_internal_mcp.Connection:
@@ -2576,6 +2719,14 @@ definitions:
         type: integer
       storage_bytes:
         type: integer
+    type: object
+  handlers.acpAbortTurnRequest:
+    properties:
+      turn_id:
+        description: |-
+          TurnID, when set, makes the abort precise: it only cancels this exact
+          turn, so a stale client cannot kill a newer turn it never saw.
+        type: string
     type: object
   handlers.acpRuntimeCreateRequest:
     properties:
@@ -3914,6 +4065,32 @@ definitions:
       transcription_model_id:
         type: string
       tts_model_id:
+        type: string
+    type: object
+  userinput.UIOption:
+    properties:
+      description:
+        type: string
+      id:
+        type: string
+      label:
+        type: string
+    type: object
+  userinput.UIQuestion:
+    properties:
+      allow_custom:
+        type: boolean
+      id:
+        type: string
+      kind:
+        type: string
+      options:
+        items:
+          $ref: '#/definitions/userinput.UIOption'
+        type: array
+      placeholder:
+        type: string
+      text:
         type: string
     type: object
 info:
@@ -7857,6 +8034,52 @@ paths:
       summary: Ensure ACP session runtime is started
       tags:
       - acp
+  /bots/{bot_id}/sessions/{session_id}/acp-runtime/abort-turn:
+    post:
+      description: 'Cancels the running turn out-of-band: works from any client or
+        connection, not just the one that started the turn. The runtime stays warm
+        and the round persists as cancelled. Pass turn_id to abort only that exact
+        turn (a stale client then cannot kill a newer one).'
+      parameters:
+      - description: Bot ID
+        in: path
+        name: bot_id
+        required: true
+        type: string
+      - description: Session ID
+        in: path
+        name: session_id
+        required: true
+        type: string
+      - description: Abort target
+        in: body
+        name: body
+        schema:
+          $ref: '#/definitions/handlers.acpAbortTurnRequest'
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/acpagent.RuntimeStatus'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      summary: Abort the session's in-flight ACP turn
+      tags:
+      - acp
   /bots/{bot_id}/sessions/{session_id}/acp-runtime/model:
     patch:
       parameters:
@@ -7894,6 +8117,43 @@ paths:
           schema:
             $ref: '#/definitions/handlers.ErrorResponse'
       summary: Set ACP session runtime model
+      tags:
+      - acp
+  /bots/{bot_id}/sessions/{session_id}/acp-runtime/turn:
+    get:
+      description: 'Reconnect backfill: the UI messages accumulated server-side for
+        the in-flight (or most recent) turn, plus the turn identity for live-stream
+        dedupe and abort targeting. active=false with no messages means no turn ran
+        in this server process — persisted history is the whole story.'
+      parameters:
+      - description: Bot ID
+        in: path
+        name: bot_id
+        required: true
+        type: string
+      - description: Session ID
+        in: path
+        name: session_id
+        required: true
+        type: string
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/flow.ACPTurnSnapshot'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      summary: Get the session's current ACP turn snapshot
       tags:
       - acp
   /bots/{bot_id}/sessions/{session_id}/compact:
@@ -11350,6 +11610,10 @@ paths:
             $ref: '#/definitions/accounts.Account'
         "400":
           description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "401":
+          description: Unauthorized
           schema:
             $ref: '#/definitions/handlers.ErrorResponse'
         "500":

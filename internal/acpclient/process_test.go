@@ -79,6 +79,66 @@ func TestPrepareProcessEnvContainerClaudeWritesManagedSettings(t *testing.T) {
 	}
 }
 
+func TestPrepareProcessEnvLocalClaudeIsolatesConfigDir(t *testing.T) {
+	client, server := newRecordingBridgeClient(t)
+	env, cleanup, err := prepareProcessEnv(context.Background(), client, "/home/user/ws/project", processOptions{
+		Backend:       WorkspaceBackendLocal,
+		AgentID:       "claude-code",
+		SetupMode:     SetupModeOAuth,
+		WorkspaceRoot: "/home/user/ws",
+		Env:           []string{"CLAUDE_CODE_OAUTH_TOKEN=token"},
+	})
+	if err != nil {
+		t.Fatalf("prepareProcessEnv() error = %v", err)
+	}
+	if cleanup != nil {
+		t.Fatalf("local cleanup should be nil")
+	}
+	assertEnvHas(t, env, "CLAUDE_CONFIG_DIR=/home/user/ws/.memoh/claude")
+	if envHasKey(env, "HOME") {
+		t.Fatalf("local env must not override HOME: %v", env)
+	}
+	settings, ok := findWrite(server.writes(), "/data/.memoh/claude/settings.json")
+	if !ok {
+		t.Fatalf("managed Claude settings were not written: %#v", server.writes())
+	}
+	if !strings.Contains(string(settings.Content), `"ask"`) || !strings.Contains(string(settings.Content), `"Bash"`) {
+		t.Fatalf("managed Claude settings missing Bash ask rule:\n%s", settings.Content)
+	}
+}
+
+func TestPrepareProcessEnvLocalClaudeSelfKeepsHostConfig(t *testing.T) {
+	client, server := newRecordingBridgeClient(t)
+	env, _, err := prepareProcessEnv(context.Background(), client, "/home/user/ws/project", processOptions{
+		Backend:       WorkspaceBackendLocal,
+		AgentID:       "claude-code",
+		SetupMode:     SetupModeSelf,
+		WorkspaceRoot: "/home/user/ws",
+	})
+	if err != nil {
+		t.Fatalf("prepareProcessEnv() error = %v", err)
+	}
+	if envHasKey(env, "CLAUDE_CONFIG_DIR") {
+		t.Fatalf("self mode must keep the host Claude config: %v", env)
+	}
+	if got := len(server.writes()); got != 0 {
+		t.Fatalf("self mode wrote %d files, want 0", got)
+	}
+}
+
+func TestPrepareProcessEnvLocalClaudeRequiresWorkspaceRoot(t *testing.T) {
+	client, _ := newRecordingBridgeClient(t)
+	_, _, err := prepareProcessEnv(context.Background(), client, "/home/user/ws/project", processOptions{
+		Backend:   WorkspaceBackendLocal,
+		AgentID:   "claude-code",
+		SetupMode: SetupModeAPIKey,
+		Env:       []string{"ANTHROPIC_API_KEY=sk-test"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "CLAUDE_CONFIG_DIR") {
+		t.Fatalf("err = %v, want workspace-root isolation error", err)
+	}
+}
+
 func TestPrepareProcessEnvContainerCodexWritesNoClaudeSettings(t *testing.T) {
 	client, server := newRecordingBridgeClient(t)
 	_, cleanup, err := prepareProcessEnv(context.Background(), client, "/data", processOptions{

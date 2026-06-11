@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"path"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/memohai/memoh/internal/acpprofile"
 	"github.com/memohai/memoh/internal/workspace/bridge"
 	pb "github.com/memohai/memoh/internal/workspace/bridgepb"
 )
@@ -168,10 +170,24 @@ func startBridgeProcess(ctx context.Context, client *bridge.Client, command stri
 }
 
 func prepareProcessEnv(ctx context.Context, client *bridge.Client, workDir string, opts processOptions) ([]string, func(), error) {
+	// Per-agent containment behavior comes from the profile registry, never
+	// from agent-ID conditionals: a new agent with known shapes onboards by
+	// declaration only (architecture doc §5.6).
+	profile, _ := acpprofile.Lookup(opts.AgentID)
+
 	if opts.Backend == WorkspaceBackendLocal {
-		env, err := prepareLocalProcessEnv(opts)
+		env, err := prepareLocalProcessEnv(opts, profile)
 		if err != nil {
 			return nil, nil, err
+		}
+		// Managed settings (Claude-style ask/deny pins) are written into the
+		// scoped local config dir so the host's real config — permission
+		// allow rules, hooks, MCP servers — never leaks into a managed
+		// session. Self mode keeps the host config by design.
+		if profile.ManagedSettings == acpprofile.ManagedSettingsClaude && normalizeSetupMode(opts.SetupMode) != SetupModeSelf {
+			if err := WriteClaudeManagedSettingsDir(ctx, client, path.Join(dataMountPath, profile.LocalIsolationDir)); err != nil {
+				return nil, nil, fmt.Errorf("prepare managed settings: %w", err)
+			}
 		}
 		return env, nil, nil
 	}
@@ -181,29 +197,21 @@ func prepareProcessEnv(ctx context.Context, client *bridge.Client, workDir strin
 	env := withoutEnvKeys(opts.Env, "HOME", "PATH", "CODEX_HOME")
 	switch mode {
 	case SetupModeAPIKey, SetupModeOAuth:
-		homeDir := dataMountPath
 		tempHomeDir := "/tmp/memoh-acp/" + uuid.NewString()
-		if !isCodexAgent(opts.AgentID) {
-			homeDir = tempHomeDir
+		homeDir := tempHomeDir
+		if profile.ContainerHomeStrategy == acpprofile.ContainerHomePersistent {
+			homeDir = dataMountPath
 		}
 		env = append(env, "HOME="+homeDir, "PATH="+defaultContainerPath)
 
 		if err := client.Mkdir(ctx, homeDir); err != nil {
 			return nil, nil, fmt.Errorf("prepare ACP HOME: %w", err)
 		}
-		// Container-only: local-backend Claude inherits the host HOME, where
-		// the user's own settings (and the CLI's safe-command auto-allow)
-		// still apply. Local config isolation is a follow-up (managed
-		// CLAUDE_CONFIG_DIR).
-		if isClaudeCodeAgent(opts.AgentID) {
-			if err := WriteClaudeManagedSettings(ctx, client, homeDir); err != nil {
-				return nil, nil, fmt.Errorf("prepare Claude managed settings: %w", err)
-			}
-		}
-
 		// Cleanup intentionally derives a fresh background ctx with its own
 		// short deadline: the parent ctx is usually already cancelled by the
 		// time we tear down the ACP HOME, but we still want to issue rm -rf.
+		// Defined before the settings write so a write failure can reclaim the
+		// freshly-created HOME instead of orphaning it.
 		cleanup := func() { //nolint:contextcheck // cleanup uses independent background ctx by design.
 			cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
@@ -211,11 +219,31 @@ func prepareProcessEnv(ctx context.Context, client *bridge.Client, workDir strin
 				_, _ = client.ExecWithEnv(cleanupCtx, "rm -rf "+escapeShellArg(homeDir), workDir, 5, env)
 			}
 		}
+		// The managed HOME doubles as the config dir for settings-pinned
+		// agents; local backends get the same isolation via the scoped
+		// config-dir env above.
+		if profile.ManagedSettings == acpprofile.ManagedSettingsClaude {
+			if err := WriteClaudeManagedSettings(ctx, client, homeDir); err != nil {
+				cleanup()
+				return nil, nil, fmt.Errorf("prepare managed settings: %w", err)
+			}
+		}
+
 		return env, cleanup, nil
 	case SetupModeSelf:
+		// Self mode deliberately writes no managed settings/env (the agent runs
+		// against config the operator supplied out of band). For a settings-
+		// pinned agent (Claude) that means no ask:[Bash] containment pin — which
+		// is NOT a reachable bypass: self mode also injects no credentials
+		// (managedProcessEnv returns nil for self), so a container self-mode
+		// Claude with no operator-baked config can't authenticate and never runs
+		// a tool. If the operator DID bake in their own config+creds, self mode
+		// respecting that config (permissions included) is the contract. The
+		// managed (api_key/oauth) path above is what production uses and it does
+		// pin ask:[Bash].
 		env = withoutEnvKeys(opts.Env, "HOME", "PATH", "CODEX_HOME")
 		env = append(env, "PATH="+defaultContainerPath)
-		if isCodexAgent(opts.AgentID) {
+		if profile.ContainerHomeStrategy == acpprofile.ContainerHomePersistent {
 			env = append(env, "HOME="+dataMountPath)
 		}
 		return env, nil, nil
@@ -229,24 +257,24 @@ func prepareProcessEnv(ctx context.Context, client *bridge.Client, workDir strin
 // environment (the bridge appends our entries onto os.Environ), so we only add
 // the BYOK overrides and never touch HOME/PATH. Self mode returns no overrides
 // so the host's own agent login is used as-is.
-func prepareLocalProcessEnv(opts processOptions) ([]string, error) {
+func prepareLocalProcessEnv(opts processOptions, profile acpprofile.Profile) ([]string, error) {
 	mode := normalizeSetupMode(opts.SetupMode)
 	if mode == SetupModeSelf {
 		return nil, nil
 	}
 	env := append([]string(nil), opts.Env...)
-	if isCodexAgent(opts.AgentID) {
-		// Codex reads its config from $CODEX_HOME (falling back to ~/.codex).
-		// Point it at the bot-scoped managed dir written under the workspace
-		// root so BYOK credentials don't clobber the user's real ~/.codex. If
-		// the root is unknown we must fail loudly: silently skipping the
-		// override would leak BYOK credentials into the user's real ~/.codex.
+	if profile.LocalIsolationEnv != "" {
+		// The agent reads its config from this env var; point it at the
+		// bot-scoped managed dir under the workspace root so BYOK credentials
+		// don't clobber the user's real host config. If the root is unknown
+		// we must fail loudly: silently skipping the override would leak BYOK
+		// credentials into the host config.
 		root := strings.TrimSpace(opts.WorkspaceRoot)
 		if root == "" {
-			return nil, errors.New("local Codex BYOK requires a workspace root for CODEX_HOME isolation")
+			return nil, fmt.Errorf("local %s BYOK requires a workspace root for %s isolation", strings.TrimSpace(opts.AgentID), profile.LocalIsolationEnv)
 		}
-		env = withoutEnvKeys(env, "CODEX_HOME")
-		env = append(env, "CODEX_HOME="+filepath.Join(root, ".codex"))
+		env = withoutEnvKeys(env, profile.LocalIsolationEnv)
+		env = append(env, profile.LocalIsolationEnv+"="+filepath.Join(root, filepath.FromSlash(profile.LocalIsolationDir)))
 	}
 	if len(env) == 0 {
 		return nil, nil
@@ -367,6 +395,17 @@ func isPlainCommand(command string) bool {
 		return false
 	}
 	return !strings.ContainsAny(command, " \t\n'\"\\$&;|<>*?()[]{}!`")
+}
+
+// exited reports whether the process's output stream has terminated (process
+// exit or transport death). Cheap, non-blocking.
+func (p *bridgeProcess) exited() bool {
+	select {
+	case <-p.done:
+		return true
+	default:
+		return false
+	}
 }
 
 func (p *bridgeProcess) Read(b []byte) (int, error) {

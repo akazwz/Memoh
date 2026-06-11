@@ -28,8 +28,6 @@ INSERT INTO tool_approval_requests (
   sqlc.arg(reply_target),
   sqlc.arg(conversation_type)
 )
-ON CONFLICT (session_id, tool_call_id) DO UPDATE
-SET tool_input = EXCLUDED.tool_input
 RETURNING *;
 
 -- name: GetToolApprovalRequest :one
@@ -105,3 +103,32 @@ FROM tool_approval_requests
 WHERE bot_id = sqlc.arg(bot_id)
   AND session_id = sqlc.arg(session_id)
 ORDER BY created_at ASC, short_id ASC;
+
+-- name: CancelPendingToolApprovalsBySession :many
+UPDATE tool_approval_requests
+SET status = 'cancelled',
+    decision_reason = sqlc.arg(reason),
+    decided_at = CURRENT_TIMESTAMP
+WHERE bot_id = sqlc.arg(bot_id)
+  AND session_id = sqlc.arg(session_id)
+  AND status = 'pending'
+RETURNING *;
+
+-- name: ExpireStaleToolApprovals :many
+UPDATE tool_approval_requests
+SET status = 'expired',
+    decision_reason = sqlc.arg(reason),
+    decided_at = CURRENT_TIMESTAMP
+WHERE status = 'pending'
+  -- datetime() normalizes both sides: created_at is CURRENT_TIMESTAMP text
+  -- ('YYYY-MM-DD HH:MM:SS') while the bound cutoff arrives as RFC3339
+  -- ('...T...Z'); raw text comparison would order ' ' before 'T' and expire
+  -- every same-day row.
+  AND datetime(created_at) < datetime(sqlc.arg(created_at))
+RETURNING *;
+
+-- name: DeleteToolApprovalRequestsBySessionToolCall :exec
+DELETE FROM tool_approval_requests
+WHERE bot_id = sqlc.arg(bot_id)
+  AND session_id = sqlc.arg(session_id)
+  AND tool_call_id = sqlc.arg(tool_call_id);

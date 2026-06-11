@@ -150,6 +150,12 @@ export type AcpagentRuntimeStatus = {
     runtime_id?: string;
     session_id?: string;
     state?: string;
+    /**
+     * TurnID/TurnState describe the in-flight turn, when any (running or
+     * cancelling). Clients use them to render busy state and offer abort.
+     */
+    turn_id?: string;
+    turn_state?: string;
 };
 
 export type AcpclientModelInfo = {
@@ -911,6 +917,70 @@ export type CompactionLog = {
     usage?: unknown;
 };
 
+export type ConversationUiAttachment = {
+    base64?: string;
+    bot_id?: string;
+    content_hash?: string;
+    id?: string;
+    metadata?: {
+        [key: string]: unknown;
+    };
+    mime?: string;
+    name?: string;
+    path?: string;
+    size?: number;
+    storage_key?: string;
+    type?: string;
+    url?: string;
+};
+
+export type ConversationUiBackgroundTask = {
+    chunk?: string;
+    command?: string;
+    duration?: string;
+    exit_code?: number;
+    output_file?: string;
+    output_tail?: string;
+    stalled?: boolean;
+    status?: string;
+    stream?: string;
+    task_id?: string;
+};
+
+export type ConversationUiMessage = {
+    approval?: ConversationUiToolApproval;
+    attachments?: Array<ConversationUiAttachment>;
+    background_task?: ConversationUiBackgroundTask;
+    content?: string;
+    id?: number;
+    input?: unknown;
+    name?: string;
+    output?: unknown;
+    progress?: Array<unknown>;
+    running?: boolean;
+    tool_call_id?: string;
+    type?: ConversationUiMessageType;
+    user_input?: ConversationUiUserInput;
+};
+
+export type ConversationUiMessageType = 'text' | 'reasoning' | 'tool' | 'attachments';
+
+export type ConversationUiToolApproval = {
+    approval_id?: string;
+    can_approve?: boolean;
+    decision_reason?: string;
+    short_id?: number;
+    status?: string;
+};
+
+export type ConversationUiUserInput = {
+    can_respond?: boolean;
+    questions?: Array<UserinputUiQuestion>;
+    short_id?: number;
+    status?: string;
+    user_input_id?: string;
+};
+
 export type DisplaySessionInfo = {
     codec?: string;
     created_at?: string;
@@ -1017,6 +1087,14 @@ export type EmailUpdateProviderRequest = {
     };
     name?: string;
     provider?: string;
+};
+
+export type FlowAcpTurnSnapshot = {
+    active?: boolean;
+    messages?: Array<ConversationUiMessage>;
+    session_id?: string;
+    turn_id?: string;
+    updated_at?: string;
 };
 
 export type GithubComMemohaiMemohInternalMcpConnection = {
@@ -1530,6 +1608,14 @@ export type HandlersUpdateContainerResourceLimitsRequest = {
     cpu_millicores?: number;
     memory_bytes?: number;
     storage_bytes?: number;
+};
+
+export type HandlersAcpAbortTurnRequest = {
+    /**
+     * TurnID, when set, makes the abort precise: it only cancels this exact
+     * turn, so a stale client cannot kill a newer turn it never saw.
+     */
+    turn_id?: string;
 };
 
 export type HandlersAcpRuntimeCreateRequest = {
@@ -2316,6 +2402,21 @@ export type SettingsUpsertRequest = {
     tool_approval_config?: SettingsToolApprovalConfig;
     transcription_model_id?: string;
     tts_model_id?: string;
+};
+
+export type UserinputUiOption = {
+    description?: string;
+    id?: string;
+    label?: string;
+};
+
+export type UserinputUiQuestion = {
+    allow_custom?: boolean;
+    id?: string;
+    kind?: string;
+    options?: Array<UserinputUiOption>;
+    placeholder?: string;
+    text?: string;
 };
 
 export type GetAcpProfilesData = {
@@ -7317,6 +7418,55 @@ export type PostBotsByBotIdSessionsBySessionIdAcpRuntimeResponses = {
 
 export type PostBotsByBotIdSessionsBySessionIdAcpRuntimeResponse = PostBotsByBotIdSessionsBySessionIdAcpRuntimeResponses[keyof PostBotsByBotIdSessionsBySessionIdAcpRuntimeResponses];
 
+export type PostBotsByBotIdSessionsBySessionIdAcpRuntimeAbortTurnData = {
+    /**
+     * Abort target
+     */
+    body?: HandlersAcpAbortTurnRequest;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+        /**
+         * Session ID
+         */
+        session_id: string;
+    };
+    query?: never;
+    url: '/bots/{bot_id}/sessions/{session_id}/acp-runtime/abort-turn';
+};
+
+export type PostBotsByBotIdSessionsBySessionIdAcpRuntimeAbortTurnErrors = {
+    /**
+     * Bad Request
+     */
+    400: HandlersErrorResponse;
+    /**
+     * Forbidden
+     */
+    403: HandlersErrorResponse;
+    /**
+     * Not Found
+     */
+    404: HandlersErrorResponse;
+    /**
+     * Conflict
+     */
+    409: HandlersErrorResponse;
+};
+
+export type PostBotsByBotIdSessionsBySessionIdAcpRuntimeAbortTurnError = PostBotsByBotIdSessionsBySessionIdAcpRuntimeAbortTurnErrors[keyof PostBotsByBotIdSessionsBySessionIdAcpRuntimeAbortTurnErrors];
+
+export type PostBotsByBotIdSessionsBySessionIdAcpRuntimeAbortTurnResponses = {
+    /**
+     * OK
+     */
+    200: AcpagentRuntimeStatus;
+};
+
+export type PostBotsByBotIdSessionsBySessionIdAcpRuntimeAbortTurnResponse = PostBotsByBotIdSessionsBySessionIdAcpRuntimeAbortTurnResponses[keyof PostBotsByBotIdSessionsBySessionIdAcpRuntimeAbortTurnResponses];
+
 export type PatchBotsByBotIdSessionsBySessionIdAcpRuntimeModelData = {
     /**
      * ACP model selection
@@ -7361,6 +7511,48 @@ export type PatchBotsByBotIdSessionsBySessionIdAcpRuntimeModelResponses = {
 };
 
 export type PatchBotsByBotIdSessionsBySessionIdAcpRuntimeModelResponse = PatchBotsByBotIdSessionsBySessionIdAcpRuntimeModelResponses[keyof PatchBotsByBotIdSessionsBySessionIdAcpRuntimeModelResponses];
+
+export type GetBotsByBotIdSessionsBySessionIdAcpRuntimeTurnData = {
+    body?: never;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+        /**
+         * Session ID
+         */
+        session_id: string;
+    };
+    query?: never;
+    url: '/bots/{bot_id}/sessions/{session_id}/acp-runtime/turn';
+};
+
+export type GetBotsByBotIdSessionsBySessionIdAcpRuntimeTurnErrors = {
+    /**
+     * Bad Request
+     */
+    400: HandlersErrorResponse;
+    /**
+     * Forbidden
+     */
+    403: HandlersErrorResponse;
+    /**
+     * Not Found
+     */
+    404: HandlersErrorResponse;
+};
+
+export type GetBotsByBotIdSessionsBySessionIdAcpRuntimeTurnError = GetBotsByBotIdSessionsBySessionIdAcpRuntimeTurnErrors[keyof GetBotsByBotIdSessionsBySessionIdAcpRuntimeTurnErrors];
+
+export type GetBotsByBotIdSessionsBySessionIdAcpRuntimeTurnResponses = {
+    /**
+     * OK
+     */
+    200: FlowAcpTurnSnapshot;
+};
+
+export type GetBotsByBotIdSessionsBySessionIdAcpRuntimeTurnResponse = GetBotsByBotIdSessionsBySessionIdAcpRuntimeTurnResponses[keyof GetBotsByBotIdSessionsBySessionIdAcpRuntimeTurnResponses];
 
 export type PostBotsByBotIdSessionsBySessionIdCompactData = {
     body?: never;
@@ -11303,6 +11495,10 @@ export type GetUsersMeErrors = {
      * Bad Request
      */
     400: HandlersErrorResponse;
+    /**
+     * Unauthorized
+     */
+    401: HandlersErrorResponse;
     /**
      * Internal Server Error
      */

@@ -6,22 +6,34 @@ import (
 	"sync"
 
 	acp "github.com/coder/acp-go-sdk"
+
+	"github.com/memohai/memoh/internal/streamevent"
 )
 
-type StreamEventType string
+// StreamEventType aliases the shared stream event vocabulary: an ACP event
+// type IS an agent event type, so the ACP-to-agent conversion cannot drift —
+// the compiler enforces what a parity test used to.
+type StreamEventType = streamevent.Type
 
 const (
-	StreamEventTextDelta           StreamEventType = "text_delta"
-	StreamEventReasoningDelta      StreamEventType = "reasoning_delta"
-	StreamEventToolCallStart       StreamEventType = "tool_call_start"
-	StreamEventToolCallEnd         StreamEventType = "tool_call_end"
-	StreamEventToolApprovalRequest StreamEventType = "tool_approval_request"
-	StreamEventUserInputRequest    StreamEventType = "user_input_request"
+	StreamEventTextDelta           = streamevent.TextDelta
+	StreamEventReasoningDelta      = streamevent.ReasoningDelta
+	StreamEventToolCallStart       = streamevent.ToolCallStart
+	StreamEventToolCallEnd         = streamevent.ToolCallEnd
+	StreamEventToolApprovalRequest = streamevent.ToolApprovalRequest
+	StreamEventUserInputRequest    = streamevent.UserInputRequest
+	StreamEventAttachment          = streamevent.Attachment
+	StreamEventReaction            = streamevent.Reaction
+	StreamEventSpeech              = streamevent.Speech
 
 	maxCollectedStreamEvents = 4096
 	maxTrackedACPToolStates  = 1024
 )
 
+// StreamEvent is the ACP wire/collector event. It shares the Type vocabulary
+// with streamevent.Event but is a distinct, narrower struct with its own
+// snake_case wire format; flow.MapACPStreamEvent crosses the boundary, and a
+// field that should reach the UI must exist on both structs.
 type StreamEvent struct {
 	Type       StreamEventType `json:"type"`
 	Delta      string          `json:"delta,omitempty"`
@@ -36,6 +48,11 @@ type StreamEvent struct {
 	ShortID     int            `json:"short_id,omitempty"`
 	Status      string         `json:"status,omitempty"`
 	Metadata    map[string]any `json:"metadata,omitempty"`
+	// Tool side-effect payloads (attachment_delta / reaction_delta /
+	// speech_delta), bridged from native tools the agent calls over MCP.
+	Attachments []streamevent.FileAttachment `json:"attachments,omitempty"`
+	Reactions   []streamevent.ReactionItem   `json:"reactions,omitempty"`
+	Speeches    []streamevent.SpeechItem     `json:"speeches,omitempty"`
 }
 
 type EventSink interface {
@@ -83,13 +100,28 @@ func (e *toolEventEmitter) emit(event StreamEvent) {
 }
 
 type eventCollector struct {
-	mu     sync.Mutex
-	text   strings.Builder
-	events []StreamEvent
+	mu             sync.Mutex
+	text           strings.Builder
+	events         []StreamEvent
+	eventsDisabled bool
 }
 
 func newEventCollector() *eventCollector {
 	return &eventCollector{}
+}
+
+// skipEvents stops the collector from buffering events; text still
+// accumulates. Used when a per-prompt sink is attached: the sink owner (the
+// session pool) keeps the authoritative ordered event view, so the collector
+// copy would be pure double-buffering discarded at the end of the prompt.
+func (c *eventCollector) skipEvents() {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	c.eventsDisabled = true
+	c.events = nil
+	c.mu.Unlock()
 }
 
 func (c *eventCollector) record(event StreamEvent) {
@@ -98,6 +130,9 @@ func (c *eventCollector) record(event StreamEvent) {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.eventsDisabled {
+		return
+	}
 	c.events = appendBoundedStreamEvents(c.events, event)
 }
 
@@ -106,7 +141,9 @@ func (c *eventCollector) apply(n acp.SessionNotification, events []StreamEvent) 
 	defer c.mu.Unlock()
 
 	update := n.Update
-	c.events = appendBoundedStreamEvents(c.events, events...)
+	if !c.eventsDisabled {
+		c.events = appendBoundedStreamEvents(c.events, events...)
+	}
 	if update.AgentMessageChunk != nil {
 		c.text.WriteString(contentText(update.AgentMessageChunk.Content))
 	}
@@ -156,6 +193,19 @@ type acpToolState struct {
 
 func newACPToolEventMapper() *acpToolEventMapper {
 	return &acpToolEventMapper{tools: map[string]*acpToolState{}}
+}
+
+// reset drops all tracked tool state and plan memory. Called at prompt start
+// so state from a previous (possibly cancelled) turn cannot leak into the
+// next one.
+func (m *acpToolEventMapper) reset() {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	m.tools = map[string]*acpToolState{}
+	m.lastPlan = ""
+	m.mu.Unlock()
 }
 
 func (m *acpToolEventMapper) eventsFromNotification(n acp.SessionNotification) []StreamEvent {
@@ -372,7 +422,15 @@ func nativeToolFromACPState(state *acpToolState) (string, map[string]any, bool) 
 		}
 		return "read", map[string]any{"path": path}, true
 	case string(acp.ToolKindEdit):
-		return editToolFromACPState(state)
+		name, input, ok := editToolFromACPState(state)
+		// A title like "Write file X" overrides the structural edit shape. Apply
+		// it HERE so the streamed tool-event name and the approval name (both
+		// resolve through this function) agree — one action must not surface as
+		// "edit" on the stream while its approval says "write".
+		if ok && name == "edit" && looksLikeWritePermission(state.title) {
+			name = "write"
+		}
+		return name, input, ok
 	default:
 		return "", nil, false
 	}

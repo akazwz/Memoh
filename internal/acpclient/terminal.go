@@ -43,6 +43,10 @@ type terminalApprovalFunc func(toolCallID string, input map[string]any) (termina
 type terminalApprovalResult struct {
 	Approved   bool
 	ToolCallID string
+	// RejectionMessage is the agent-visible text for an unapproved result
+	// (toolapproval.RejectionMessage), so terminal denials report the same
+	// honest outcome as every other approval path.
+	RejectionMessage string
 }
 
 type terminal struct {
@@ -118,7 +122,11 @@ func (m *terminalManager) CreateTerminal(_ context.Context, p acp.CreateTerminal
 			toolCallID = strings.TrimSpace(approval.ToolCallID)
 		}
 		if !approval.Approved {
-			err := errors.New("tool execution rejected by user")
+			message := strings.TrimSpace(approval.RejectionMessage)
+			if message == "" {
+				message = "tool execution was not approved"
+			}
+			err := errors.New(message)
 			m.emitToolCallEnd(toolCallID, "exec", input, toolErrorResult(err), err)
 			return acp.CreateTerminalResponse{}, err
 		}

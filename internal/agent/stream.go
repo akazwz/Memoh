@@ -1,64 +1,38 @@
 package agent
 
-import "encoding/json"
+import "github.com/memohai/memoh/internal/streamevent"
+
+// The stream event vocabulary lives in internal/streamevent so packages that
+// cannot import internal/agent (it depends on conversation) still share the
+// exact same types and constants. These aliases keep the agent package API
+// unchanged.
 
 // StreamEventType identifies the kind of stream event.
-type StreamEventType string
+type StreamEventType = streamevent.Type
 
 const (
-	EventAgentStart          StreamEventType = "agent_start"
-	EventTextStart           StreamEventType = "text_start"
-	EventTextDelta           StreamEventType = "text_delta"
-	EventTextEnd             StreamEventType = "text_end"
-	EventReasoningStart      StreamEventType = "reasoning_start"
-	EventReasoningDelta      StreamEventType = "reasoning_delta"
-	EventReasoningEnd        StreamEventType = "reasoning_end"
-	EventToolCallInputStart  StreamEventType = "tool_call_input_start"
-	EventToolCallStart       StreamEventType = "tool_call_start"
-	EventToolCallProgress    StreamEventType = "tool_call_progress"
-	EventToolCallEnd         StreamEventType = "tool_call_end"
-	EventToolApprovalRequest StreamEventType = "tool_approval_request"
-	EventUserInputRequest    StreamEventType = "user_input_request"
-	EventAttachment          StreamEventType = "attachment_delta"
-	EventReaction            StreamEventType = "reaction_delta"
-	EventSpeech              StreamEventType = "speech_delta"
-	EventAgentEnd            StreamEventType = "agent_end"
-	EventAgentAbort          StreamEventType = "agent_abort"
-	EventRetry               StreamEventType = "retry"
-	EventProgress            StreamEventType = "progress"
-	EventError               StreamEventType = "error"
+	EventAgentStart          = streamevent.AgentStart
+	EventTextStart           = streamevent.TextStart
+	EventTextDelta           = streamevent.TextDelta
+	EventTextEnd             = streamevent.TextEnd
+	EventReasoningStart      = streamevent.ReasoningStart
+	EventReasoningDelta      = streamevent.ReasoningDelta
+	EventReasoningEnd        = streamevent.ReasoningEnd
+	EventToolCallInputStart  = streamevent.ToolCallInputStart
+	EventToolCallStart       = streamevent.ToolCallStart
+	EventToolCallProgress    = streamevent.ToolCallProgress
+	EventToolCallEnd         = streamevent.ToolCallEnd
+	EventToolApprovalRequest = streamevent.ToolApprovalRequest
+	EventUserInputRequest    = streamevent.UserInputRequest
+	EventAttachment          = streamevent.Attachment
+	EventReaction            = streamevent.Reaction
+	EventSpeech              = streamevent.Speech
+	EventAgentEnd            = streamevent.AgentEnd
+	EventAgentAbort          = streamevent.AgentAbort
+	EventRetry               = streamevent.Retry
+	EventProgress            = streamevent.Progress
+	EventError               = streamevent.Error
 )
 
 // StreamEvent is emitted by the agent during streaming.
-type StreamEvent struct {
-	Type           StreamEventType  `json:"type"`
-	Delta          string           `json:"delta,omitempty"`
-	ToolName       string           `json:"toolName,omitempty"`
-	ToolCallID     string           `json:"toolCallId,omitempty"`
-	ApprovalID     string           `json:"approvalId,omitempty"`
-	UserInputID    string           `json:"userInputId,omitempty"`
-	ShortID        int              `json:"shortId,omitempty"`
-	Status         string           `json:"status,omitempty"`
-	Input          any              `json:"input,omitempty"`
-	Metadata       map[string]any   `json:"metadata,omitempty"`
-	Progress       any              `json:"progress,omitempty"`
-	Result         any              `json:"result,omitempty"`
-	Attachments    []FileAttachment `json:"attachments,omitempty"`
-	Reactions      []ReactionItem   `json:"reactions,omitempty"`
-	Speeches       []SpeechItem     `json:"speeches,omitempty"`
-	Messages       json.RawMessage  `json:"messages,omitempty"`
-	Usage          json.RawMessage  `json:"usage,omitempty"`
-	Reasoning      []string         `json:"reasoning,omitempty"`
-	Error          string           `json:"error,omitempty"`
-	Attempt        int              `json:"attempt,omitempty"`
-	MaxAttempt     int              `json:"maxAttempt,omitempty"`
-	RetryError     string           `json:"retryError,omitempty"`
-	StepNumber     int              `json:"stepNumber,omitempty"`
-	TotalSteps     int              `json:"totalSteps,omitempty"`
-	ProgressStatus string           `json:"progressStatus,omitempty"`
-}
-
-// IsTerminal returns true for events that signal end of stream.
-func (e StreamEvent) IsTerminal() bool {
-	return e.Type == EventAgentEnd || e.Type == EventAgentAbort
-}
+type StreamEvent = streamevent.Event

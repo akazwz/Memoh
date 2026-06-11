@@ -55,6 +55,8 @@ export interface MessageStreamEvent {
   event?: string
   task?: UIBackgroundTask
   stream?: UIStreamEvent
+  /** ACP turn identity carried by acp_turn_stream events (dedupe + abort target). */
+  turn_id?: string
 }
 
 export interface FetchMessagesOptions {

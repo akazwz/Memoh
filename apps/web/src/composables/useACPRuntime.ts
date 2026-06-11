@@ -51,6 +51,14 @@ export function useACPRuntime(options: UseACPRuntimeOptions) {
       } catch (error) {
         if (!cancelled) options.onError?.(error)
       }
+      // Backfill an in-flight turn (reconnect / second tab / busy session):
+      // the server keeps the turn's accumulated UI messages and identity.
+      try {
+        if (!cancelled) await chatStore.syncACPTurnSnapshot(sid)
+      } catch {
+        // Snapshot is best-effort; the live acp_turn_stream mirror still
+        // covers events from here on.
+      }
     },
     { immediate: true },
   )

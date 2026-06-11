@@ -32,8 +32,6 @@ INSERT INTO tool_approval_requests (
   sqlc.arg(reply_target),
   sqlc.arg(conversation_type)
 )
-ON CONFLICT (session_id, tool_call_id) DO UPDATE
-SET tool_input = EXCLUDED.tool_input
 RETURNING *;
 
 -- name: GetToolApprovalRequest :one
@@ -109,3 +107,28 @@ FROM tool_approval_requests
 WHERE bot_id = $1
   AND session_id = $2
 ORDER BY created_at ASC, short_id ASC;
+
+-- name: CancelPendingToolApprovalsBySession :many
+UPDATE tool_approval_requests
+SET status = 'cancelled',
+    decision_reason = sqlc.arg(reason),
+    decided_at = now()
+WHERE bot_id = sqlc.arg(bot_id)
+  AND session_id = sqlc.arg(session_id)
+  AND status = 'pending'
+RETURNING *;
+
+-- name: ExpireStaleToolApprovals :many
+UPDATE tool_approval_requests
+SET status = 'expired',
+    decision_reason = sqlc.arg(reason),
+    decided_at = now()
+WHERE status = 'pending'
+  AND created_at < sqlc.arg(created_at)
+RETURNING *;
+
+-- name: DeleteToolApprovalRequestsBySessionToolCall :exec
+DELETE FROM tool_approval_requests
+WHERE bot_id = $1
+  AND session_id = $2
+  AND tool_call_id = $3;

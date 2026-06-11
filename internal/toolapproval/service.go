@@ -86,6 +86,27 @@ func (s *Service) CreatePending(ctx context.Context, input CreatePendingInput) (
 	if err != nil {
 		return Request{}, err
 	}
+	// A re-used (session_id, tool_call_id) is a NEW ask: drop any prior row
+	// first so the fresh request gets a brand-new id and short_id. Reusing the
+	// row (an upsert) would let a stale approval card or reply — addressed by
+	// the old id — land a decision on the new request. Deleting is safe: the
+	// old request's waiter has already unwound (the agent only re-asks after
+	// the previous attempt resolved or the turn restarted).
+	//
+	// The DELETE+INSERT is intentionally not wrapped in a transaction. It is
+	// safe because the swap is serialized per (session_id, tool_call_id): a
+	// session runs one turn at a time (the pool's turn slot), and an ACP/native
+	// agent asks permission synchronously — it never has two in-flight asks for
+	// the same tool_call_id — so two concurrent CreatePending for the same key
+	// cannot occur. (If that invariant ever weakens, wrap both statements in a
+	// single tx as defense-in-depth against the lost-row window / UNIQUE race.)
+	if err := s.queries.DeleteToolApprovalRequestsBySessionToolCall(ctx, sqlc.DeleteToolApprovalRequestsBySessionToolCallParams{
+		BotID:      botID,
+		SessionID:  sessionID,
+		ToolCallID: strings.TrimSpace(input.ToolCallID),
+	}); err != nil {
+		return Request{}, err
+	}
 	row, err := s.queries.CreateToolApprovalRequest(ctx, sqlc.CreateToolApprovalRequestParams{
 		BotID:                        botID,
 		SessionID:                    sessionID,
@@ -249,6 +270,99 @@ func (s *Service) UpdatePromptMessage(ctx context.Context, approvalID, promptMes
 		PromptExternalMessageID: strings.TrimSpace(externalID),
 	})
 	return requestFromRowOrErr(row, err)
+}
+
+// CancelPendingForSession cancels every pending approval for the session as
+// a system outcome. The session-pool turn slot guarantees at most one turn in
+// flight per session, so a session's pending approvals always belong to the
+// turn that just ended — calling this when a turn aborts or fails closes the
+// residual window where a dead waiter leaves a permanently actionable card.
+func (s *Service) CancelPendingForSession(ctx context.Context, botID, sessionID, reason string) ([]Request, error) {
+	if s == nil || s.queries == nil {
+		return nil, errors.New("tool approval queries not configured")
+	}
+	botUUID, err := db.ParseUUID(botID)
+	if err != nil {
+		return nil, err
+	}
+	sessionUUID, err := db.ParseUUID(sessionID)
+	if err != nil {
+		return nil, err
+	}
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		reason = "tool approval cancelled: the turn that requested it ended"
+	}
+	rows, err := s.queries.CancelPendingToolApprovalsBySession(ctx, sqlc.CancelPendingToolApprovalsBySessionParams{
+		BotID:     botUUID,
+		SessionID: sessionUUID,
+		Reason:    reason,
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Request, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, requestFromRow(row))
+	}
+	return out, nil
+}
+
+// expirySweepGrace pads the flow's wait window before a pending row is
+// declared orphaned: any live waiter resolves (or timeout-rejects) its row
+// within DefaultWaitTimeout, so a pending row older than the window plus
+// grace provably has no waiter — its server died or its runtime is gone.
+const expirySweepGrace = 5 * time.Minute
+
+// ExpireStalePending expires pending approvals created before the cutoff.
+func (s *Service) ExpireStalePending(ctx context.Context, before time.Time) ([]Request, error) {
+	if s == nil || s.queries == nil {
+		return nil, errors.New("tool approval queries not configured")
+	}
+	rows, err := s.queries.ExpireStaleToolApprovals(ctx, sqlc.ExpireStaleToolApprovalsParams{
+		Reason: "tool approval expired: no live turn to serve it",
+		// Whole-second cutoff: the sqlite adapter renders timestamps as
+		// RFC3339Nano and the query normalizes via datetime(), which does not
+		// parse arbitrary fractional precision.
+		CreatedAt: pgtype.Timestamptz{Time: before.UTC().Truncate(time.Second), Valid: true},
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Request, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, requestFromRow(row))
+	}
+	return out, nil
+}
+
+// StartExpirySweeper periodically expires orphaned pending approvals (waiter
+// died with its server or runtime). Without it a pending row survives
+// forever and its persisted card stays actionable — approving it later flips
+// a row nobody executes.
+func (s *Service) StartExpirySweeper(ctx context.Context) {
+	if s == nil {
+		return
+	}
+	ticker := time.NewTicker(time.Minute)
+	go func() {
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				expired, err := s.ExpireStalePending(ctx, time.Now().Add(-(DefaultWaitTimeout + expirySweepGrace)))
+				if err != nil {
+					s.logger.Warn("tool approval expiry sweep failed", slog.Any("error", err))
+					continue
+				}
+				if len(expired) > 0 {
+					s.logger.Info("expired orphaned tool approvals", slog.Int("count", len(expired)))
+				}
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
 }
 
 func (s *Service) ListPendingBySession(ctx context.Context, botID, sessionID string) ([]Request, error) {
