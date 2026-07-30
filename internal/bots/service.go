@@ -27,6 +27,7 @@ type Service struct {
 	queries               dbstore.Queries
 	logger                *slog.Logger
 	containerLifecycle    ContainerLifecycle
+	connectorLifecycle    ConnectorLifecycle
 	checkers              []RuntimeChecker
 	containerReachability func(ctx context.Context, botID string) error
 }
@@ -58,6 +59,11 @@ func NewService(log *slog.Logger, queries dbstore.Queries) *Service {
 // SetContainerLifecycle registers a container lifecycle handler for bot operations.
 func (s *Service) SetContainerLifecycle(lc ContainerLifecycle) {
 	s.containerLifecycle = lc
+}
+
+// SetConnectorLifecycle registers connector cleanup for bot deletion.
+func (s *Service) SetConnectorLifecycle(lc ConnectorLifecycle) {
+	s.connectorLifecycle = lc
 }
 
 // SetContainerReachability registers a function that checks whether a bot's
@@ -597,6 +603,23 @@ func (s *Service) enqueueDeleteLifecycle(ctx context.Context, botID string) {
 	go func() {
 		lifecycleCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), botLifecycleOperationTimeout)
 		defer cancel()
+
+		if s.connectorLifecycle != nil {
+			if err := s.connectorLifecycle.CleanupBotConnectors(lifecycleCtx, botID); err != nil {
+				s.logger.Error("bot connector cleanup failed",
+					slog.String("bot_id", botID),
+					slog.Any("error", err),
+				)
+				if statusErr := s.updateStatus(lifecycleCtx, botID, BotStatusReady); statusErr != nil {
+					s.logger.Error(
+						"revert bot status failed",
+						slog.String("bot_id", botID),
+						slog.Any("error", statusErr),
+					)
+				}
+				return
+			}
+		}
 
 		if s.containerLifecycle != nil {
 			if err := s.containerLifecycle.CleanupBotContainer(lifecycleCtx, botID, false); err != nil {

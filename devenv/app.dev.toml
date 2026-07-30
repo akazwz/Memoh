@@ -79,6 +79,13 @@ providers_dir = "conf/providers"
 [supermarket]
 base_url = "https://supermarket.memoh.ai"
 
+[connect_it]
+# The Connect-It dev services are available at http://localhost:18083.
+# `mise run dev` creates and injects a cached local API token automatically.
+# These empty values are overridden by the dev Compose environment.
+base_url = ""
+api_token = ""
+
 [oauth_clients]
 config_path = "conf/oauth-clients.toml"
 
