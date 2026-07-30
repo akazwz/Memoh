@@ -13,6 +13,7 @@ permissions:
 concurrency:
   group: runtime-release
   cancel-in-progress: false
+  queue: max
 
 jobs:
   detect-version:

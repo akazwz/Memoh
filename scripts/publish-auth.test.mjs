@@ -137,10 +137,14 @@ test('publish script can select only the Runtime package', () => {
 test('Runtime release workflow is version-gated and owns only @memohai/runtime', () => {
   const workflow = readFileSync(join(ROOT_DIR, '.github/workflows/runtime-release.yml'), 'utf8')
   const aggregateWorkflow = readFileSync(join(ROOT_DIR, '.github/workflows/release.yml'), 'utf8')
+  const bumpConfig = readFileSync(join(ROOT_DIR, 'bump.config.ts'), 'utf8')
 
   assert.match(workflow, /paths:\n\s+- "packages\/runtime\/package\.json"/)
   assert.match(workflow, /git show "\$\{BEFORE_SHA\}:packages\/runtime\/package\.json"/)
   assert.match(workflow, /if: needs\.detect-version\.outputs\.changed == 'true'/)
+  assert.match(workflow, /concurrency:\n\s+group: runtime-release\n\s+cancel-in-progress: false\n\s+queue: max/)
   assert.match(workflow, /NPM_PUBLISH_PACKAGE: "@memohai\/runtime"/)
   assert.match(aggregateWorkflow, /NPM_PUBLISH_EXCLUDE: "@memohai\/runtime"/)
+  assert.doesNotMatch(aggregateWorkflow, /'packages\/runtime\/package\.json'/)
+  assert.doesNotMatch(bumpConfig, /'packages\/runtime\/package\.json'/)
 })
