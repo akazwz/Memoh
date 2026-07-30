@@ -1,0 +1,100 @@
+name: Runtime Release
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - "packages/runtime/package.json"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: runtime-release
+  cancel-in-progress: false
+
+jobs:
+  detect-version:
+    name: Detect Runtime version change
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.version.outputs.changed }}
+      current: ${{ steps.version.outputs.current }}
+      previous: ${{ steps.version.outputs.previous }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Compare package versions
+        id: version
+        shell: bash
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          current="$(node -p "require('./packages/runtime/package.json').version")"
+          previous=""
+
+          if [[ "$EVENT_NAME" == "push" ]] \
+            && [[ -n "$BEFORE_SHA" ]] \
+            && git cat-file -e "${BEFORE_SHA}:packages/runtime/package.json" 2>/dev/null; then
+            previous="$(
+              git show "${BEFORE_SHA}:packages/runtime/package.json" \
+                | node -p "JSON.parse(require('fs').readFileSync(0, 'utf8')).version"
+            )"
+          fi
+
+          changed=false
+          if [[ "$EVENT_NAME" == "workflow_dispatch" || "$current" != "$previous" ]]; then
+            changed=true
+          fi
+
+          echo "current=$current" >> "$GITHUB_OUTPUT"
+          echo "previous=$previous" >> "$GITHUB_OUTPUT"
+          echo "changed=$changed" >> "$GITHUB_OUTPUT"
+          echo "Runtime version: ${previous:-unknown} -> $current (changed=$changed)"
+
+  publish:
+    name: Publish @memohai/runtime
+    needs: detect-version
+    if: needs.detect-version.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: pnpm
+          registry-url: https://registry.npmjs.org/
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck Runtime
+        run: pnpm --filter @memohai/runtime typecheck
+
+      - name: Test Runtime
+        run: pnpm --filter @memohai/runtime test
+
+      - name: Build Runtime
+        run: pnpm --filter @memohai/runtime build
+
+      - name: Publish Runtime
+        env:
+          NPM_PUBLISH_PACKAGE: "@memohai/runtime"
+        run: pnpm publish:npm

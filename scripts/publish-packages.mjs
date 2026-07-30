@@ -32,13 +32,20 @@ const log = {
 
 const dryRun = process.argv.includes('--dry-run') || process.env.PUBLISH_PACKAGES_DRY_RUN === '1'
 const publishScope = process.env.NPM_PUBLISH_SCOPE?.trim() || null
+const publishPackage = process.env.NPM_PUBLISH_PACKAGE?.trim() || null
+const excludedPackages = new Set(
+  (process.env.NPM_PUBLISH_EXCLUDE ?? '')
+    .split(',')
+    .map(name => name.trim())
+    .filter(Boolean),
+)
 
 // Auth model: two modes.
 // - Token mode (local/manual): NODE_AUTH_TOKEN is set and used directly.
 // - OIDC mode (CI trusted publishing): pnpm exchanges the GitHub
 //   Actions OIDC token (ACTIONS_ID_TOKEN_REQUEST_TOKEN, available when the job
 //   has id-token: write) for a short-lived npm credential at publish time.
-//   Every published package must have memohai/Memoh + release.yml registered
+//   Every published package must register the workflow that owns its release
 //   as its trusted publisher on npmjs.com, or the exchange is rejected.
 // OIDC mode changes two behaviors below: the token preflight is impossible
 // (npm whoami needs a token), so it is skipped; and --provenance is added,
@@ -199,6 +206,18 @@ for (const dir of CANDIDATE_DIRS) {
 
   if (publishScope && scopeOf(name) !== publishScope) {
     log.skip(`${name} (outside ${publishScope})`)
+    skipped++
+    continue
+  }
+
+  if (publishPackage && name !== publishPackage) {
+    log.skip(`${name} (not selected)`)
+    skipped++
+    continue
+  }
+
+  if (excludedPackages.has(name)) {
+    log.skip(`${name} (independent release)`)
     skipped++
     continue
   }
