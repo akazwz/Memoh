@@ -382,6 +382,7 @@ type Connector struct {
 	TeamID       pgtype.UUID        `json:"team_id"`
 	BotID        pgtype.UUID        `json:"bot_id"`
 	ConnectionID string             `json:"connection_id"`
+	Alias        string             `json:"alias"`
 	Enabled      bool               `json:"enabled"`
 	CreatedAt    pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`

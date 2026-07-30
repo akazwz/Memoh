@@ -86,7 +86,9 @@ type ConnectorCredentialRequest struct {
 }
 
 type ConnectorEnabledRequest struct {
-	Enabled bool `json:"enabled"`
+	// Pointer so an empty or mistyped body fails validation instead of
+	// silently disabling the connector.
+	Enabled *bool `json:"enabled"`
 }
 
 // List godoc
@@ -230,8 +232,11 @@ func (h *ConnectorsHandler) SetEnabled(c echo.Context) error {
 	if err := c.Bind(&request); err != nil {
 		return apperror.Wrap(apperror.CodeConnectorRequestInvalid, err, nil)
 	}
+	if request.Enabled == nil {
+		return apperror.New(apperror.CodeConnectorRequestInvalid, nil)
+	}
 	if err := h.service.SetEnabled(
-		c.Request().Context(), botID, strings.TrimSpace(c.Param("connection_id")), request.Enabled,
+		c.Request().Context(), botID, strings.TrimSpace(c.Param("connection_id")), *request.Enabled,
 	); err != nil {
 		return connectorHTTPError(err)
 	}
@@ -306,16 +311,20 @@ func (h *ConnectorsHandler) authorize(c echo.Context) (string, error) {
 	if botID == "" {
 		return "", apperror.New(apperror.CodeConnectorRequestInvalid, nil)
 	}
-	if _, err := AuthorizeBotAccess(
+	bot, err := AuthorizeBotAccess(
 		c.Request().Context(),
 		h.botService,
 		h.accountService,
 		channelIdentityID,
 		botID,
-	); err != nil {
+	)
+	if err != nil {
 		return "", err
 	}
-	return botID, nil
+	// The path parameter may be a name slug; the service layer and every
+	// Connect-It call need the canonical bot UUID, resolved before any
+	// remote side effect can happen with an unusable identifier.
+	return bot.ID, nil
 }
 
 func connectorHTTPError(err error) error {

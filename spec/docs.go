@@ -16981,6 +16981,9 @@ const docTemplate = `{
         "connectors.Connector": {
             "type": "object",
             "properties": {
+                "alias": {
+                    "type": "string"
+                },
                 "auth_method": {
                     "type": "string"
                 },
@@ -18106,6 +18109,7 @@ const docTemplate = `{
             "type": "object",
             "properties": {
                 "enabled": {
+                    "description": "Pointer so an empty or mistyped body fails validation instead of\nsilently disabling the connector.",
                     "type": "boolean"
                 }
             }

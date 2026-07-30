@@ -2,6 +2,15 @@ import { getBotsByBotIdConnectorsByConnectionId } from '@memohai/sdk'
 
 const oauthTimeoutMs = 120_000
 
+// The OAuth helpers below throw bare internal codes; map them to i18n keys at
+// the toast site so Error.message is never surfaced verbatim to the user.
+export function connectorOAuthErrorKey(error: unknown): string | null {
+  if (!(error instanceof Error)) return null
+  if (error.message === 'oauth_popup_blocked') return 'connectors.oauthPopupBlocked'
+  if (error.message === 'oauth_failed') return 'connectors.oauthFailed'
+  return null
+}
+
 export function prepareConnectorOAuthPopup(loadingMessage: string): Window | null {
   if (window.api?.desktop?.openExternalUrl) return null
   const popup = window.open('', 'connect-it-oauth', 'width=600,height=700')

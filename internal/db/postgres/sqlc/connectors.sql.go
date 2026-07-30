@@ -12,23 +12,25 @@ import (
 )
 
 const createConnector = `-- name: CreateConnector :one
-INSERT INTO connectors (bot_id, connection_id)
-VALUES ($1, $2)
-RETURNING team_id, bot_id, connection_id, enabled, created_at, updated_at
+INSERT INTO connectors (bot_id, connection_id, alias)
+VALUES ($1, $2, $3)
+RETURNING team_id, bot_id, connection_id, alias, enabled, created_at, updated_at
 `
 
 type CreateConnectorParams struct {
 	BotID        pgtype.UUID `json:"bot_id"`
 	ConnectionID string      `json:"connection_id"`
+	Alias        string      `json:"alias"`
 }
 
 func (q *Queries) CreateConnector(ctx context.Context, arg CreateConnectorParams) (Connector, error) {
-	row := q.db.QueryRow(ctx, createConnector, arg.BotID, arg.ConnectionID)
+	row := q.db.QueryRow(ctx, createConnector, arg.BotID, arg.ConnectionID, arg.Alias)
 	var i Connector
 	err := row.Scan(
 		&i.TeamID,
 		&i.BotID,
 		&i.ConnectionID,
+		&i.Alias,
 		&i.Enabled,
 		&i.CreatedAt,
 		&i.UpdatedAt,
@@ -54,7 +56,7 @@ func (q *Queries) DeleteConnector(ctx context.Context, arg DeleteConnectorParams
 }
 
 const getConnectorByConnectionID = `-- name: GetConnectorByConnectionID :one
-SELECT team_id, bot_id, connection_id, enabled, created_at, updated_at
+SELECT team_id, bot_id, connection_id, alias, enabled, created_at, updated_at
 FROM connectors
 WHERE team_id = public.memoh_current_team_id()
   AND bot_id = $1
@@ -74,6 +76,7 @@ func (q *Queries) GetConnectorByConnectionID(ctx context.Context, arg GetConnect
 		&i.TeamID,
 		&i.BotID,
 		&i.ConnectionID,
+		&i.Alias,
 		&i.Enabled,
 		&i.CreatedAt,
 		&i.UpdatedAt,
@@ -82,7 +85,7 @@ func (q *Queries) GetConnectorByConnectionID(ctx context.Context, arg GetConnect
 }
 
 const listConnectorsByBotID = `-- name: ListConnectorsByBotID :many
-SELECT team_id, bot_id, connection_id, enabled, created_at, updated_at
+SELECT team_id, bot_id, connection_id, alias, enabled, created_at, updated_at
 FROM connectors
 WHERE team_id = public.memoh_current_team_id()
   AND bot_id = $1
@@ -102,6 +105,7 @@ func (q *Queries) ListConnectorsByBotID(ctx context.Context, botID pgtype.UUID) 
 			&i.TeamID,
 			&i.BotID,
 			&i.ConnectionID,
+			&i.Alias,
 			&i.Enabled,
 			&i.CreatedAt,
 			&i.UpdatedAt,

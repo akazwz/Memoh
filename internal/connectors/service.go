@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 	connectsdk "github.com/memohai/connect-it/sdk/go"
 
@@ -34,6 +35,7 @@ const bindingRollbackTimeout = 5 * time.Second
 // Provider credentials and MCP session tokens are deliberately absent.
 type Connector struct {
 	ConnectionID  string `json:"connection_id"`
+	Alias         string `json:"alias"`
 	Enabled       bool   `json:"enabled"`
 	ConnectorType string `json:"connector_type"`
 	AuthMethod    string `json:"auth_method"`
@@ -133,7 +135,7 @@ func (s *Service) BeginOAuth(
 	if err != nil {
 		return connectsdk.OAuthAuthorization{}, upstreamError(err)
 	}
-	if _, err := s.createBindingOrRollback(ctx, botID, result.ConnectionID); err != nil {
+	if _, err := s.createBindingOrRollback(ctx, botID, result.ConnectionID, connectorType); err != nil {
 		return connectsdk.OAuthAuthorization{}, err
 	}
 	return result, nil
@@ -161,7 +163,7 @@ func (s *Service) CreateCredential(
 	if err != nil {
 		return Connector{}, upstreamError(err)
 	}
-	item, err := s.createBindingOrRollback(ctx, botID, result.ConnectionID)
+	item, err := s.createBindingOrRollback(ctx, botID, result.ConnectionID, connectorType)
 	if err != nil {
 		return Connector{}, err
 	}
@@ -214,15 +216,24 @@ func (s *Service) Delete(ctx context.Context, botID, connectionID string) error 
 }
 
 // CleanupBotConnectors removes every remote credential before the bot row
-// cascades its local bindings. A missing Connect-It configuration means the
-// operator has disconnected the integration, so it must not block bot deletion.
+// cascades its local bindings. Without a configured Connect-It client the
+// bindings cannot be revoked remotely, so deletion proceeds only when there
+// is nothing to clean up: silently dropping bindings would orphan live
+// third-party credentials inside Connect-It with no reference left to find
+// them by.
 func (s *Service) CleanupBotConnectors(ctx context.Context, botID string) error {
-	if !s.Configured() {
-		return nil
-	}
 	bindings, err := s.listBindings(ctx, botID)
 	if err != nil {
 		return err
+	}
+	if len(bindings) == 0 {
+		return nil
+	}
+	if !s.Configured() {
+		return fmt.Errorf(
+			"%w: %d connector binding(s) still reference Connect-It connections",
+			ErrNotConfigured, len(bindings),
+		)
 	}
 	for _, item := range bindings {
 		if err := s.client.DeleteConnection(ctx, item.ConnectionID); err != nil &&
@@ -262,7 +273,6 @@ func (s *Service) SessionConnections(ctx context.Context, botID string) (map[str
 		return nil, err
 	}
 	connections := make(map[string]string, len(bindings))
-	usedAliases := map[string]bool{}
 	for _, item := range bindings {
 		if !item.Enabled {
 			continue
@@ -277,22 +287,54 @@ func (s *Service) SessionConnections(ctx context.Context, botID string) (map[str
 		if strings.TrimSpace(connection.Status) != "active" {
 			continue
 		}
-		alias := allocateAlias(connection.ConnectorType, usedAliases)
-		usedAliases[alias] = true
-		connections[alias] = item.ConnectionID
+		// The stored alias is the binding's durable tool namespace: tool
+		// names stay stable however the connection set changes around it.
+		connections[item.Alias] = item.ConnectionID
 	}
 	return connections, nil
 }
 
-func (s *Service) createBinding(ctx context.Context, botID, connectionID string) (dbsqlc.Connector, error) {
+const aliasAllocationAttempts = 3
+
+// createBinding allocates the binding's durable alias and inserts the row.
+// The alias is the bot-scoped tool namespace and is fixed for the binding's
+// lifetime: allocation happens exactly once, here, against the bot's current
+// aliases, and concurrent races resolve through the unique constraint.
+func (s *Service) createBinding(
+	ctx context.Context,
+	botID, connectionID, connectorType string,
+) (dbsqlc.Connector, error) {
 	botUUID, connectionID, err := bindingKey(botID, connectionID)
 	if err != nil {
 		return dbsqlc.Connector{}, err
 	}
-	return s.queries.CreateConnector(ctx, dbsqlc.CreateConnectorParams{
-		BotID:        botUUID,
-		ConnectionID: connectionID,
-	})
+	existing, err := s.queries.ListConnectorsByBotID(ctx, botUUID)
+	if err != nil {
+		return dbsqlc.Connector{}, err
+	}
+	used := make(map[string]bool, len(existing))
+	for _, item := range existing {
+		used[item.Alias] = true
+	}
+	for range aliasAllocationAttempts {
+		alias := allocateAlias(connectorType, used)
+		item, err := s.queries.CreateConnector(ctx, dbsqlc.CreateConnectorParams{
+			BotID:        botUUID,
+			ConnectionID: connectionID,
+			Alias:        alias,
+		})
+		if isUniqueViolationOn(err, "connectors_team_bot_alias_key") {
+			used[alias] = true
+			continue
+		}
+		return item, err
+	}
+	return dbsqlc.Connector{}, fmt.Errorf("could not allocate a connector alias for bot %s", botID)
+}
+
+func isUniqueViolationOn(err error, constraint string) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == constraint
 }
 
 // createBindingOrRollback keeps the remote connection and local binding as one
@@ -300,9 +342,9 @@ func (s *Service) createBinding(ctx context.Context, botID, connectionID string)
 // failed local insert is compensated by deleting the newly created connection.
 func (s *Service) createBindingOrRollback(
 	ctx context.Context,
-	botID, connectionID string,
+	botID, connectionID, connectorType string,
 ) (dbsqlc.Connector, error) {
-	item, err := s.createBinding(ctx, botID, connectionID)
+	item, err := s.createBinding(ctx, botID, connectionID, connectorType)
 	if err == nil {
 		return item, nil
 	}

@@ -117,7 +117,9 @@ services:
     image: "${MEMOH_DEV_CONNECT_IT_WEB_IMAGE:-ghcr.io/memohai/connect-it-web:sha-5aafc1b}"
     container_name: memoh-dev-connect-it-web
     ports:
-      - "${MEMOH_DEV_CONNECT_IT_PORT:-18083}:8080"
+      # Loopback only: the dev stack ships a publicly-known bootstrap API
+      # token, and real third-party credentials live behind this port.
+      - "127.0.0.1:${MEMOH_DEV_CONNECT_IT_PORT:-18083}:8080"
     depends_on:
       connect-it:
         condition: service_healthy

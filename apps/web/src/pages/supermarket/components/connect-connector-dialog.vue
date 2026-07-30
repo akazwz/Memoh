@@ -161,6 +161,7 @@ import {
 } from '@memohai/sdk'
 import BotSelect from '@/components/bot-select/index.vue'
 import {
+  connectorOAuthErrorKey,
   openConnectorOAuthURL,
   prepareConnectorOAuthPopup,
   waitForConnectorOAuth,
@@ -182,7 +183,9 @@ const { t } = useI18n()
 const schema = toTypedSchema(z.object({
   bot_id: z.string().min(1, t('connectors.validation.botRequired')),
   auth_method: z.string().min(1, t('connectors.validation.authMethodRequired')),
-  fields: z.record(z.string(), z.string()),
+  // Tolerate untouched inputs (vee-validate registers them as undefined); the
+  // localized required/pattern loop in connect() is the validation that fires.
+  fields: z.record(z.string(), z.string().optional()),
 }))
 const form = useForm({
   validationSchema: schema,
@@ -199,9 +202,20 @@ const authMethods = computed(() =>
 const selectedMethod = computed<ConnectitAuthMethod | undefined>(() =>
   authMethods.value.find(method => method.key === form.values.auth_method),
 )
-const credentialFields = computed(() =>
-  (selectedMethod.value?.credential_fields ?? []).filter(field => field.key),
-)
+// OAuth methods never transmit credential fields (the OAuth request body
+// carries none), so don't render or collect fields that would be dropped.
+function methodCredentialFields(method: ConnectitAuthMethod | undefined) {
+  if (method?.type === 'oauth2') return []
+  return (method?.credential_fields ?? []).filter(field => field.key)
+}
+// Seed every rendered field key (default value or '') so untouched inputs stay
+// strings instead of undefined and never trip the schema before the loop.
+function credentialDefaults(method: ConnectitAuthMethod | undefined): Record<string, string> {
+  return Object.fromEntries(
+    methodCredentialFields(method).map(field => [field.key!, field.default_value ?? '']),
+  )
+}
+const credentialFields = computed(() => methodCredentialFields(selectedMethod.value))
 
 watch(
   () => [props.open, props.connector, props.defaultBotId] as const,
@@ -212,11 +226,7 @@ watch(
       values: {
         bot_id: props.defaultBotId || '',
         auth_method: method?.key || '',
-        fields: Object.fromEntries(
-          (method?.credential_fields ?? [])
-            .filter(field => field.key && field.default_value !== undefined)
-            .map(field => [field.key!, field.default_value!]),
-        ),
+        fields: credentialDefaults(method),
       },
     })
   },
@@ -228,11 +238,7 @@ watch(
   (methodKey, previous) => {
     if (!props.open || !previous || methodKey === previous) return
     const method = authMethods.value.find(item => item.key === methodKey)
-    form.setFieldValue('fields', Object.fromEntries(
-      (method?.credential_fields ?? [])
-        .filter(field => field.key && field.default_value !== undefined)
-        .map(field => [field.key!, field.default_value!]),
-    ))
+    form.setFieldValue('fields', credentialDefaults(method))
   },
 )
 
@@ -284,6 +290,13 @@ async function connect() {
   const oauthPopup = method?.type === 'oauth2'
     ? prepareConnectorOAuthPopup(t('common.loading'))
     : null
+  if (method?.type === 'oauth2' && !oauthPopup && !window.api?.desktop?.openExternalUrl) {
+    // window.open returned null: the browser blocked the popup. Bail before
+    // the create POST so no pending remote connection is orphaned. (Desktop
+    // returns null by design — the URL opens in the system browser instead.)
+    toast.error(t('connectors.oauthPopupBlocked'))
+    return
+  }
   connecting.value = true
   try {
     const validation = await form.validate()
@@ -340,7 +353,8 @@ async function connect() {
     emit('connected', botId)
   } catch (error) {
     oauthPopup?.close()
-    toast.error(resolveApiErrorMessage(error, t('connectors.connectFailed')))
+    const oauthKey = connectorOAuthErrorKey(error)
+    toast.error(oauthKey ? t(oauthKey) : resolveApiErrorMessage(error, t('connectors.connectFailed')))
   } finally {
     connecting.value = false
   }

@@ -52,7 +52,11 @@ the Connect-It container seeds it as an API token at startup
 bearer token. The Connectors tab is therefore available from the first
 startup, with no token minting or caching involved. The admin UI remains
 available at `http://localhost:18083` with the development credentials
-`admin` / `admin123`.
+`admin` / `admin123`. The Connect-It port binds to loopback only: the token
+is public, so the deployment must not be reachable from the LAN. If the
+bootstrap token was revoked through the admin UI, rotate it once with
+`MEMOH_CONNECT_IT_API_TOKEN=cit_<64 hex chars> mise run dev` — the new value
+is seeded as a fresh token and the revoked one stays revoked.
 
 Override the host UI port with `MEMOH_DEV_CONNECT_IT_PORT`, the public OAuth callback
 address with `MEMOH_DEV_CONNECT_IT_BASE_URL`, or point at an external Connect-It

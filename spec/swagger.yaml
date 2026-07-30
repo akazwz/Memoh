@@ -1817,6 +1817,8 @@ definitions:
     type: object
   connectors.Connector:
     properties:
+      alias:
+        type: string
       auth_method:
         type: string
       connection_id:
@@ -2562,6 +2564,9 @@ definitions:
   handlers.ConnectorEnabledRequest:
     properties:
       enabled:
+        description: |-
+          Pointer so an empty or mistyped body fails validation instead of
+          silently disabling the connector.
         type: boolean
     type: object
   handlers.ConnectorOAuthRequest:

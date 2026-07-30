@@ -604,19 +604,24 @@ func (s *Service) enqueueDeleteLifecycle(ctx context.Context, botID string) {
 		lifecycleCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), botLifecycleOperationTimeout)
 		defer cancel()
 
+		// The revert must succeed even when the failing cleanup consumed the
+		// whole lifecycle budget: reverting on the exhausted context would
+		// strand the bot in status "deleting" with no retry path.
+		revertToReady := func() {
+			revertCtx, cancelRevert := context.WithTimeout(context.WithoutCancel(lifecycleCtx), 15*time.Second)
+			defer cancelRevert()
+			if err := s.updateStatus(revertCtx, botID, BotStatusReady); err != nil {
+				s.logger.Error("revert bot status failed", slog.String("bot_id", botID), slog.Any("error", err))
+			}
+		}
+
 		if s.connectorLifecycle != nil {
 			if err := s.connectorLifecycle.CleanupBotConnectors(lifecycleCtx, botID); err != nil {
 				s.logger.Error("bot connector cleanup failed",
 					slog.String("bot_id", botID),
 					slog.Any("error", err),
 				)
-				if statusErr := s.updateStatus(lifecycleCtx, botID, BotStatusReady); statusErr != nil {
-					s.logger.Error(
-						"revert bot status failed",
-						slog.String("bot_id", botID),
-						slog.Any("error", statusErr),
-					)
-				}
+				revertToReady()
 				return
 			}
 		}
@@ -636,9 +641,7 @@ func (s *Service) enqueueDeleteLifecycle(ctx context.Context, botID string) {
 				slog.String("bot_id", botID),
 				slog.Any("error", err),
 			)
-			if err := s.updateStatus(lifecycleCtx, botID, BotStatusReady); err != nil {
-				s.logger.Error("revert bot status failed", slog.String("bot_id", botID), slog.Any("error", err))
-			}
+			revertToReady()
 			return
 		}
 		if err := s.queries.DeleteBotByID(lifecycleCtx, botUUID); err != nil {
@@ -646,9 +649,7 @@ func (s *Service) enqueueDeleteLifecycle(ctx context.Context, botID string) {
 				slog.String("bot_id", botID),
 				slog.Any("error", err),
 			)
-			if err := s.updateStatus(lifecycleCtx, botID, BotStatusReady); err != nil {
-				s.logger.Error("revert bot status failed", slog.String("bot_id", botID), slog.Any("error", err))
-			}
+			revertToReady()
 			return
 		}
 	}()

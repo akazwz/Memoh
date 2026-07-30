@@ -17,11 +17,25 @@ import (
 	mcpgw "github.com/memohai/memoh/internal/mcp"
 )
 
-const connectorCallTimeout = 60 * time.Second
+const (
+	connectorCallTimeout = 60 * time.Second
+	// toolsCacheTTL matches the MCP federation source: agent turns arriving
+	// within it reuse the last listing instead of redialing Connect-It.
+	toolsCacheTTL = 5 * time.Second
+	// listFailureBackoff keeps one unreachable Connect-It from stalling
+	// every turn for the full call timeout: after a failed listing the
+	// source stays quiet for this window instead of redialing.
+	listFailureBackoff = 30 * time.Second
+)
 
 type cachedSessionAuth struct {
 	fingerprint string
 	handler     auth.OAuthHandler
+}
+
+type cachedTools struct {
+	expiresAt time.Time
+	tools     []mcpgw.ToolDescriptor
 }
 
 // Source exposes all enabled Connect-It connections for a bot as one
@@ -30,8 +44,10 @@ type Source struct {
 	logger  *slog.Logger
 	service *Service
 
-	mu    sync.Mutex
-	auths map[string]cachedSessionAuth
+	mu         sync.Mutex
+	auths      map[string]cachedSessionAuth
+	tools      map[string]cachedTools
+	retryAfter map[string]time.Time
 }
 
 func NewSource(log *slog.Logger, service *Service) *Source {
@@ -39,23 +55,37 @@ func NewSource(log *slog.Logger, service *Service) *Source {
 		log = slog.Default()
 	}
 	return &Source{
-		logger:  log.With(slog.String("tool_source", "connect_it")),
-		service: service,
-		auths:   map[string]cachedSessionAuth{},
+		logger:     log.With(slog.String("tool_source", "connect_it")),
+		service:    service,
+		auths:      map[string]cachedSessionAuth{},
+		tools:      map[string]cachedTools{},
+		retryAfter: map[string]time.Time{},
 	}
 }
 
 func (s *Source) ListTools(ctx context.Context, session mcpgw.ToolSessionContext) ([]mcpgw.ToolDescriptor, error) {
+	botID := strings.TrimSpace(session.BotID)
+	if cached, ok := s.cachedToolList(botID); ok {
+		return cloneToolList(cached), nil
+	}
+	if s.inFailureBackoff(botID) {
+		return []mcpgw.ToolDescriptor{}, nil
+	}
 	callCtx, cancel := context.WithTimeout(ctx, connectorCallTimeout)
 	defer cancel()
-	clientSession, ok, err := s.connect(callCtx, strings.TrimSpace(session.BotID))
-	if err != nil || !ok {
-		return []mcpgw.ToolDescriptor{}, err
+	clientSession, ok, err := s.connect(callCtx, botID)
+	if err != nil {
+		s.noteListFailure(botID)
+		return nil, err
+	}
+	if !ok {
+		return []mcpgw.ToolDescriptor{}, nil
 	}
 	defer func() { _ = clientSession.Close() }()
 
 	result, err := clientSession.ListTools(callCtx, &sdkmcp.ListToolsParams{})
 	if err != nil {
+		s.noteListFailure(botID)
 		return nil, err
 	}
 	tools := make([]mcpgw.ToolDescriptor, 0, len(result.Tools))
@@ -78,7 +108,43 @@ func (s *Source) ListTools(ctx context.Context, session mcpgw.ToolSessionContext
 			InputSchema: inputSchema,
 		})
 	}
-	return tools, nil
+	s.storeToolList(botID, tools)
+	return cloneToolList(tools), nil
+}
+
+func (s *Source) cachedToolList(botID string) ([]mcpgw.ToolDescriptor, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cached, ok := s.tools[botID]
+	if !ok || time.Now().After(cached.expiresAt) {
+		return nil, false
+	}
+	return cached.tools, true
+}
+
+func (s *Source) storeToolList(botID string, tools []mcpgw.ToolDescriptor) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.tools[botID] = cachedTools{expiresAt: time.Now().Add(toolsCacheTTL), tools: tools}
+	delete(s.retryAfter, botID)
+}
+
+func (s *Source) inFailureBackoff(botID string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return time.Now().Before(s.retryAfter[botID])
+}
+
+func (s *Source) noteListFailure(botID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.retryAfter[botID] = time.Now().Add(listFailureBackoff)
+}
+
+func cloneToolList(items []mcpgw.ToolDescriptor) []mcpgw.ToolDescriptor {
+	out := make([]mcpgw.ToolDescriptor, len(items))
+	copy(out, items)
+	return out
 }
 
 func (s *Source) CallTool(

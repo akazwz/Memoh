@@ -19,6 +19,24 @@
       </InlineLoadingRow>
 
       <Empty
+        v-else-if="loadError && !items.length"
+        class="py-12"
+      >
+        <EmptyHeader>
+          <EmptyTitle>{{ t('connectors.loadFailed') }}</EmptyTitle>
+        </EmptyHeader>
+        <EmptyContent>
+          <Button
+            variant="outline"
+            @click="retryLoad"
+          >
+            <RefreshCw />
+            {{ t('common.refresh') }}
+          </Button>
+        </EmptyContent>
+      </Empty>
+
+      <Empty
         v-else-if="!items.length"
         class="py-12"
       >
@@ -58,7 +76,7 @@
             v-if="needsAuthorization(item)"
             variant="outline"
             size="sm"
-            :loading="pendingKey === `${item.connection_id}:reauth`"
+            :loading="pending.has(`${item.connection_id}:reauth`)"
             @click="reauthorize(item)"
           >
             {{ t('connectors.reauthorize') }}
@@ -66,7 +84,7 @@
 
           <Switch
             :model-value="item.enabled"
-            :disabled="pendingKey === `${item.connection_id}:enabled`"
+            :disabled="pending.has(`${item.connection_id}:enabled`)"
             :aria-label="t('connectors.enabled')"
             @update:model-value="setEnabled(item, $event)"
           />
@@ -84,6 +102,7 @@
             <DropdownMenuContent align="end">
               <DropdownMenuItem
                 v-if="isOAuth(item) && !needsAuthorization(item)"
+                :disabled="pending.has(`${item.connection_id}:reauth`)"
                 @select="reauthorize(item)"
               >
                 <RefreshCw />
@@ -109,7 +128,7 @@
     :description="t('connectors.disconnectDescription', { name: pendingDelete ? connectorName(pendingDelete) : '' })"
     :confirm-label="t('connectors.disconnect')"
     :cancel-label="t('common.cancel')"
-    :loading="pendingKey === `${pendingDelete?.connection_id}:delete`"
+    :loading="pending.has(`${pendingDelete?.connection_id}:delete`)"
     @update:open="value => { if (!value) pendingDelete = null }"
     @confirm="disconnect"
   />
@@ -151,6 +170,7 @@ import InlineLoadingRow from '@/components/inline-loading-row/index.vue'
 import ConfirmDeleteDialog from '@/components/confirm-delete-dialog/index.vue'
 import ProviderIcon from '@/components/provider-icon/index.vue'
 import {
+  connectorOAuthErrorKey,
   openConnectorOAuthURL,
   prepareConnectorOAuthPopup,
   waitForConnectorOAuth,
@@ -162,7 +182,9 @@ const { t } = useI18n()
 const router = useRouter()
 const queryCache = useQueryCache()
 
-const pendingKey = ref('')
+// One in-flight key per connection+action, so a mutation on one row never
+// re-enables another row's controls mid-flight.
+const pending = ref(new Set<string>())
 const pendingDelete = ref<ConnectorsConnector | null>(null)
 
 const connectorsQuery = useQuery({
@@ -187,6 +209,7 @@ const catalogQuery = useQuery({
 
 const items = computed(() => connectorsQuery.data.value ?? [])
 const isLoading = computed(() => connectorsQuery.isLoading.value && !items.value.length)
+const loadError = computed(() => connectorsQuery.error.value)
 const catalogByType = computed(() => new Map(
   (catalogQuery.data.value ?? []).map(item => [item.type, item]),
 ))
@@ -198,6 +221,10 @@ watch(connectorsQuery.error, error => {
 onActivated(() => {
   void connectorsQuery.refetch()
 })
+
+function retryLoad() {
+  void connectorsQuery.refetch()
+}
 
 function metadata(item: ConnectorsConnector): ConnectitConnector | undefined {
   return catalogByType.value.get(item.connector_type)
@@ -261,21 +288,25 @@ const enabledMutation = useMutation({
 
 async function setEnabled(item: ConnectorsConnector, enabled: boolean) {
   if (!item.connection_id || item.enabled === enabled) return
-  pendingKey.value = `${item.connection_id}:enabled`
+  const key = `${item.connection_id}:enabled`
+  if (pending.value.has(key)) return
+  pending.value.add(key)
   try {
     await enabledMutation.mutateAsync({ item, enabled })
     await queryCache.invalidateQueries({ key: ['bot-connectors', props.botId] })
   } catch (error) {
     toast.error(resolveApiErrorMessage(error, t('connectors.updateFailed')))
   } finally {
-    pendingKey.value = ''
+    pending.value.delete(key)
   }
 }
 
 async function reauthorize(item: ConnectorsConnector) {
   if (!item.connection_id) return
+  const key = `${item.connection_id}:reauth`
+  if (pending.value.has(key)) return
   const popup = prepareConnectorOAuthPopup(t('common.loading'))
-  pendingKey.value = `${item.connection_id}:reauth`
+  pending.value.add(key)
   try {
     const { data } = await postBotsByBotIdConnectorsByConnectionIdReauth({
       path: { bot_id: props.botId, connection_id: item.connection_id },
@@ -288,17 +319,20 @@ async function reauthorize(item: ConnectorsConnector) {
     toast.success(t('connectors.oauthSuccess'))
   } catch (error) {
     popup?.close()
-    toast.error(resolveApiErrorMessage(error, t('connectors.oauthFailed')))
+    const oauthKey = connectorOAuthErrorKey(error)
+    toast.error(oauthKey ? t(oauthKey) : resolveApiErrorMessage(error, t('connectors.oauthFailed')))
     void connectorsQuery.refetch()
   } finally {
-    pendingKey.value = ''
+    pending.value.delete(key)
   }
 }
 
 async function disconnect() {
   const item = pendingDelete.value
   if (!item?.connection_id) return
-  pendingKey.value = `${item.connection_id}:delete`
+  const key = `${item.connection_id}:delete`
+  if (pending.value.has(key)) return
+  pending.value.add(key)
   try {
     await deleteBotsByBotIdConnectorsByConnectionId({
       path: { bot_id: props.botId, connection_id: item.connection_id },
@@ -310,7 +344,7 @@ async function disconnect() {
   } catch (error) {
     toast.error(resolveApiErrorMessage(error, t('connectors.disconnectFailed')))
   } finally {
-    pendingKey.value = ''
+    pending.value.delete(key)
   }
 }
 </script>

@@ -3243,6 +3243,7 @@
     "updateFailed": "更新连接器失败",
     "oauthSuccess": "授权完成",
     "oauthFailed": "授权失败",
+    "oauthPopupBlocked": "授权窗口被浏览器拦截了,请允许此页面的弹出窗口后重试。",
     "connectedSuccess": "{name} 已连接",
     "connectFailed": "连接服务失败",
     "status": {

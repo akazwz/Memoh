@@ -233,7 +233,22 @@ const { t } = useI18n()
 const route = useRoute()
 const router = useRouter()
 const capabilitiesStore = useCapabilitiesStore()
-const activeTab = useSyncedQueryParam('tab', 'plugins')
+const tabParam = useSyncedQueryParam('tab', 'plugins')
+// Settings pages are KeepAlive-cached and share the `tab` query key, so a
+// foreign value (e.g. bot detail's ?tab=memory) can land in the synced param
+// while this page is deactivated. Render anything outside this page's own
+// tabs as 'plugins'; writes go back through the synced param.
+const activeTab = computed({
+  get: () => {
+    const valid = capabilitiesStore.connectors
+      ? ['plugins', 'skills', 'connectors']
+      : ['plugins', 'skills']
+    return valid.includes(tabParam.value) ? tabParam.value : 'plugins'
+  },
+  set: (value: string) => {
+    tabParam.value = value
+  },
+})
 
 const searchInput = ref('')
 const searchQuery = ref('')
@@ -281,10 +296,13 @@ watch(connectorsQuery.error, error => {
 watch(
   () => [capabilitiesStore.loaded, capabilitiesStore.connectors] as const,
   ([loaded, connectors]) => {
-    if (loaded && !connectors && activeTab.value === 'connectors') {
-      activeTab.value = 'plugins'
+    // Normalize the URL param only while this page owns the current route —
+    // firing while KeepAlive-deactivated would rewrite another page's ?tab.
+    if (loaded && !connectors && route.name === 'supermarket' && tabParam.value === 'connectors') {
+      tabParam.value = 'plugins'
     }
   },
+  { immediate: true },
 )
 
 onMounted(() => {

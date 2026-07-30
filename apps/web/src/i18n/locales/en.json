@@ -3243,6 +3243,7 @@
     "updateFailed": "Failed to update connector",
     "oauthSuccess": "Authorization completed",
     "oauthFailed": "Authorization failed",
+    "oauthPopupBlocked": "The authorization window was blocked — allow popups for this page and try again.",
     "connectedSuccess": "{name} connected",
     "connectFailed": "Failed to connect service",
     "status": {

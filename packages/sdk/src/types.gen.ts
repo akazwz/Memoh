@@ -1057,6 +1057,7 @@ export type ConnectitOAuthAuthorization = {
 };
 
 export type ConnectorsConnector = {
+    alias?: string;
     auth_method?: string;
     connection_id?: string;
     connector_type?: string;
@@ -1496,6 +1497,10 @@ export type HandlersConnectorCredentialRequest = {
 };
 
 export type HandlersConnectorEnabledRequest = {
+    /**
+     * Pointer so an empty or mistyped body fails validation instead of
+     * silently disabling the connector.
+     */
     enabled?: boolean;
 };
 

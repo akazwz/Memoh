@@ -2354,11 +2354,17 @@ CREATE TABLE IF NOT EXISTS public.connectors (
                               REFERENCES public.teams(id) ON DELETE RESTRICT,
     bot_id        UUID        NOT NULL,
     connection_id TEXT        NOT NULL,
+    -- Durable per-bot tool namespace, allocated once at binding time. Tool
+    -- names are derived from it, so it must never be recomputed from the
+    -- current connection set: removing one connection must not rename (and
+    -- silently reroute) another connection's tools.
+    alias         TEXT        NOT NULL,
     enabled       BOOLEAN     NOT NULL DEFAULT true,
     created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
     CONSTRAINT connectors_pkey PRIMARY KEY (team_id, bot_id, connection_id),
     CONSTRAINT connectors_team_connection_id_key UNIQUE (team_id, connection_id),
+    CONSTRAINT connectors_team_bot_alias_key UNIQUE (team_id, bot_id, alias),
     CONSTRAINT connectors_bot_id_fkey
         FOREIGN KEY (team_id, bot_id)
         REFERENCES public.bots(team_id, id) ON DELETE CASCADE

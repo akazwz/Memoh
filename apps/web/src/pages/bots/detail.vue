@@ -403,7 +403,7 @@ const tabList = computed(() => {
     { value: 'acp', label: 'bots.tabs.acp', icon: BotIcon, component: BotAcp, params: { 'bot-id': bot_id } },
     { value: 'email', label: 'bots.tabs.email', icon: Mail, component: BotEmail, params: { 'bot-id': bot_id } },
     { value: 'plugins', label: 'bots.tabs.plugins', icon: PackageOpen, component: BotPlugins, params: { 'bot-id': bot_id } },
-    ...(!capabilitiesStore.loaded || capabilitiesStore.connectors
+    ...(capabilitiesStore.loaded && capabilitiesStore.connectors
       ? [{ value: 'connectors', label: 'bots.tabs.connectors', icon: Plug, component: BotConnectors, params: { 'bot-id': bot_id } }]
       : []),
     { value: 'mcp', label: 'bots.tabs.mcp', icon: Link, component: BotMcp, params: { 'bot-id': bot_id } },
@@ -443,7 +443,7 @@ const searchIndex = computed(() => {
     { tab: 'acp', key: 'bots.tabs.acp', keywords: ['codex', 'claude code', 'coding agent', 'acp'] },
     { tab: 'email', key: 'bots.email.title', keywords: ['smtp', 'imap', 'mailbox', 'bindings'] },
     { tab: 'plugins', key: 'bots.plugins.title', keywords: ['plugin', 'marketplace', 'mcp', 'oauth', 'skills'] },
-    ...(!capabilitiesStore.loaded || capabilitiesStore.connectors
+    ...(capabilitiesStore.loaded && capabilitiesStore.connectors
       ? [{ tab: 'connectors', key: 'bots.tabs.connectors', keywords: ['providers', 'apps', 'oauth', 'api', '连接器', 'コネクター'] }]
       : []),
     { tab: 'mcp', key: 'bots.tabs.mcp', keywords: ['servers', 'connect', 'custom mcp'] },
@@ -547,9 +547,11 @@ watch(bot, (val) => {
 
 const activeTab = useSyncedQueryParam('tab', 'overview')
 watch([tabList, activeTab], ([tabs, tab]) => {
-  if (!tabs.some(item => item.value === tab)) {
-    activeTab.value = 'overview'
-  }
+  if (tabs.some(item => item.value === tab)) return
+  // 'connectors' only joins the list once the capability ping lands; don't
+  // bounce a deep link / refresh to overview while that's still in flight.
+  if (tab === 'connectors' && !capabilitiesStore.loaded) return
+  activeTab.value = 'overview'
 }, { immediate: true })
 const avatarDialogOpen = ref(false)
 const avatarUrlModel = ref('')
