@@ -201,7 +201,9 @@ import {
   EmptyDescription,
   EmptyHeader,
   EmptyTitle,
+  InlineLoadingRow,
   Input,
+  PageShell,
   Tabs,
   TabsContent,
   TabsList,
@@ -217,8 +219,6 @@ import {
   type PluginsManifest,
 } from '@memohai/sdk'
 import { resolveApiErrorMessage } from '@/utils/api-error'
-import PageShell from '@/components/page-shell/index.vue'
-import InlineLoadingRow from '@/components/inline-loading-row/index.vue'
 import PluginCard from './components/plugin-card.vue'
 import SkillCard from './components/skill-card.vue'
 import InstallPluginDialog from './components/install-plugin-dialog.vue'

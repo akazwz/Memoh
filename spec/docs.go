@@ -21870,6 +21870,9 @@ const docTemplate = `{
                 "os": {
                     "type": "string"
                 },
+                "team_id": {
+                    "type": "string"
+                },
                 "workspace_base": {
                     "type": "string"
                 }
