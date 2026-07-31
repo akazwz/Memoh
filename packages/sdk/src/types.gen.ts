@@ -1501,7 +1501,7 @@ export type HandlersConnectorEnabledRequest = {
      * Pointer so an empty or mistyped body fails validation instead of
      * silently disabling the connector.
      */
-    enabled?: boolean;
+    enabled: boolean;
 };
 
 export type HandlersConnectorOAuthRequest = {

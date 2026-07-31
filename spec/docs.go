@@ -18107,6 +18107,9 @@ const docTemplate = `{
         },
         "handlers.ConnectorEnabledRequest": {
             "type": "object",
+            "required": [
+                "enabled"
+            ],
             "properties": {
                 "enabled": {
                     "description": "Pointer so an empty or mistyped body fails validation instead of\nsilently disabling the connector.",

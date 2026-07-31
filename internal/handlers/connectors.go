@@ -88,7 +88,7 @@ type ConnectorCredentialRequest struct {
 type ConnectorEnabledRequest struct {
 	// Pointer so an empty or mistyped body fails validation instead of
 	// silently disabling the connector.
-	Enabled *bool `json:"enabled"`
+	Enabled *bool `json:"enabled" validate:"required"`
 }
 
 // List godoc

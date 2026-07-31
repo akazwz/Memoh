@@ -404,6 +404,7 @@ func isConnectItStatus(err error, status int) bool {
 func connectorFrom(item dbsqlc.Connector, connection connectsdk.Connection) Connector {
 	return Connector{
 		ConnectionID:  strings.TrimSpace(item.ConnectionID),
+		Alias:         strings.TrimSpace(item.Alias),
 		Enabled:       item.Enabled,
 		ConnectorType: strings.TrimSpace(connection.ConnectorType),
 		AuthMethod:    strings.TrimSpace(connection.AuthMethod),
@@ -417,6 +418,7 @@ func (s *Service) resolveBinding(ctx context.Context, item dbsqlc.Connector) (Co
 		if isConnectItStatus(err, http.StatusNotFound) {
 			return Connector{
 				ConnectionID: strings.TrimSpace(item.ConnectionID),
+				Alias:        strings.TrimSpace(item.Alias),
 				Enabled:      item.Enabled,
 				Status:       "unavailable",
 			}, nil
