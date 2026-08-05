@@ -87,6 +87,10 @@ region = "us-east-1"
 prefix = ""
 # Keep true for SeaweedFS, MinIO, Garage, R2, and most S3-compatible endpoints.
 path_style = true
+# Upgrade only: set true on one Server instance to copy and SHA-256 verify all
+# legacy host/workspace media. The run is idempotent; set it back to false after
+# the completion log. New writes already go exclusively to S3 while it runs.
+backfill_on_start = false
 
 [session_runtime]
 # Stores live run snapshots for WebSocket attach/reconnect. memory is best for

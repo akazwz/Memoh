@@ -83,7 +83,7 @@ depends = ["//:dev:workspace-image"]
 run = "scripts/dev-compose.sh devenv/docker-compose.yml"
 
 [tasks."dev:s3"]
-description = "Start the development environment with SeaweedFS-backed media storage"
+description = "Start SeaweedFS-backed media storage and backfill existing dev media"
 depends = ["//:dev:workspace-image"]
 run = """
 #!/bin/bash

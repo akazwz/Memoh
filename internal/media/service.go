@@ -201,6 +201,9 @@ func (s *Service) GetByStorageKey(ctx context.Context, botID, storageKey string)
 	routingKey := path.Join(botID, storageKey)
 	rc, err := s.provider.Open(ctx, routingKey)
 	if err != nil {
+		if !errors.Is(err, storage.ErrNotFound) {
+			return Asset{}, fmt.Errorf("open storage: %w", err)
+		}
 		return Asset{}, ErrAssetNotFound
 	}
 	_ = rc.Close()
@@ -298,6 +301,8 @@ func (s *Service) resolveByContentHash(ctx context.Context, routingNamespace, bo
 			if _, authoritative := s.provider.(storage.AuthoritativePrefixLister); authoritative {
 				return Asset{}, ErrAssetNotFound
 			}
+		} else if !errors.Is(err, storage.ErrNotFound) {
+			return Asset{}, fmt.Errorf("list storage: %w", err)
 		}
 	}
 
@@ -306,7 +311,10 @@ func (s *Service) resolveByContentHash(ctx context.Context, routingNamespace, bo
 		routingKey := path.Join(routingNamespace, storageKey)
 		rc, err := s.provider.Open(ctx, routingKey)
 		if err != nil {
-			continue
+			if errors.Is(err, storage.ErrNotFound) {
+				continue
+			}
+			return Asset{}, fmt.Errorf("probe storage: %w", err)
 		}
 		_ = rc.Close()
 		return deriveAssetFromKey(botID, assetNamespace, storageKey), nil

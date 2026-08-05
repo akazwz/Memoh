@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -249,6 +250,7 @@ type S3StorageConfig struct {
 	Region          string `toml:"region"`
 	Prefix          string `toml:"prefix"`
 	PathStyle       bool   `toml:"path_style"`
+	BackfillOnStart bool   `toml:"backfill_on_start"`
 }
 
 func (c StorageConfig) ProviderOrDefault() string {
@@ -957,6 +959,11 @@ func (cfg *Config) applyEnvOverrides() {
 	}
 	if value := strings.TrimSpace(os.Getenv("MEMOH_STORAGE_S3_PREFIX")); value != "" {
 		cfg.Storage.S3.Prefix = value
+	}
+	if value := strings.TrimSpace(os.Getenv("MEMOH_STORAGE_S3_BACKFILL_ON_START")); value != "" {
+		if enabled, err := strconv.ParseBool(value); err == nil {
+			cfg.Storage.S3.BackfillOnStart = enabled
+		}
 	}
 }
 

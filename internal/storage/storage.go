@@ -8,6 +8,11 @@ import (
 )
 
 var (
+	// ErrNotFound means the requested object is definitively absent. Providers
+	// must not use it for transient transport, authentication, or service
+	// failures because cutover readers rely on this distinction before falling
+	// back to legacy storage.
+	ErrNotFound = errors.New("storage object not found")
 	// ErrContainerFileNotSupported is returned when no underlying provider
 	// implements ContainerFileOpener.
 	ErrContainerFileNotSupported = errors.New("provider does not support workspace file reading")

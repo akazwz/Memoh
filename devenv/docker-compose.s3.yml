@@ -28,6 +28,7 @@ services:
       MEMOH_STORAGE_S3_SECRET_ACCESS_KEY: "${MEMOH_DEV_S3_SECRET_ACCESS_KEY:-memoh-development}"
       MEMOH_STORAGE_S3_REGION: "${MEMOH_DEV_S3_REGION:-us-east-1}"
       MEMOH_STORAGE_S3_PREFIX: "${MEMOH_DEV_S3_PREFIX:-}"
+      MEMOH_STORAGE_S3_BACKFILL_ON_START: "true"
     depends_on:
       seaweedfs:
         condition: service_healthy

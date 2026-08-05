@@ -106,6 +106,7 @@ func ServerModule() fx.Option {
 			videopkg.NewService,
 			provideAudioTempStore,
 			provideMediaService,
+			provideMediaBackfill,
 			avatarpkg.NewService,
 			provideSessionRunLedger,
 			provideRuntimeFenceActivator,

@@ -12,6 +12,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
+
+	"github.com/memohai/memoh/internal/storage"
 )
 
 type fakeClient struct {
@@ -34,7 +36,7 @@ func (f *fakeClient) PutObject(_ context.Context, input *awss3.PutObjectInput, _
 func (f *fakeClient) GetObject(_ context.Context, input *awss3.GetObjectInput, _ ...func(*awss3.Options)) (*awss3.GetObjectOutput, error) {
 	data, ok := f.objects[aws.ToString(input.Key)]
 	if !ok {
-		return nil, errors.New("not found")
+		return nil, &types.NoSuchKey{}
 	}
 	return &awss3.GetObjectOutput{Body: io.NopCloser(bytes.NewReader(data))}, nil
 }
@@ -102,8 +104,8 @@ func TestProviderCRUDAndPrefix(t *testing.T) {
 	if err := provider.Delete(ctx, key); err != nil {
 		t.Fatalf("Delete() error = %v", err)
 	}
-	if _, err := provider.Open(ctx, key); err == nil {
-		t.Fatal("Open() after Delete() unexpectedly succeeded")
+	if _, err := provider.Open(ctx, key); !errors.Is(err, storage.ErrNotFound) {
+		t.Fatalf("Open() after Delete() error = %v, want storage.ErrNotFound", err)
 	}
 }
 

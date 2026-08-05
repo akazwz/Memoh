@@ -11,6 +11,8 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
+	"github.com/aws/smithy-go"
 
 	"github.com/memohai/memoh/internal/storage"
 )
@@ -85,12 +87,36 @@ func (p *Provider) Open(ctx context.Context, key string) (io.ReadCloser, error) 
 		Key:    aws.String(objectKey),
 	})
 	if err != nil {
+		if isNotFound(err) {
+			return nil, fmt.Errorf("s3 get object %q: %w", objectKey, storage.ErrNotFound)
+		}
 		return nil, fmt.Errorf("s3 get object %q: %w", objectKey, err)
 	}
 	if output == nil || output.Body == nil {
 		return nil, fmt.Errorf("s3 get object %q returned an empty body", objectKey)
 	}
 	return output.Body, nil
+}
+
+func isNotFound(err error) bool {
+	var noSuchKey *types.NoSuchKey
+	if errors.As(err, &noSuchKey) {
+		return true
+	}
+	var notFound *types.NotFound
+	if errors.As(err, &notFound) {
+		return true
+	}
+	var apiErr smithy.APIError
+	if !errors.As(err, &apiErr) {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(apiErr.ErrorCode())) {
+	case "nosuchkey", "notfound", "no_such_key":
+		return true
+	default:
+		return false
+	}
 }
 
 func (p *Provider) Delete(ctx context.Context, key string) error {
