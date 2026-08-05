@@ -30,6 +30,9 @@ import (
 const (
 	DefaultRunTimeout          = 20 * time.Minute
 	maxWriteToolContentPreview = 64 * 1024
+	// permissionStateWaitTimeout bounds request/notification correlation so a
+	// missing session update cannot hold the agent prompt open indefinitely.
+	permissionStateWaitTimeout = 30 * time.Second
 	// approvalGrantTTL bounds how long a RequestPermission grant stays
 	// consumable by the follow-up client-capability callback. Deliberately its
 	// own constant: it is unrelated to how long the approval flow waits for a
@@ -508,9 +511,11 @@ func (c *clientCallbacks) RequestPermission(ctx context.Context, p acp.RequestPe
 		// ordered notification queue, so this request can overtake the earlier
 		// session/update that carries the MCP identity. Correlate the exact
 		// prompt/session/tool call until that state arrives or the request is
-		// cancelled; a wall-clock timeout would turn notification backlog into a
-		// false denial under load.
-		state = c.toolMapper.waitForPermissionState(ctx, p.SessionId, p.ToolCall, mcpPermissionStateReady)
+		// cancelled. Keep a generous upper bound so a missing update fails closed
+		// instead of holding the prompt open indefinitely.
+		waitCtx, cancelWait := context.WithTimeout(ctx, permissionStateWaitTimeout)
+		state = c.toolMapper.waitForPermissionState(waitCtx, p.SessionId, p.ToolCall, mcpPermissionStateReady)
+		cancelWait()
 	}
 	if err := c.validatePermissionScope(state); err != nil {
 		// Security-relevant rejection: an agent asked to act outside the
