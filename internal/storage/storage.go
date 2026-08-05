@@ -48,3 +48,11 @@ type ContainerFileOpener interface {
 type PrefixLister interface {
 	ListPrefix(ctx context.Context, prefix string) ([]string, error)
 }
+
+// AuthoritativePrefixLister marks providers whose successful prefix listing is
+// complete. Callers may treat an empty successful result as definitive instead
+// of probing candidate object keys one by one.
+type AuthoritativePrefixLister interface {
+	PrefixLister
+	PrefixListingAuthoritative()
+}

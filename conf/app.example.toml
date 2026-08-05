@@ -69,6 +69,25 @@ tool_output_max_bytes = 65536
 tool_output_max_lines = 2000
 system_files_max_bytes = 32768
 
+[storage]
+# filesystem preserves the existing container/local media store. Use s3 to
+# keep avatars, Channel media, and Browser/Computer screenshots in a private
+# S3-compatible bucket shared by Server and Channel.
+provider = "filesystem"
+
+[storage.s3]
+# Required when provider = "s3". For AWS S3, use the regional HTTPS endpoint;
+# for self-hosted services use an internal URL such as http://seaweedfs:8333.
+endpoint = ""
+bucket = ""
+access_key_id = ""
+secret_access_key = ""
+region = "us-east-1"
+# Optional provider-level key prefix.
+prefix = ""
+# Keep true for SeaweedFS, MinIO, Garage, R2, and most S3-compatible endpoints.
+path_style = true
+
 [session_runtime]
 # Stores live run snapshots for WebSocket attach/reconnect. memory is best for
 # single-server deployments. redis uses the Redis protocol and works with
