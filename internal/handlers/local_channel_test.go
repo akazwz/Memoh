@@ -23,6 +23,8 @@ import (
 
 	"github.com/memohai/memoh/internal/accounts"
 	"github.com/memohai/memoh/internal/agent/application"
+	acpagent "github.com/memohai/memoh/internal/agent/runtime/acp"
+	acpclient "github.com/memohai/memoh/internal/agent/runtime/acp/client"
 	sessionruntime "github.com/memohai/memoh/internal/agent/runtime/session"
 	"github.com/memohai/memoh/internal/apperror"
 	attachmentpkg "github.com/memohai/memoh/internal/attachment"
@@ -517,6 +519,50 @@ func openLocalChannelTestWS(t *testing.T, handler *LocalChannelHandler, botID, u
 	return client
 }
 
+type testACPRuntimeStatusReader struct {
+	statuses map[string]acpagent.RuntimeStatus
+}
+
+func (r testACPRuntimeStatusReader) RuntimeStatus(sessionID, _, _ string) acpagent.RuntimeStatus {
+	return r.statuses[sessionID]
+}
+
+func liveACPCommandStatus(sessionID string, names ...string) acpagent.RuntimeStatus {
+	commands := make([]acpclient.AvailableCommandInfo, 0, len(names))
+	for _, name := range names {
+		commands = append(commands, acpclient.AvailableCommandInfo{Name: name})
+	}
+	return acpagent.RuntimeStatus{
+		SessionID:         sessionID,
+		State:             "idle",
+		ACPSession:        "acp-" + sessionID,
+		AvailableCommands: commands,
+	}
+}
+
+func TestClassifyWebSlashForSessionUsesLiveAgentAuthority(t *testing.T) {
+	t.Parallel()
+
+	const sessionID = "22222222-2222-2222-2222-222222222222"
+	handler := &LocalChannelHandler{
+		sessionService: sessionpkg.NewService(nil, localChannelSessionAuthQueries{session: sqlc.BotSession{
+			ID: testUUID(sessionID), RuntimeType: sessionpkg.RuntimeACPAgent,
+		}}, nil),
+		acpRuntimeStatus: testACPRuntimeStatusReader{statuses: map[string]acpagent.RuntimeStatus{
+			sessionID: liveACPCommandStatus(sessionID, "review:deep"),
+		}},
+	}
+	raw := `/review:deep   phase one --keep "a  b"`
+	advertised := handler.classifyWebSlashForSession(context.Background(), raw, true, sessionID)
+	if advertised.Kind != slash.DecisionNormalChat || advertised.Invocation == nil || advertised.Invocation.RawText != raw {
+		t.Fatalf("advertised decision = %#v, want unchanged Agent prompt", advertised)
+	}
+	unknown := handler.classifyWebSlashForSession(context.Background(), "/Review:deep", false, sessionID)
+	if unknown.Kind != slash.DecisionUnknownSlash || unknown.Code != slash.CodeUnknownSlash {
+		t.Fatalf("unadvertised decision = %#v, want stable unknown slash", unknown)
+	}
+}
+
 type wsDecisionDispatch struct {
 	botID       string
 	sessionID   string
@@ -874,92 +920,6 @@ func TestLocalChannelWSQuickActionRequiresChatAccessWithoutSession(t *testing.T)
 	}
 }
 
-func TestLocalChannelWSSkillActivationRequiresChatAccessWithSession(t *testing.T) {
-	t.Parallel()
-
-	const (
-		botID       = "11111111-1111-1111-1111-111111111111"
-		sessionID   = "22222222-2222-2222-2222-222222222222"
-		currentUser = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
-	)
-	queries := localChannelSessionAuthQueries{
-		bot: testBotRow(botID, map[string]any{}),
-		session: sqlc.BotSession{
-			ID:              testUUID(sessionID),
-			BotID:           testUUID(botID),
-			Type:            sessionpkg.TypeChat,
-			SessionMode:     sessionpkg.TypeChat,
-			RuntimeType:     sessionpkg.RuntimeACPAgent,
-			CreatedByUserID: testUUID(currentUser),
-			Metadata:        []byte(`{}`),
-		},
-		grants: []sqlc.ListBotUserGrantsForUserRow{
-			{
-				ID:          testUUID("dddddddd-dddd-dddd-dddd-dddddddddddd"),
-				BotID:       testUUID(botID),
-				SubjectType: bots.GrantSubjectUser,
-				UserID:      testUUID(currentUser),
-				Permissions: []byte(`["workspace_exec"]`),
-			},
-		},
-	}
-	handler := &LocalChannelHandler{
-		channelType:    channel.ChannelTypeLocal,
-		botService:     bots.NewService(nil, queries),
-		accountService: accounts.NewService(nil, testAdminAccountStore{role: "user"}),
-		sessionService: sessionpkg.NewService(nil, queries, nil),
-		agentService:   &application.Service{},
-		logger:         slog.Default(),
-	}
-
-	e := echo.New()
-	e.GET("/bots/:bot_id/local/ws", func(c echo.Context) error {
-		c.Set("user", &jwt.Token{
-			Valid: true,
-			Claims: jwt.MapClaims{
-				"sub":     currentUser,
-				"user_id": currentUser,
-			},
-		})
-		return handler.HandleWebSocket(c)
-	})
-	server := httptest.NewServer(e)
-	defer server.Close()
-
-	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "/bots/" + botID + "/local/ws"
-	client, resp, err := websocket.DefaultDialer.Dial(wsURL, nil)
-	if resp != nil && resp.Body != nil {
-		defer func() { _ = resp.Body.Close() }()
-	}
-	if err != nil {
-		t.Fatalf("dial websocket: %v", err)
-	}
-	defer func() { _ = client.Close() }()
-
-	if err := client.WriteJSON(map[string]any{
-		"type":          "message",
-		"invocation_id": "invocation-1",
-		"session_id":    sessionID,
-		"text":          "/alpha",
-	}); err != nil {
-		t.Fatalf("write ws message: %v", err)
-	}
-
-	var event map[string]any
-	if err := client.ReadJSON(&event); err != nil {
-		t.Fatalf("read ws event: %v", err)
-	}
-	if got := event["type"]; got != "error" {
-		t.Fatalf("event type = %#v, want error; event=%#v", got, event)
-	}
-	if got := event["message"]; got != "bot access denied" {
-		t.Fatalf("event message = %#v, want bot access denied; event=%#v", got, event)
-	}
-	if _, ok := event["error"]; ok {
-		t.Fatalf("workspace_exec-only skill activation reached slash command handling: %#v", event)
-	}
-}
-
 func TestLocalChannelWSQuickActionHelpOmitsSkillsForACPSession(t *testing.T) {
 	t.Parallel()
 
@@ -1274,7 +1234,7 @@ func TestExecuteWebQuickActionHelpListsAllQuickActions(t *testing.T) {
 
 	handler := &LocalChannelHandler{}
 
-	full, slashErr := handler.executeWebQuickAction(context.Background(), "bot-1", "help", true)
+	full, slashErr := handler.executeWebQuickAction(context.Background(), "bot-1", "help", true, webQuickActionContext{})
 	if slashErr != nil {
 		t.Fatalf("executeWebQuickAction: %v", slashErr)
 	}
@@ -1292,7 +1252,7 @@ func TestExecuteWebQuickActionHelpListsAllQuickActions(t *testing.T) {
 		}
 	}
 
-	restricted, slashErr := handler.executeWebQuickAction(context.Background(), "bot-1", "help", false)
+	restricted, slashErr := handler.executeWebQuickAction(context.Background(), "bot-1", "help", false, webQuickActionContext{})
 	if slashErr != nil {
 		t.Fatalf("executeWebQuickAction: %v", slashErr)
 	}

@@ -875,7 +875,7 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/apperror.Problem"
                         }
                     },
                     "403": {
@@ -939,6 +939,12 @@ const docTemplate = `{
                         "schema": {
                             "$ref": "#/definitions/apperror.Problem"
                         }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/apperror.Problem"
+                        }
                     }
                 }
             },
@@ -982,7 +988,91 @@ const docTemplate = `{
                     "404": {
                         "description": "Not Found",
                         "schema": {
+                            "$ref": "#/definitions/apperror.Problem"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/apperror.Problem"
+                        }
+                    }
+                }
+            }
+        },
+        "/bots/{bot_id}/acp-runtimes/{runtime_id}/mode": {
+            "patch": {
+                "description": "Sends the selected agent-declared mode ID unchanged to session/set_mode before the first chat message binds this runtime to a Session.",
+                "tags": [
+                    "acp"
+                ],
+                "summary": "Set an unbound ACP runtime's mode",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Runtime ID",
+                        "name": "runtime_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Mode selection",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.acpRuntimeModeRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/acpagent.RuntimeStatus"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/apperror.Problem"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
                             "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/apperror.Problem"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/apperror.Problem"
+                        }
+                    },
+                    "502": {
+                        "description": "Bad Gateway",
+                        "schema": {
+                            "$ref": "#/definitions/apperror.Problem"
                         }
                     }
                 }
@@ -1049,6 +1139,12 @@ const docTemplate = `{
                         "description": "Conflict",
                         "schema": {
                             "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/apperror.Problem"
                         }
                     },
                     "502": {
@@ -1120,6 +1216,12 @@ const docTemplate = `{
                         "description": "Conflict",
                         "schema": {
                             "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/apperror.Problem"
                         }
                     },
                     "502": {
@@ -7343,7 +7445,13 @@ const docTemplate = `{
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/apperror.Problem"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/apperror.Problem"
                         }
                     }
                 }
@@ -7391,7 +7499,85 @@ const docTemplate = `{
                     "404": {
                         "description": "Not Found",
                         "schema": {
+                            "$ref": "#/definitions/apperror.Problem"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/apperror.Problem"
+                        }
+                    }
+                }
+            }
+        },
+        "/bots/{bot_id}/sessions/{session_id}/acp-runtime/mode": {
+            "patch": {
+                "description": "Sends the selected agent-declared mode ID unchanged to session/set_mode. The selection applies only to this live session.",
+                "tags": [
+                    "acp"
+                ],
+                "summary": "Set ACP session runtime mode",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Session ID",
+                        "name": "session_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "ACP session mode selection",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.acpRuntimeModeRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/acpagent.RuntimeStatus"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/apperror.Problem"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
                             "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/apperror.Problem"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/apperror.Problem"
+                        }
+                    },
+                    "502": {
+                        "description": "Bad Gateway",
+                        "schema": {
+                            "$ref": "#/definitions/apperror.Problem"
                         }
                     }
                 }
@@ -7450,7 +7636,13 @@ const docTemplate = `{
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/apperror.Problem"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/apperror.Problem"
                         }
                     },
                     "502": {
@@ -7515,7 +7707,13 @@ const docTemplate = `{
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/apperror.Problem"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/apperror.Problem"
                         }
                     },
                     "502": {
@@ -8210,19 +8408,31 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/apperror.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/apperror.Problem"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/apperror.Problem"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/apperror.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/apperror.Problem"
                         }
                     }
                 }
@@ -8271,19 +8481,31 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/apperror.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/apperror.Problem"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/apperror.Problem"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/apperror.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/apperror.Problem"
                         }
                     }
                 }
@@ -14902,11 +15124,20 @@ const docTemplate = `{
                 "agent_id": {
                     "type": "string"
                 },
+                "available_commands": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/acpclient.AvailableCommandInfo"
+                    }
+                },
                 "default_model_id": {
                     "type": "string"
                 },
                 "models": {
                     "$ref": "#/definitions/acpclient.ModelState"
+                },
+                "modes": {
+                    "$ref": "#/definitions/acpclient.ModeState"
                 },
                 "project_path": {
                     "type": "string"
@@ -14922,6 +15153,51 @@ const docTemplate = `{
                 },
                 "state": {
                     "type": "string"
+                }
+            }
+        },
+        "acpclient.AvailableCommandInfo": {
+            "type": "object",
+            "properties": {
+                "description": {
+                    "type": "string"
+                },
+                "input_hint": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                }
+            }
+        },
+        "acpclient.ModeInfo": {
+            "type": "object",
+            "properties": {
+                "description": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                }
+            }
+        },
+        "acpclient.ModeState": {
+            "type": "object",
+            "properties": {
+                "available_modes": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/acpclient.ModeInfo"
+                    }
+                },
+                "current_mode_id": {
+                    "type": "string"
+                },
+                "supported": {
+                    "type": "boolean"
                 }
             }
         },
@@ -17489,10 +17765,34 @@ const docTemplate = `{
                 "decision_reason": {
                     "type": "string"
                 },
+                "options": {
+                    "description": "Options are the agent-provided permission options, verbatim; the client\nrenders one action per option and answers with the chosen option id.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/conversation.UIToolApprovalOption"
+                    }
+                },
+                "selected_option_id": {
+                    "type": "string"
+                },
                 "short_id": {
                     "type": "integer"
                 },
                 "status": {
+                    "type": "string"
+                }
+            }
+        },
+        "conversation.UIToolApprovalOption": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "string"
+                },
+                "kind": {
+                    "type": "string"
+                },
+                "name": {
                     "type": "string"
                 }
             }
@@ -19605,6 +19905,11 @@ const docTemplate = `{
             "type": "object",
             "properties": {
                 "control_id": {
+                    "description": "ControlID is the stable identity of one client mutation. New clients send\nit for exact retries; it remains optional for older Web/Desktop clients.",
+                    "type": "string"
+                },
+                "option_id": {
+                    "description": "OptionID selects one of the agent-provided permission options carried on\nthe approval request; empty keeps the plain binary decision.",
                     "type": "string"
                 },
                 "reason": {
@@ -19692,6 +19997,17 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "project_path": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.acpRuntimeModeRequest": {
+            "type": "object",
+            "required": [
+                "mode_id"
+            ],
+            "properties": {
+                "mode_id": {
                     "type": "string"
                 }
             }
@@ -22206,6 +22522,9 @@ const docTemplate = `{
                 "allow_custom": {
                     "type": "boolean"
                 },
+                "custom_exclusive": {
+                    "type": "boolean"
+                },
                 "id": {
                     "type": "string"
                 },
@@ -22220,6 +22539,10 @@ const docTemplate = `{
                 },
                 "placeholder": {
                     "type": "string"
+                },
+                "required": {
+                    "description": "Required is tri-state for compatibility. Legacy/native ask_user payloads\nomit it and keep their existing surface semantics; ACP forms set it\nexplicitly so false means an optional schema property.",
+                    "type": "boolean"
                 },
                 "text": {
                     "type": "string"

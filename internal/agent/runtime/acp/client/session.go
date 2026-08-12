@@ -52,6 +52,7 @@ type StartRequest struct {
 	Timeout                time.Duration
 	ToolSession            ToolSessionContext
 	ToolApproval           ToolApprovalService
+	UserInput              UserInputService
 	ToolGateway            *mcp.ToolGatewayService
 	ToolPreflightGateway   *mcp.ToolGatewayService
 	ToolHTTPURL            string
@@ -99,6 +100,9 @@ type Session struct {
 	reasoningConfigFallbackID string
 	reasoningConfigID         string
 	reasoningState            ReasoningState
+	modeState                 ModeState
+	availableCommands         []AvailableCommandInfo
+	modeRevision              uint64
 	embeddedContext           bool
 	imagePromptSupported      bool
 	defaultSink               EventSink
@@ -247,19 +251,26 @@ func (r *Runner) StartSession(ctx context.Context, req StartRequest, sink EventS
 		preflightGateway = req.ToolGateway
 	}
 	callbacks := newClientCallbacks(lifecycleCtx, client, root, projectPath, timeout, sink, proc.toolEnv, req.CleanEnv, proc.unsetEnv, req.ToolApproval, preflightGateway, toolSession, acpprofile.QuirksFor(req.AgentID))
+	callbacks.userInput = req.UserInput
 	callbacks.logger = r.logger
 	conn := newClientConnection(callbacks, proc, proc)
 
-	initResp, err := conn.Initialize(ctx, acp.InitializeRequest{
-		ProtocolVersion: acp.ProtocolVersionNumber,
-		ClientInfo:      &acp.Implementation{Name: "memoh", Version: "dev"},
-		ClientCapabilities: acp.ClientCapabilities{
-			Fs: acp.FileSystemCapabilities{
-				ReadTextFile:  true,
-				WriteTextFile: true,
-			},
-			Terminal: true,
+	clientCapabilities := acp.ClientCapabilities{
+		Fs: acp.FileSystemCapabilities{
+			ReadTextFile:  true,
+			WriteTextFile: true,
 		},
+		Terminal: true,
+	}
+	if req.UserInput != nil {
+		clientCapabilities.Elicitation = &acp.ElicitationCapabilities{
+			Form: &acp.ElicitationFormCapabilities{},
+		}
+	}
+	initResp, err := conn.Initialize(ctx, acp.InitializeRequest{
+		ProtocolVersion:    acp.ProtocolVersionNumber,
+		ClientInfo:         &acp.Implementation{Name: "memoh", Version: "dev"},
+		ClientCapabilities: clientCapabilities,
 	})
 	if err != nil {
 		callbacks.close()
@@ -342,7 +353,8 @@ func (r *Runner) StartSession(ctx context.Context, req StartRequest, sink EventS
 	}
 	clientSession.replaceConfigOptions(sess.SessionId, configOptions)
 	clientSession.installLegacyModels(sess.Models)
-	callbacks.setConfigOptionsHandler(clientSession.replaceConfigOptions)
+	clientSession.installModes(sess.Modes)
+	callbacks.setSession(clientSession)
 	if defaultReasoning := strings.TrimSpace(req.DefaultReasoningEffort); defaultReasoning != "" && clientSession.ReasoningState().Supported {
 		if _, err := clientSession.SetReasoningEffort(ctx, defaultReasoning); err != nil {
 			if errors.Is(err, ErrReasoningEffortUnavailable) ||
@@ -407,11 +419,13 @@ func pinSessionMode(ctx context.Context, conn *clientConnection, sessionID acp.S
 	}); err != nil {
 		return fmt.Errorf("pin ACP session mode %q: %w", desired, err)
 	}
+	previousMode := modes.CurrentModeId
+	modes.CurrentModeId = acp.SessionModeId(desired)
 	if logger != nil {
 		logger.Info("pinned ACP session mode",
 			slog.String("agent_id", agentID),
 			slog.String("mode", desired),
-			slog.String("previous_mode", string(modes.CurrentModeId)))
+			slog.String("previous_mode", string(previousMode)))
 	}
 	return nil
 }
@@ -690,6 +704,9 @@ func (s *Session) PromptWithToolContextOptions(ctx context.Context, prompt strin
 
 	promptBlocks := s.promptBlocks(prompt, resources, images)
 	collector := newEventCollector(options.ToolOutputLimit)
+	// The prompt context is the output boundary. Once Stop/Close cancels it,
+	// late adapter notifications must not reach either history or the live UI.
+	collector.bindContext(promptCtx)
 	sink := defaultSink
 	if len(sinks) > 0 {
 		sink = sinks[0]
@@ -699,6 +716,13 @@ func (s *Session) PromptWithToolContextOptions(ctx context.Context, prompt strin
 	}
 	defer func() {
 		if callbacks != nil {
+			if promptCtx.Err() != nil {
+				// Record the cancelled turn's tool calls before the per-prompt
+				// states are wiped, so a late permission callback for one of
+				// them resolves as cancelled instead of correlating against
+				// the next turn.
+				callbacks.markPromptCancelled()
+			}
 			callbacks.setPromptState(nil, nil, ToolSessionContext{}, ToolOutputLimit{})
 		}
 	}()
@@ -861,6 +885,36 @@ func cleanPromptResources(resources []PromptResource) []PromptResource {
 		})
 	}
 	return out
+}
+
+// AdvertisesCommand reports whether the live session currently declares the
+// named agent command. Names are opaque and case-sensitive; the caller passes
+// the exact selector, never a normalized form.
+func (s *Session) AdvertisesCommand(name string) bool {
+	if s == nil || name == "" {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, command := range s.availableCommands {
+		if command.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+// WaitDecisionCallbacksIdle reports whether every in-flight permission/Form
+// callback finished before the timeout. A cancelled prompt uses it as the
+// quiescence barrier before the warm runtime is handed to the next turn.
+func (s *Session) WaitDecisionCallbacksIdle(timeout time.Duration) bool {
+	if s == nil {
+		return true
+	}
+	s.mu.Lock()
+	callbacks := s.callbacks
+	s.mu.Unlock()
+	return callbacks.waitDecisionCallbacksIdle(timeout)
 }
 
 func (s *Session) Close() error {

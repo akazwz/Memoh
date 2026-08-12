@@ -29,6 +29,7 @@ func TestAuthorizeToolApprovalResponseMapsOperationPermission(t *testing.T) {
 		{operation: toolapproval.OperationRead, permission: bots.PermissionWorkspaceRead},
 		{operation: toolapproval.OperationWrite, permission: bots.PermissionWorkspaceWrite},
 		{operation: toolapproval.OperationExec, permission: bots.PermissionWorkspaceExec},
+		{operation: toolapproval.OperationPermission, permission: bots.PermissionWorkspaceExec},
 	}
 	for _, tc := range cases {
 		t.Run(tc.operation, func(t *testing.T) {
@@ -69,5 +70,24 @@ func TestAuthorizeToolApprovalResponseFailsClosed(t *testing.T) {
 		Operation: toolapproval.OperationWrite,
 	}, ToolApprovalResponseInput{ActorUserID: "user-1"}); !errors.Is(err, toolapproval.ErrForbidden) {
 		t.Fatalf("denied permission error = %v, want forbidden", err)
+	}
+}
+
+func TestLegacyPermissionOptionID(t *testing.T) {
+	t.Parallel()
+
+	options := []toolapproval.PermissionOption{
+		{ID: "allow-session", Kind: toolapproval.OptionKindAllowAlways},
+		{ID: "deny-once", Kind: toolapproval.OptionKindRejectOnce},
+		{ID: "allow-once", Kind: toolapproval.OptionKindAllowOnce},
+	}
+	if got, err := legacyPermissionOptionID(options, "approve"); err != nil || got != "allow-once" {
+		t.Fatalf("legacy approve = %q, %v", got, err)
+	}
+	if got, err := legacyPermissionOptionID(options[:1], "approve"); got != "" || !errors.Is(err, toolapproval.ErrOptionUnavailable) {
+		t.Fatalf("approve without allow_once = %q, %v", got, err)
+	}
+	if got, err := legacyPermissionOptionID(options[2:], "reject"); got != "" || err != nil {
+		t.Fatalf("reject without reject_once = %q, %v", got, err)
 	}
 }

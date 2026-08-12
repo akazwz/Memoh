@@ -85,6 +85,10 @@ func (p *fakeACPRuntimePool) SetReasoning(ctx context.Context, input acpagent.Pr
 	return p.status, nil
 }
 
+func (p *fakeACPRuntimePool) SetMode(_ context.Context, _ acpagent.PromptInput, _ string) (acpagent.RuntimeStatus, error) {
+	return p.status, p.statusErr
+}
+
 func (p *fakeACPRuntimePool) CreateRuntime(_ context.Context, input acpagent.CreateRuntimeInput) (acpagent.RuntimeStatus, error) {
 	p.createInput = input
 	return p.status, p.createErr
@@ -310,7 +314,7 @@ func TestACPRuntimeHandlerEnsureRejectsMissingRuntimeOwner(t *testing.T) {
 	}
 }
 
-func TestACPRuntimeHandlerEnsureRejectsDifferentRuntimeOwner(t *testing.T) {
+func TestACPRuntimeHandlerEnsureAllowsWorkspaceExecMember(t *testing.T) {
 	botID := "11111111-1111-1111-1111-111111111111"
 	sessionID := "77777777-7777-7777-7777-777777777777"
 	actorUserID := "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
@@ -346,13 +350,11 @@ func TestACPRuntimeHandlerEnsureRejectsDifferentRuntimeOwner(t *testing.T) {
 	ctx.SetParamNames("bot_id", "session_id")
 	ctx.SetParamValues(botID, sessionID)
 
-	err := handler.EnsureRuntime(ctx)
-	var httpErr *echo.HTTPError
-	if !errors.As(err, &httpErr) || httpErr.Code != http.StatusForbidden {
-		t.Fatalf("EnsureRuntime() error = %v, want HTTP 403", err)
+	if err := handler.EnsureRuntime(ctx); err != nil {
+		t.Fatalf("EnsureRuntime() error = %v", err)
 	}
-	if pool.ensureInput.BotID != "" {
-		t.Fatalf("pool should not be called for a different runtime owner: %#v", pool.ensureInput)
+	if pool.ensureInput.BotID != botID {
+		t.Fatalf("pool input = %#v", pool.ensureInput)
 	}
 }
 
@@ -368,34 +370,43 @@ func TestAuthorizeACPRuntimeSessionAccess(t *testing.T) {
 		}
 	})
 
-	t.Run("manage cannot bypass owner mismatch", func(t *testing.T) {
+	t.Run("manager may operate another owner's runtime", func(t *testing.T) {
 		err := authorizeACPRuntimeSessionAccess(
 			"user-1",
 			[]string{bots.PermissionManage},
 			"user-2",
 		)
-		var httpErr *echo.HTTPError
-		if !errors.As(err, &httpErr) || httpErr.Code != http.StatusForbidden {
-			t.Fatalf("authorizeACPRuntimeSessionAccess() error = %v, want HTTP 403", err)
+		if err != nil {
+			t.Fatalf("authorizeACPRuntimeSessionAccess() error = %v", err)
 		}
 	})
 
-	t.Run("owner still needs workspace exec", func(t *testing.T) {
+	t.Run("runtime owner does not need a second permission check", func(t *testing.T) {
 		err := authorizeACPRuntimeSessionAccess(
 			"user-1",
 			[]string{bots.PermissionChat},
 			"user-1",
 		)
-		var httpErr *echo.HTTPError
-		if !errors.As(err, &httpErr) || httpErr.Code != http.StatusForbidden {
-			t.Fatalf("authorizeACPRuntimeSessionAccess() error = %v, want HTTP 403", err)
+		if err != nil {
+			t.Fatalf("authorizeACPRuntimeSessionAccess() error = %v", err)
 		}
 	})
 
-	t.Run("different owner is forbidden", func(t *testing.T) {
+	t.Run("workspace exec member may operate another owner's runtime", func(t *testing.T) {
 		err := authorizeACPRuntimeSessionAccess(
 			"user-1",
 			[]string{bots.PermissionWorkspaceExec},
+			"user-2",
+		)
+		if err != nil {
+			t.Fatalf("authorizeACPRuntimeSessionAccess() error = %v", err)
+		}
+	})
+
+	t.Run("member without workspace exec is forbidden", func(t *testing.T) {
+		err := authorizeACPRuntimeSessionAccess(
+			"user-1",
+			[]string{bots.PermissionChat},
 			"user-2",
 		)
 		var httpErr *echo.HTTPError
@@ -636,51 +647,6 @@ func TestACPRuntimeHandlerCreateRuntime(t *testing.T) {
 	}
 	if got["runtime_id"] != "rt_warm" || got["default_model_id"] != "gpt-5.1-codex" {
 		t.Fatalf("CreateRuntime response = %#v", got)
-	}
-}
-
-func TestACPRuntimeHandlerSetRuntimeModelRejectsDifferentRuntimeOwner(t *testing.T) {
-	botID := "11111111-1111-1111-1111-111111111111"
-	queries := acpRuntimeQueries{
-		bot:         testBotRow(botID, acpEnabledBotMetadata()),
-		permissions: []byte(`["workspace_exec"]`),
-	}
-	pool := &fakeACPRuntimePool{
-		status: acpagent.RuntimeStatus{
-			RuntimeID:             "rt_warm",
-			AgentID:               acpprofile.AgentCodexID,
-			ProjectPath:           "/data",
-			RuntimeOwnerAccountID: "owner-1",
-			State:                 "idle",
-		},
-	}
-	handler := newACPRuntimeHandler(
-		pool,
-		session.NewService(nil, queries, nil),
-		bots.NewService(nil, queries),
-		newTestAdminAccountService("user"),
-	)
-
-	e := echo.New()
-	req := httptest.NewRequest(
-		http.MethodPatch,
-		"/bots/"+botID+"/acp-runtimes/rt_warm/model",
-		bytes.NewBufferString(`{"model_id":"gpt-5.1-codex-high"}`),
-	)
-	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
-	rec := httptest.NewRecorder()
-	ctx := testAuthContext(e, req, rec, "user-1")
-	ctx.SetPath("/bots/:bot_id/acp-runtimes/:runtime_id/model")
-	ctx.SetParamNames("bot_id", "runtime_id")
-	ctx.SetParamValues(botID, "rt_warm")
-
-	err := handler.SetRuntimeModel(ctx)
-	var httpErr *echo.HTTPError
-	if !errors.As(err, &httpErr) || httpErr.Code != http.StatusForbidden {
-		t.Fatalf("SetRuntimeModel() error = %v, want HTTP 403", err)
-	}
-	if pool.modelID != "" {
-		t.Fatalf("pool should not be called for a different runtime owner: model=%q", pool.modelID)
 	}
 }
 
@@ -1080,11 +1046,10 @@ func TestACPRuntimeHandlerRejectsNonACPSession(t *testing.T) {
 
 	err := handler.GetRuntime(ctx)
 	if err == nil {
-		t.Fatalf("GetRuntime() error = nil, want HTTP 400")
+		t.Fatalf("GetRuntime() error = nil, want %s", apperror.CodeACPRequestInvalid)
 	}
-	var httpErr *echo.HTTPError
-	if !errors.As(err, &httpErr) || httpErr.Code != http.StatusBadRequest {
-		t.Fatalf("GetRuntime() error = %v, want HTTP 400", err)
+	if got := apperror.CodeOf(err); got != apperror.CodeACPRequestInvalid {
+		t.Fatalf("GetRuntime() code = %q, want %q", got, apperror.CodeACPRequestInvalid)
 	}
 }
 

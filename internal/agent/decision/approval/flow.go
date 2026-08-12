@@ -69,6 +69,10 @@ type FlowResult struct {
 	// leave it false so callers can distinguish "user said no" from "nobody
 	// was there to ask".
 	DecidedByUser bool
+	// SelectedOptionID is the agent-provided permission option the decider
+	// picked, when the request carried options and the decision named one.
+	// Callers answering an ACP request_permission should return it verbatim.
+	SelectedOptionID string
 }
 
 // RunFlow executes the pending-approval state machine shared by the native
@@ -231,6 +235,10 @@ func resultFromDecision(req Request, decided Request, emit func(Request) bool) F
 		decisionReq.Status = StatusRejected
 	}
 	decisionReq.DecisionReason = decided.DecisionReason
+	// The terminal snapshot is what live viewers see; without the selection a
+	// second tab (or a channel surface) cannot tell which scope was granted
+	// until a history refetch.
+	decisionReq.SelectedOptionID = decided.SelectedOptionID
 	if decided.DecidedAt != nil {
 		decisionReq.DecidedAt = decided.DecidedAt
 	}
@@ -243,10 +251,11 @@ func resultFromDecision(req Request, decided Request, emit func(Request) bool) F
 	decidedByUser := decided.DecidedByUser && strings.TrimSpace(decided.Status) != "" &&
 		(strings.EqualFold(decisionReq.Status, StatusApproved) || strings.EqualFold(decisionReq.Status, StatusRejected))
 	return FlowResult{
-		Approved:       strings.EqualFold(decisionReq.Status, StatusApproved),
-		Status:         decisionReq.Status,
-		DecisionReason: decisionReq.DecisionReason,
-		DecidedByUser:  decidedByUser,
+		Approved:         strings.EqualFold(decisionReq.Status, StatusApproved),
+		Status:           decisionReq.Status,
+		DecisionReason:   decisionReq.DecisionReason,
+		DecidedByUser:    decidedByUser,
+		SelectedOptionID: decided.SelectedOptionID,
 	}
 }
 
@@ -295,6 +304,12 @@ func RequestMetadata(req Request) map[string]any {
 	}
 	if operation := strings.TrimSpace(req.Operation); operation != "" {
 		metadata["operation"] = operation
+	}
+	if len(req.Options) > 0 {
+		metadata["options"] = req.Options
+	}
+	if strings.TrimSpace(req.SelectedOptionID) != "" {
+		metadata["selected_option_id"] = req.SelectedOptionID
 	}
 	if reason := strings.TrimSpace(req.DecisionReason); reason != "" {
 		metadata["decision_reason"] = reason

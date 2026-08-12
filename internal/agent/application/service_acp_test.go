@@ -864,108 +864,6 @@ func TestStreamChatWSPersistsACPApprovalProjectionOnce(t *testing.T) {
 	}
 }
 
-func TestAuthorizeACPToolApprovalRequiresRuntimeOwnerOrManage(t *testing.T) {
-	t.Parallel()
-
-	const (
-		ownerID   = "owner-user"
-		otherID   = "other-user"
-		managerID = "manager-user"
-	)
-	perms := &fakeBotPermissionChecker{
-		values: map[string]bool{
-			"bot-1:" + ownerID + ":" + bots.PermissionWorkspaceExec: true,
-			"bot-1:" + otherID + ":" + bots.PermissionWorkspaceExec: true,
-			"bot-1:" + managerID + ":" + bots.PermissionManage:      true,
-		},
-	}
-	resolver := &Service{
-		botPermissions: perms,
-		sessionService: &fakeBackgroundSessionService{
-			getFn: func(_ context.Context, sessionID string) (session.Thread, error) {
-				return session.Thread{
-					ID:          sessionID,
-					BotID:       "bot-1",
-					Type:        session.TypeACPAgent,
-					RuntimeType: session.RuntimeACPAgent,
-					RuntimeMetadata: map[string]any{
-						"runtime_owner_account_id": ownerID,
-					},
-				}, nil
-			},
-		},
-	}
-	target := toolapproval.Request{BotID: "bot-1", SessionID: "session-1", Operation: toolapproval.OperationExec}
-
-	if err := resolver.authorizeACPToolApprovalResponse(context.Background(), target, ToolApprovalResponseInput{ActorUserID: ownerID}); err != nil {
-		t.Fatalf("owner authorization error = %v", err)
-	}
-	if err := resolver.authorizeACPToolApprovalResponse(context.Background(), target, ToolApprovalResponseInput{ActorUserID: managerID}); !errors.Is(err, toolapproval.ErrForbidden) {
-		t.Fatalf("manager authorization error = %v, want forbidden", err)
-	}
-	if err := resolver.authorizeACPToolApprovalResponse(context.Background(), target, ToolApprovalResponseInput{ActorUserID: otherID}); !errors.Is(err, toolapproval.ErrForbidden) {
-		t.Fatalf("other user authorization error = %v, want forbidden", err)
-	}
-}
-
-func TestAuthorizeACPUserInputAllowsChatResponderWhenRuntimeOwnerStillAuthorized(t *testing.T) {
-	t.Parallel()
-
-	const (
-		ownerID      = "owner-user"
-		chatMemberID = "chat-member-user"
-		otherID      = "other-user"
-		managerID    = "manager-user"
-		workspaceID  = "workspace-user"
-	)
-	perms := &fakeBotPermissionChecker{
-		values: map[string]bool{
-			"bot-1:" + ownerID + ":" + bots.PermissionWorkspaceExec:     true,
-			"bot-1:" + chatMemberID + ":" + bots.PermissionChat:         true,
-			"bot-1:" + workspaceID + ":" + bots.PermissionWorkspaceExec: true,
-			"bot-1:" + managerID + ":" + bots.PermissionManage:          true,
-		},
-	}
-	resolver := &Service{
-		botPermissions: perms,
-		sessionService: &fakeBackgroundSessionService{
-			getFn: func(_ context.Context, sessionID string) (session.Thread, error) {
-				return session.Thread{
-					ID:          sessionID,
-					BotID:       "bot-1",
-					Type:        session.TypeACPAgent,
-					RuntimeType: session.RuntimeACPAgent,
-					RuntimeMetadata: map[string]any{
-						"runtime_owner_account_id": ownerID,
-					},
-				}, nil
-			},
-		},
-	}
-	target := userinput.Request{BotID: "bot-1", SessionID: "session-1"}
-
-	if err := resolver.authorizeACPUserInputResponse(context.Background(), target, UserInputResponseInput{ActorUserID: ownerID}); err != nil {
-		t.Fatalf("owner authorization error = %v", err)
-	}
-	if err := resolver.authorizeACPUserInputResponse(context.Background(), target, UserInputResponseInput{ActorUserID: managerID}); !errors.Is(err, userinput.ErrForbidden) {
-		t.Fatalf("manager authorization error = %v, want forbidden", err)
-	}
-	if err := resolver.authorizeACPUserInputResponse(context.Background(), target, UserInputResponseInput{ActorUserID: chatMemberID}); !errors.Is(err, userinput.ErrForbidden) {
-		t.Fatalf("chat member authorization error = %v, want forbidden", err)
-	}
-	if err := resolver.authorizeACPUserInputResponse(context.Background(), target, UserInputResponseInput{ActorUserID: workspaceID}); !errors.Is(err, userinput.ErrForbidden) {
-		t.Fatalf("workspace-only user authorization error = %v, want forbidden", err)
-	}
-	if err := resolver.authorizeACPUserInputResponse(context.Background(), target, UserInputResponseInput{ActorUserID: otherID}); !errors.Is(err, userinput.ErrForbidden) {
-		t.Fatalf("other user authorization error = %v, want forbidden", err)
-	}
-
-	delete(perms.values, "bot-1:"+ownerID+":"+bots.PermissionWorkspaceExec)
-	if err := resolver.authorizeACPUserInputResponse(context.Background(), target, UserInputResponseInput{ActorUserID: ownerID}); !errors.Is(err, userinput.ErrForbidden) {
-		t.Fatalf("owner authorization with revoked workspace_exec error = %v, want forbidden", err)
-	}
-}
-
 func TestStreamACPAgentWSRequestsAutoTitle(t *testing.T) {
 	t.Parallel()
 
@@ -1296,6 +1194,125 @@ func TestStreamACPAgentWSFailurePersistsRoundAndSkipsMemory(t *testing.T) {
 	select {
 	case got := <-memory.afterChat:
 		t.Fatalf("memory was called for ACP stream despite SkipMemory=true: %#v", got)
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+func TestStreamACPAgentWSUserStopKeepsPartialOutputWithoutFailureOrMemory(t *testing.T) {
+	t.Parallel()
+
+	messages := &recordingMessageService{}
+	pool := &recordingACPPrompter{
+		result: withTranscriptOutput(acpclient.PromptResult{
+			Events: []event.StreamEvent{{Type: event.TextDelta, Delta: "partial answer"}},
+		}),
+		err: context.Canceled,
+	}
+	resolver := &Service{
+		messageService:  messages,
+		settingsService: settings.NewService(slog.New(slog.DiscardHandler), &storeRoundSettingsQueries{}, nil, nil),
+		acpPool:         pool,
+		botPermissions:  allowWorkspaceExecForBot(storeRoundBotID, "user-1"),
+		sessionService: &fakeBackgroundSessionService{
+			getFn: func(_ context.Context, sessionID string) (session.Thread, error) {
+				return session.Thread{
+					ID: sessionID, BotID: storeRoundBotID, Type: session.TypeACPAgent,
+					Metadata: map[string]any{
+						"acp_agent_id": "codex", "project_path": "/data/app",
+						"runtime_owner_account_id": "user-1",
+					},
+				}, nil
+			},
+		},
+		logger: slog.New(slog.DiscardHandler),
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	eventCh := make(chan WSStreamEvent, 8)
+	if err := resolver.streamACPAgentWS(ctx, ChatRequest{
+		BotID: storeRoundBotID, ThreadID: "session-1", Query: "inspect",
+	}, eventCh, make(chan struct{})); err != nil {
+		t.Fatalf("streamACPAgentWS() error = %v", err)
+	}
+
+	if len(messages.persisted) != 2 {
+		t.Fatalf("persisted %d messages, want user + partial assistant", len(messages.persisted))
+	}
+	if got := persistedText(t, messages.persisted[1].Content); got != "partial answer" {
+		t.Fatalf("assistant text = %q, want partial answer without failure marker", got)
+	}
+	if _, exists := messages.persisted[1].Metadata["error"]; exists {
+		t.Fatalf("stopped assistant metadata = %#v, want no failure", messages.persisted[1].Metadata)
+	}
+}
+
+// A prompt can complete in the same instant the user stops it. Stop wins: the
+// output is kept, but the round persists as an abort - no memory extraction,
+// EventAbort instead of EventEnd - so a stop is never recorded as a completed
+// turn.
+func TestStreamACPAgentWSStopRacingCompletionPersistsAsAbort(t *testing.T) {
+	t.Parallel()
+
+	messages := &recordingMessageService{}
+	memory := &storeRoundMemoryProvider{afterChat: make(chan memprovider.AfterChatRequest, 1)}
+	registry := memprovider.NewRegistry(slog.New(slog.DiscardHandler))
+	registry.Register(storeRoundMemoryProviderID, memory)
+	pool := &recordingACPPrompter{
+		result: withTranscriptOutput(acpclient.PromptResult{
+			Events: []event.StreamEvent{{Type: event.TextDelta, Delta: "done"}},
+		}),
+	}
+	resolver := &Service{
+		messageService:  messages,
+		memoryRegistry:  registry,
+		settingsService: settings.NewService(slog.New(slog.DiscardHandler), &storeRoundSettingsQueries{}, nil, nil),
+		acpPool:         pool,
+		botPermissions:  allowWorkspaceExecForBot(storeRoundBotID, "user-1"),
+		sessionService: &fakeBackgroundSessionService{
+			getFn: func(_ context.Context, sessionID string) (session.Thread, error) {
+				return session.Thread{
+					ID: sessionID, BotID: storeRoundBotID, Type: session.TypeACPAgent,
+					Metadata: map[string]any{
+						"acp_agent_id": "codex", "project_path": "/data/app",
+						"runtime_owner_account_id": "user-1",
+					},
+				}, nil
+			},
+		},
+		logger: slog.New(slog.DiscardHandler),
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	// A closed channel keeps the abort observable regardless of which
+	// goroutine consumes the signal first; production sends one value, which
+	// the watcher records before cancelling the stream context.
+	abortCh := make(chan struct{})
+	close(abortCh)
+	eventCh := make(chan WSStreamEvent, 8)
+	if err := resolver.streamACPAgentWS(ctx, ChatRequest{
+		BotID: storeRoundBotID, ThreadID: "session-1", Query: "inspect",
+	}, eventCh, abortCh); err != nil {
+		t.Fatalf("streamACPAgentWS() error = %v", err)
+	}
+
+	if len(messages.persisted) != 2 {
+		t.Fatalf("persisted %d messages, want user + assistant output", len(messages.persisted))
+	}
+	if got := persistedText(t, messages.persisted[1].Content); got != "done" {
+		t.Fatalf("assistant text = %q, want completed output kept", got)
+	}
+	if _, exists := messages.persisted[1].Metadata["error"]; exists {
+		t.Fatalf("stopped assistant metadata = %#v, want no failure", messages.persisted[1].Metadata)
+	}
+	events := drainAgentEvents(t, eventCh)
+	if !containsStreamEvent(events, native.EventAbort) || containsStreamEvent(events, native.EventEnd) {
+		t.Fatalf("events = %#v, want abort terminal without end", events)
+	}
+	select {
+	case got := <-memory.afterChat:
+		t.Fatalf("memory extraction ran on a stopped turn: %#v", got)
 	case <-time.After(50 * time.Millisecond):
 	}
 }

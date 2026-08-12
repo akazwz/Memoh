@@ -33,6 +33,9 @@ func (c *clientConnection) NewSession(ctx context.Context, params acp.NewSession
 func (c *clientConnection) Prompt(ctx context.Context, params acp.PromptRequest) (acp.PromptResponse, error) {
 	resp, err := acp.SendRequest[acp.PromptResponse](c.conn, ctx, acp.AgentMethodSessionPrompt, params)
 	if err != nil && ctx.Err() != nil {
+		// The caller aborted (user Stop or session Close). Tell the agent to
+		// wind the turn down so a kept runtime is idle for the next prompt; the
+		// pool decides whether to keep or drop the runtime from ctx.Err().
 		_ = c.Cancel(context.WithoutCancel(ctx), acp.CancelNotification{SessionId: params.SessionId})
 	}
 	return resp, err
@@ -91,6 +94,12 @@ func (c *clientConnection) handle(ctx context.Context, method string, params jso
 			return nil, err
 		}
 		return callACPHandler(func() (any, error) { return c.client.RequestPermission(ctx, p) })
+	case acp.ClientMethodElicitationCreate:
+		var p createElicitationRequest
+		if err := decodeACPParams(params, &p); err != nil {
+			return nil, err
+		}
+		return callACPHandler(func() (any, error) { return c.client.CreateElicitation(ctx, p) })
 	case acp.ClientMethodSessionUpdate:
 		var p acp.SessionNotification
 		if err := decodeACPParams(params, &p); err != nil {

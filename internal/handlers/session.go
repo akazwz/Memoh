@@ -839,11 +839,10 @@ func authorizeACPRuntimeSessionAccess(actorUserID string, perms []string, runtim
 		feedback := acpRuntimeOwnerMissingFeedback()
 		return echo.NewHTTPError(feedback.HTTPStatus, feedback)
 	}
-	if actorUserID == "" || actorUserID != runtimeOwnerAccountID {
-		feedback := acpNoWorkspaceExecFeedback("runtime_owner_mismatch", "This ACP runtime belongs to another user.")
-		return echo.NewHTTPError(feedback.HTTPStatus, feedback)
+	if actorUserID == runtimeOwnerAccountID {
+		return nil
 	}
-	if !bots.HasPermission(perms, bots.PermissionWorkspaceExec) {
+	if actorUserID == "" || !bots.HasPermission(perms, bots.PermissionWorkspaceExec) {
 		feedback := acpNoWorkspaceExecFeedback("missing_workspace_exec", "You do not have permission to run workspace commands for this bot.")
 		return echo.NewHTTPError(feedback.HTTPStatus, feedback)
 	}

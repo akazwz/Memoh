@@ -47,31 +47,48 @@ func (e *toolEventEmitter) setPromptState(collector *eventCollector, sink EventS
 	e.mu.Unlock()
 }
 
-func (e *toolEventEmitter) emit(ev event.StreamEvent) {
+func (e *toolEventEmitter) emit(ev event.StreamEvent) bool {
 	if e == nil {
-		return
+		return false
 	}
 	e.mu.RLock()
+	defer e.mu.RUnlock()
 	collector := e.collector
 	sink := e.sink
 	limit := e.limit
-	e.mu.RUnlock()
 	ev = LimitStreamEvent(ev, limit)
 	if collector != nil {
-		collector.record(ev)
+		if !collector.record(ev) {
+			return false
+		}
 	}
 	if sink != nil {
 		sink.EmitStreamEvent(ev)
 	}
+	return collector != nil || sink != nil
 }
 
 type eventCollector struct {
 	mu     sync.Mutex
+	ctx    context.Context
 	text   strings.Builder
 	events []event.StreamEvent
 	// transcript is kept separately from the capped UI event buffer.
 	transcript *TranscriptRecorder
 	limit      ToolOutputLimit
+}
+
+func (c *eventCollector) bindContext(ctx context.Context) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	c.ctx = ctx
+	c.mu.Unlock()
+}
+
+func (c *eventCollector) acceptingLocked() bool {
+	return c.ctx == nil || c.ctx.Err() == nil
 }
 
 func newEventCollector(limits ...ToolOutputLimit) *eventCollector {
@@ -82,20 +99,27 @@ func newEventCollector(limits ...ToolOutputLimit) *eventCollector {
 	return &eventCollector{transcript: NewTranscriptRecorder(limit), limit: limit}
 }
 
-func (c *eventCollector) record(ev event.StreamEvent) {
+func (c *eventCollector) record(ev event.StreamEvent) bool {
 	if c == nil {
-		return
+		return false
 	}
 	ev = LimitStreamEvent(ev, c.limit)
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if !c.acceptingLocked() {
+		return false
+	}
 	c.events = appendBoundedStreamEvents(c.events, ev)
 	c.transcript.Add(ev)
+	return true
 }
 
-func (c *eventCollector) apply(n acp.SessionNotification, events []event.StreamEvent) {
+func (c *eventCollector) apply(n acp.SessionNotification, events []event.StreamEvent) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if !c.acceptingLocked() {
+		return false
+	}
 
 	update := n.Update
 	events = limitStreamEvents(events, c.limit)
@@ -106,6 +130,7 @@ func (c *eventCollector) apply(n acp.SessionNotification, events []event.StreamE
 	if update.AgentMessageChunk != nil {
 		c.text.WriteString(contentText(update.AgentMessageChunk.Content))
 	}
+	return true
 }
 
 func limitStreamEvents(events []event.StreamEvent, limit ToolOutputLimit) []event.StreamEvent {
@@ -149,6 +174,13 @@ type acpToolEventMapper struct {
 	promptActive bool
 	quirks       acpprofile.ToolQuirks
 	changed      chan struct{}
+	// tombstones holds the tool calls of the most recently cancelled prompt.
+	// ACP dispatches inbound requests on connection-scoped goroutines, so a
+	// permission request for a stopped turn can arrive after the next prompt
+	// already started; matching it here answers it as cancelled instead of
+	// re-attributing it to the new turn. Replaced wholesale per cancelled
+	// prompt, so the set stays bounded by one turn's tool calls.
+	tombstones map[acpToolStateKey]struct{}
 }
 
 type acpToolStateKey struct {
@@ -412,6 +444,45 @@ func (m *acpToolEventMapper) notifyChangedLocked() {
 	m.changed = make(chan struct{})
 }
 
+// maxTombstonedToolCalls bounds the accumulated tombstone set. Past it the
+// set resets to the newest cancelled turn alone - old residue trades away
+// rather than growing without bound.
+const maxTombstonedToolCalls = 512
+
+// tombstoneActiveToolCalls merges the current prompt's tool calls into the
+// tombstone set. Called when a prompt is cancelled, before setPromptActive
+// wipes the per-prompt states. Merging (not replacing) keeps an earlier
+// cancelled turn's tombstones alive across a rapid double-Stop, whose late
+// callbacks can lag several seconds behind.
+func (m *acpToolEventMapper) tombstoneActiveToolCalls() {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	if m.tombstones == nil || len(m.tombstones)+len(m.tools) > maxTombstonedToolCalls {
+		m.tombstones = make(map[acpToolStateKey]struct{}, len(m.tools))
+	}
+	for key := range m.tools {
+		m.tombstones[key] = struct{}{}
+	}
+	m.mu.Unlock()
+}
+
+func (m *acpToolEventMapper) isTombstoned(sessionID acp.SessionId, toolCallID string) bool {
+	if m == nil {
+		return false
+	}
+	id := strings.TrimSpace(toolCallID)
+	if id == "" {
+		return false
+	}
+	key := acpToolStateKey{sessionID: strings.TrimSpace(string(sessionID)), toolCallID: id}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	_, ok := m.tombstones[key]
+	return ok
+}
+
 func mergePermissionToolUpdate(state *acpToolState, tc acp.ToolCallUpdate) {
 	if state == nil {
 		return
@@ -459,6 +530,9 @@ func cloneACPToolState(state *acpToolState) *acpToolState {
 
 func (m *acpToolEventMapper) ensureTool(sessionID, id string) *acpToolState {
 	key := acpToolStateKey{sessionID: sessionID, toolCallID: id}
+	// A session/update advertising this ID means the agent is genuinely using
+	// it in the live prompt; it must not stay answered-as-cancelled.
+	delete(m.tombstones, key)
 	state := m.tools[key]
 	if state == nil {
 		if len(m.tools) >= maxTrackedACPToolStates {
