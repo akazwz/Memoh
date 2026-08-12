@@ -151,7 +151,10 @@
     },
     "acp": {
       "request_invalid": "Agent 运行实例请求无效，请检查后重试。",
+      "access_forbidden": "你没有权限控制这个 Agent 运行实例。",
       "runtime_not_found": "这个 Agent 运行实例已失效，将重新启动。",
+      "runtime_conflict": "Agent 运行实例尚未准备好执行此操作，请刷新后重试。",
+      "runtime_limit_reached": "当前运行的 Agent 实例过多，请关闭一个后重试。",
       "operation_failed": "Agent 运行实例操作失败，请重试。",
       "turn_replacement_unsupported": "外部 Agent 会话不支持重试或编辑，请改为发送一条新消息。",
       "model_selection_unsupported": "这个外部 Agent 不支持切换模型。",

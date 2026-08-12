@@ -1527,13 +1527,13 @@ const visibleSlashQuickActions = computed(() =>
 const visibleSlashSkills = computed(() =>
   safeSkills.value.filter(skill => slashMatches(skill.name, skill.description ?? '')),
 )
-const boundACPAvailableCommands = computed(() => (
-  boundLiveACPRuntime.value
+const composerACPAvailableCommands = computed(() => (
+  (boundLiveACPRuntime.value || activeIsPendingACP.value)
     ? acpAvailableCommands.value
     : []
 ))
 const visibleACPAgentCommands = computed(() =>
-  visibleACPSlashCommands(boundACPAvailableCommands.value, slashQuery.value),
+  visibleACPSlashCommands(composerACPAvailableCommands.value, slashQuery.value),
 )
 const slashPanelHasResults = computed(() =>
   visibleSlashQuickActions.value.length > 0
@@ -1617,8 +1617,21 @@ function runLocalQuickAction(id: string, text = ''): boolean {
   return false
 }
 
+function localQuickActionBlocked(): boolean {
+  if (pendingFiles.value.length > 0) {
+    composerError.value = t('chat.slash.attachmentsUnsupported')
+    return true
+  }
+  if (requestedSkills.value.length > 0) {
+    composerError.value = t('chat.slash.errorMessages.invalid_skill_slash_syntax')
+    return true
+  }
+  return false
+}
+
 function selectSlashQuickAction(action: { id: string, label: string }) {
   slashPanelSuppressedPrefix.value = ''
+  if (localQuickActionBlocked()) return
   if (runLocalQuickAction(action.id, action.label)) {
     inputText.value = ''
     saveInputDraft(inputDraftKey.value, '')
@@ -2759,6 +2772,7 @@ async function handleSend() {
     || composerHasNoModel.value
   ) return
   const localAction = localQuickActionIDForSlash(text)
+  if (localAction && localQuickActionBlocked()) return
   if (localAction && runLocalQuickAction(localAction, text)) {
     inputText.value = ''
     saveInputDraft(inputDraftKey.value, '')

@@ -14,6 +14,7 @@ var (
 	ErrModeSelectionUnsupported = errors.New("ACP agent does not expose selectable session modes")
 	ErrModeUnavailable          = errors.New("ACP session mode is not available for this session")
 	ErrModeIDRequired           = errors.New("mode_id is required")
+	ErrAgentCommandUnavailable  = errors.New("agent command not advertised by the live ACP session")
 )
 
 // ModeInfo is one mode declared by the ACP Agent. Its ID is an opaque
@@ -72,7 +73,7 @@ func availableCommandsFromACP(commands []acp.AvailableCommand) []AvailableComman
 	out := make([]AvailableCommandInfo, 0, len(commands))
 	for _, command := range commands {
 		name := command.Name
-		if name == "" || strings.TrimSpace(name) != name || strings.IndexFunc(name, unicode.IsSpace) >= 0 {
+		if name == "" || strings.HasPrefix(name, "/") || strings.TrimSpace(name) != name || strings.IndexFunc(name, unicode.IsSpace) >= 0 {
 			continue
 		}
 		item := AvailableCommandInfo{

@@ -208,17 +208,17 @@ type PromptInput struct {
 	Sink                  client.EventSink
 	RuntimeGuard          func(context.Context) error
 	// RequiredCommand is the exact agent-command selector the admission layer
-	// matched against a live runtime. The pool re-validates it against the
-	// FINAL session inside the runtime operation lock: a runtime replaced or
-	// updated between admission and prompt must still advertise the command,
-	// or the turn fails with ErrAgentCommandUnavailable instead of delivering
-	// a stale `/name args` as prose to an agent that never declared it.
+	// matched against a live runtime. After applying per-prompt configuration,
+	// the client Session re-validates it against its latest command snapshot at
+	// the dispatch boundary: a runtime replaced or updated between admission
+	// and prompt must still advertise the command, or the turn fails with
+	// ErrAgentCommandUnavailable instead of delivering stale slash text.
 	RequiredCommand string
 }
 
 // ErrAgentCommandUnavailable reports that PromptInput.RequiredCommand is not
 // advertised by the session that would actually receive the prompt.
-var ErrAgentCommandUnavailable = errors.New("agent command not advertised by the live ACP session")
+var ErrAgentCommandUnavailable = client.ErrAgentCommandUnavailable
 
 // CreateRuntimeInput describes a pre-session runtime creation request.
 type CreateRuntimeInput struct {
@@ -732,13 +732,6 @@ func (p *SessionPool) promptOnHandle(ctx context.Context, h *runtimeHandle, inpu
 	// per-prompt context or sink behind.
 	defer h.clearActive()
 
-	if input.RequiredCommand != "" && !sess.AdvertisesCommand(input.RequiredCommand) {
-		// Admission matched the selector against a runtime that has since been
-		// replaced or updated its command set; fail closed like admission does
-		// rather than deliver the stale command as prose.
-		return client.PromptResult{}, false, ErrAgentCommandUnavailable
-	}
-
 	if err := applyPromptConfig(ctx, sess, input); err != nil {
 		if isPromptConfigSelectionError(err) {
 			return client.PromptResult{}, false, err
@@ -790,6 +783,7 @@ func (p *SessionPool) promptOnHandle(ctx context.Context, h *runtimeHandle, inpu
 		ToolOutputLimit:   input.ToolOutputLimit,
 		Images:            input.Images,
 		AllowResourceOnly: len(input.AttachmentReferences) > 0 && len(resources) > 0,
+		RequiredCommand:   input.RequiredCommand,
 	}
 	result, err := sess.PromptWithToolContextOptions(ctx, input.Prompt, resources, toolCtx, options, toolSink)
 	if errors.Is(err, client.ErrImagePromptUnsupported) && len(options.Images) > 0 && input.CanFallbackImagesToFiles {
@@ -803,7 +797,8 @@ func (p *SessionPool) promptOnHandle(ctx context.Context, h *runtimeHandle, inpu
 	if err != nil {
 		if errors.Is(err, client.ErrImagePromptUnsupported) ||
 			errors.Is(err, client.ErrInvalidPromptImage) ||
-			errors.Is(err, client.ErrPromptRequired) {
+			errors.Is(err, client.ErrPromptRequired) ||
+			errors.Is(err, client.ErrAgentCommandUnavailable) {
 			return result, false, err
 		}
 		if ctx.Err() != nil {
@@ -824,8 +819,14 @@ func (p *SessionPool) promptOnHandle(ctx context.Context, h *runtimeHandle, inpu
 			// window means the runtime's unwinding state is unknown - recycle
 			// it rather than hand the next turn a session with a live stale
 			// callback.
-			if !sess.WaitDecisionCallbacksIdle(decisionQuiesceTimeout) {
-				_ = p.teardown(h) //nolint:contextcheck // lifecycle close uses background ctx.
+			if errors.Is(err, client.ErrPromptCancellationUnconfirmed) ||
+				!sess.WaitDecisionCallbacksIdle(decisionQuiesceTimeout) {
+				// An unknown cancellation state can include a SendNotification
+				// blocked in the connection write lock. Break the transport first;
+				// graceful teardown would otherwise block trying session/close behind
+				// that same writer and never reach the process close.
+				_ = sess.ForceClose() //nolint:contextcheck // forced lifecycle teardown must outlive the cancelled turn.
+				_ = p.teardown(h)     //nolint:contextcheck // lifecycle close uses background ctx.
 			}
 			return result, false, err
 		}
@@ -1050,8 +1051,8 @@ func (p *SessionPool) startRuntime(ctx context.Context, h *runtimeHandle, opts s
 	h.state.Unlock()
 
 	fail := func(err error) error {
-		// The HTTP layer returns a short, redacted acp_runtime_start_failed body,
-		// so the underlying cause must be recorded here or it is lost entirely.
+		// Public surfaces return a stable, redacted runtime-operation error, so
+		// the underlying cause must be recorded here or it is lost entirely.
 		if err != nil {
 			p.logger.Warn("ACP runtime start failed",
 				slog.String("bot_id", h.botID),
@@ -1955,6 +1956,22 @@ func (s *promptToolEventSink) EmitStreamEvent(ev event.StreamEvent) {
 	if s.next != nil {
 		s.next.EmitStreamEvent(ev)
 	}
+}
+
+// RecordTerminalDecision updates the prompt's final snapshot without
+// forwarding a late frame to the cancelled live stream. EventAbort will carry
+// this corrected transcript as the one authoritative terminal event.
+func (s *promptToolEventSink) RecordTerminalDecision(ev event.StreamEvent) {
+	if s == nil {
+		return
+	}
+	ev = client.LimitStreamEvent(ev, s.limit)
+	s.mu.Lock()
+	s.events = appendBoundedPromptEvents(s.events, ev)
+	if s.transcript != nil {
+		s.transcript.Add(ev)
+	}
+	s.mu.Unlock()
 }
 
 func (s *promptToolEventSink) EmitToolStreamEvent(toolEvent mcp.ToolStreamEvent) {

@@ -36,7 +36,10 @@ const (
 	CodeProfileTitleModelInvalid         Code = "profile.title_model_invalid"
 	CodeProfileUpdateFailed              Code = "profile.update_failed"
 	CodeACPRequestInvalid                Code = "acp.request_invalid"
+	CodeACPAccessForbidden               Code = "acp.access_forbidden"
 	CodeACPRuntimeNotFound               Code = "acp.runtime_not_found"
+	CodeACPRuntimeConflict               Code = "acp.runtime_conflict"
+	CodeACPRuntimeLimitReached           Code = "acp.runtime_limit_reached"
 	CodeACPOperationFailed               Code = "acp.operation_failed"
 	CodeACPTurnReplacementUnsupported    Code = "acp.turn_replacement_unsupported"
 	CodeACPModelSelectionUnsupported     Code = "acp.model_selection_unsupported"
@@ -179,9 +182,21 @@ var catalog = map[Code]Definition{
 		HTTPStatus: http.StatusBadRequest,
 		Detail:     "The Agent runtime request is invalid. Check the request and try again.",
 	},
+	CodeACPAccessForbidden: {
+		HTTPStatus: http.StatusForbidden,
+		Detail:     "You do not have permission to control this Agent runtime.",
+	},
 	CodeACPRuntimeNotFound: {
 		HTTPStatus: http.StatusNotFound,
 		Detail:     "The ACP runtime is no longer available.",
+	},
+	CodeACPRuntimeConflict: {
+		HTTPStatus: http.StatusConflict,
+		Detail:     "The Agent runtime is not ready for this operation. Refresh and try again.",
+	},
+	CodeACPRuntimeLimitReached: {
+		HTTPStatus: http.StatusTooManyRequests,
+		Detail:     "Too many Agent runtimes are active. Close one and try again.",
 	},
 	CodeACPOperationFailed: {
 		HTTPStatus: http.StatusInternalServerError,

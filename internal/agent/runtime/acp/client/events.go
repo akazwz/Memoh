@@ -21,6 +21,13 @@ type EventSink interface {
 	EmitStreamEvent(event.StreamEvent)
 }
 
+// TerminalDecisionSink records a late durable approval/Form terminal state
+// without publishing another live frame. The pool's prompt snapshot sink uses
+// it so EventAbort remains the single authoritative terminal UI event.
+type TerminalDecisionSink interface {
+	RecordTerminalDecision(event.StreamEvent)
+}
+
 type EventSinkFunc func(event.StreamEvent)
 
 func (f EventSinkFunc) EmitStreamEvent(ev event.StreamEvent) {
@@ -68,6 +75,47 @@ func (e *toolEventEmitter) emit(ev event.StreamEvent) bool {
 	return collector != nil || sink != nil
 }
 
+// emitTerminalDecision is the only event path allowed after the owning prompt
+// context is cancelled. Durable approval/Form cancellation completes on a
+// detached context, so its terminal snapshot must still replace the pending
+// snapshot persisted for EventAbort. Ordinary Agent notifications continue to
+// use emit and remain fenced by the prompt context.
+func (e *toolEventEmitter) emitTerminalDecision(ev event.StreamEvent) bool {
+	if e == nil || !isTerminalDecisionEvent(ev) {
+		return false
+	}
+	// While the prompt is live, preserve the ordinary terminal update path so
+	// approval/Form cards change immediately. emit returns false when the bound
+	// collector has crossed its cancellation boundary; only that late path is
+	// folded silently into the final Abort snapshot below.
+	if e.emit(ev) {
+		return true
+	}
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	collector := e.collector
+	sink := e.sink
+	ev = LimitStreamEvent(ev, e.limit)
+	if collector != nil {
+		collector.recordTerminalDecision(ev)
+	}
+	if terminalSink, ok := sink.(TerminalDecisionSink); ok {
+		terminalSink.RecordTerminalDecision(ev)
+	}
+	// The prompt's live sink is tied to the cancelled stream context. Do not
+	// resurrect a late UI emission here; collectors carry the corrected terminal
+	// snapshot into the single authoritative EventAbort payload.
+	return collector != nil || sink != nil
+}
+
+func isTerminalDecisionEvent(ev event.StreamEvent) bool {
+	if ev.Type != event.ToolApprovalRequest && ev.Type != event.UserInputRequest {
+		return false
+	}
+	status := strings.TrimSpace(ev.Status)
+	return status != "" && !strings.EqualFold(status, "pending")
+}
+
 type eventCollector struct {
 	mu     sync.Mutex
 	ctx    context.Context
@@ -112,6 +160,17 @@ func (c *eventCollector) record(ev event.StreamEvent) bool {
 	c.events = appendBoundedStreamEvents(c.events, ev)
 	c.transcript.Add(ev)
 	return true
+}
+
+func (c *eventCollector) recordTerminalDecision(ev event.StreamEvent) {
+	if c == nil || !isTerminalDecisionEvent(ev) {
+		return
+	}
+	ev = LimitStreamEvent(ev, c.limit)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.events = appendBoundedStreamEvents(c.events, ev)
+	c.transcript.Add(ev)
 }
 
 func (c *eventCollector) apply(n acp.SessionNotification, events []event.StreamEvent) bool {

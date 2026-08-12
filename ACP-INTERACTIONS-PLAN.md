@@ -1,6 +1,6 @@
 # ACP 交互改造计划与范围
 
-> 状态：实现完成，未提交，待人工 QA，2026-08-12
+> 状态：Draft PR #1002；评审修复完成，待重新人工 QA，2026-08-12
 >
 > 实现说明：[ACP-INTERACTIONS-IMPLEMENTATION.md](./ACP-INTERACTIONS-IMPLEMENTATION.md)
 >

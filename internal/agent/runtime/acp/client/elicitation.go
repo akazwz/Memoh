@@ -296,7 +296,7 @@ func (c *clientCallbacks) emitElicitationUserInput(req userinput.Request) bool {
 	if status == "" {
 		status = userinput.StatusPending
 	}
-	return c.events.emit(event.StreamEvent{
+	ev := event.StreamEvent{
 		Type:        event.UserInputRequest,
 		ToolCallID:  req.ToolCallID,
 		ToolName:    req.ToolName,
@@ -305,7 +305,11 @@ func (c *clientCallbacks) emitElicitationUserInput(req userinput.Request) bool {
 		ShortID:     req.ShortID,
 		Status:      status,
 		Metadata:    userinput.DeferredMetadata(req),
-	})
+	}
+	if !strings.EqualFold(status, userinput.StatusPending) {
+		return c.events.emitTerminalDecision(ev)
+	}
+	return c.events.emit(ev)
 }
 
 func elicitationFormInput(message string, schema map[string]any) (map[string]any, elicitationFormMapping, error) {

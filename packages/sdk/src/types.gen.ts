@@ -4031,11 +4031,19 @@ export type PostBotsByBotIdAcpRuntimesErrors = {
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ApperrorProblem;
+    /**
+     * Not Found
+     */
+    404: ApperrorProblem;
     /**
      * Too Many Requests
      */
-    429: HandlersErrorResponse;
+    429: ApperrorProblem;
+    /**
+     * Internal Server Error
+     */
+    500: ApperrorProblem;
 };
 
 export type PostBotsByBotIdAcpRuntimesError = PostBotsByBotIdAcpRuntimesErrors[keyof PostBotsByBotIdAcpRuntimesErrors];
@@ -4069,15 +4077,19 @@ export type DeleteBotsByBotIdAcpRuntimesByRuntimeIdErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ApperrorProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ApperrorProblem;
     /**
      * Not Found
      */
     404: ApperrorProblem;
+    /**
+     * Conflict
+     */
+    409: ApperrorProblem;
     /**
      * Internal Server Error
      */
@@ -4113,15 +4125,19 @@ export type GetBotsByBotIdAcpRuntimesByRuntimeIdErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ApperrorProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ApperrorProblem;
     /**
      * Not Found
      */
     404: ApperrorProblem;
+    /**
+     * Conflict
+     */
+    409: ApperrorProblem;
     /**
      * Internal Server Error
      */
@@ -4166,7 +4182,7 @@ export type PatchBotsByBotIdAcpRuntimesByRuntimeIdModeErrors = {
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ApperrorProblem;
     /**
      * Not Found
      */
@@ -4174,7 +4190,7 @@ export type PatchBotsByBotIdAcpRuntimesByRuntimeIdModeErrors = {
     /**
      * Conflict
      */
-    409: HandlersErrorResponse;
+    409: ApperrorProblem;
     /**
      * Internal Server Error
      */
@@ -4223,7 +4239,7 @@ export type PatchBotsByBotIdAcpRuntimesByRuntimeIdModelErrors = {
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ApperrorProblem;
     /**
      * Not Found
      */
@@ -4231,7 +4247,7 @@ export type PatchBotsByBotIdAcpRuntimesByRuntimeIdModelErrors = {
     /**
      * Conflict
      */
-    409: HandlersErrorResponse;
+    409: ApperrorProblem;
     /**
      * Internal Server Error
      */
@@ -4280,7 +4296,7 @@ export type PatchBotsByBotIdAcpRuntimesByRuntimeIdReasoningErrors = {
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ApperrorProblem;
     /**
      * Not Found
      */
@@ -4288,7 +4304,7 @@ export type PatchBotsByBotIdAcpRuntimesByRuntimeIdReasoningErrors = {
     /**
      * Conflict
      */
-    409: HandlersErrorResponse;
+    409: ApperrorProblem;
     /**
      * Internal Server Error
      */
@@ -9339,15 +9355,19 @@ export type GetBotsByBotIdSessionsBySessionIdAcpRuntimeErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ApperrorProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ApperrorProblem;
     /**
      * Not Found
      */
     404: ApperrorProblem;
+    /**
+     * Conflict
+     */
+    409: ApperrorProblem;
     /**
      * Internal Server Error
      */
@@ -9385,19 +9405,27 @@ export type PostBotsByBotIdSessionsBySessionIdAcpRuntimeErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ApperrorProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ApperrorProblem;
     /**
      * Not Found
      */
     404: ApperrorProblem;
     /**
+     * Conflict
+     */
+    409: ApperrorProblem;
+    /**
      * Internal Server Error
      */
     500: ApperrorProblem;
+    /**
+     * Bad Gateway
+     */
+    502: ApperrorProblem;
 };
 
 export type PostBotsByBotIdSessionsBySessionIdAcpRuntimeError = PostBotsByBotIdSessionsBySessionIdAcpRuntimeErrors[keyof PostBotsByBotIdSessionsBySessionIdAcpRuntimeErrors];
@@ -9438,11 +9466,15 @@ export type PatchBotsByBotIdSessionsBySessionIdAcpRuntimeModeErrors = {
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ApperrorProblem;
     /**
      * Not Found
      */
     404: ApperrorProblem;
+    /**
+     * Conflict
+     */
+    409: ApperrorProblem;
     /**
      * Internal Server Error
      */
@@ -9491,11 +9523,15 @@ export type PatchBotsByBotIdSessionsBySessionIdAcpRuntimeModelErrors = {
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ApperrorProblem;
     /**
      * Not Found
      */
     404: ApperrorProblem;
+    /**
+     * Conflict
+     */
+    409: ApperrorProblem;
     /**
      * Internal Server Error
      */
@@ -9544,11 +9580,15 @@ export type PatchBotsByBotIdSessionsBySessionIdAcpRuntimeReasoningErrors = {
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ApperrorProblem;
     /**
      * Not Found
      */
     404: ApperrorProblem;
+    /**
+     * Conflict
+     */
+    409: ApperrorProblem;
     /**
      * Internal Server Error
      */

@@ -86,6 +86,10 @@ type PromptOptions struct {
 	ToolOutputLimit   ToolOutputLimit
 	Images            []PromptImage
 	AllowResourceOnly bool
+	// RequiredCommand is an exact, opaque Agent command name. When set, the
+	// Session rechecks its latest available_commands snapshot immediately
+	// before dispatching the prompt.
+	RequiredCommand string
 }
 
 type Session struct {
@@ -726,6 +730,9 @@ func (s *Session) PromptWithToolContextOptions(ctx context.Context, prompt strin
 			callbacks.setPromptState(nil, nil, ToolSessionContext{}, ToolOutputLimit{})
 		}
 	}()
+	if options.RequiredCommand != "" && !s.AdvertisesCommand(options.RequiredCommand) {
+		return PromptResult{}, ErrAgentCommandUnavailable
+	}
 
 	resp, err := conn.Prompt(promptCtx, acp.PromptRequest{
 		SessionId: sessionID,
@@ -918,6 +925,18 @@ func (s *Session) WaitDecisionCallbacksIdle(timeout time.Duration) bool {
 }
 
 func (s *Session) Close() error {
+	return s.close(false)
+}
+
+// ForceClose tears down the transport before attempting any protocol-level
+// cleanup. It is reserved for an unconfirmed prompt cancellation, where a
+// blocked JSON-RPC write can otherwise prevent graceful session/close from
+// ever reaching the process close that would unblock it.
+func (s *Session) ForceClose() error {
+	return s.close(true)
+}
+
+func (s *Session) close(force bool) error {
 	if s == nil {
 		return nil
 	}
@@ -940,7 +959,7 @@ func (s *Session) Close() error {
 	if promptCancel != nil {
 		promptCancel()
 	}
-	if promptDone != nil {
+	if !force && promptDone != nil {
 		timer := time.NewTimer(500 * time.Millisecond)
 		select {
 		case <-promptDone:
@@ -952,6 +971,24 @@ func (s *Session) Close() error {
 			default:
 			}
 		}
+	}
+	if force {
+		// Close the process/pipe before any graceful JSON-RPC request. This is the
+		// operation that releases a writer stuck behind connection.writeMu.
+		if cancel != nil {
+			cancel()
+		}
+		var closeErr error
+		if proc != nil {
+			closeErr = proc.Close()
+		}
+		if callbacks != nil {
+			callbacks.close()
+		}
+		if reverseHTTPStop != nil {
+			reverseHTTPStop()
+		}
+		return closeErr
 	}
 	if conn != nil && sessionID != "" {
 		ctx, cancelClose := context.WithTimeout(context.Background(), 2*time.Second)

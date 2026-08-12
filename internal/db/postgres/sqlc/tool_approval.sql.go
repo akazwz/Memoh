@@ -282,7 +282,7 @@ INSERT INTO tool_approval_requests (
   $7,
   $8,
   $9,
-  $10,
+  COALESCE($10::jsonb, '[]'::jsonb),
   next_short_id.short_id,
   $11,
   $12,

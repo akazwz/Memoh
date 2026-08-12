@@ -1,6 +1,6 @@
 # Live ACP 交互与 Web Agent commands 实现说明
 
-> 状态：当前工作树已实现，未提交，待人工 QA，2026-08-12
+> 状态：Draft PR #1002；评审修复完成，待重新人工 QA，2026-08-12
 >
 > 范围与问题归类：[ACP-INTERACTIONS-PLAN.md](./ACP-INTERACTIONS-PLAN.md)
 >
@@ -123,8 +123,10 @@ Form 的数据库记录和 UI 投影可以跨浏览器刷新保留，但 field m
 
 runtime 复用以静默为前提。ACP SDK 在连接级 goroutine 上分发 permission/Form callback，它们可以在 prompt 取消后存活，所以：
 
+- Stop 不会立即丢弃本地 `session/prompt` JSON-RPC 请求。Client 发出 `session/cancel` 后，在有界宽限内继续等待同一 PromptResponse，并利用 SDK 的 response watermark 排空该响应前所有 `session/update`；
 - 被取消轮次的 tool call 会记入 tombstone，晚到的同 ID permission 请求直接得到 cancelled，不会关联到下一轮、也不会以下一轮身份建审批行；Agent 在新一轮 session/update 里重新声明同 ID 时立即解除；
-- 释放 runtime 操作锁前，取消路径等待所有在途 decision callback 退出（约束在数秒的宽限窗口内）；超时未静默的 runtime 直接回收，不交给下一轮；
+- 只有 PromptResponse、它之前的通知和已进入的 decision callback 都完成后，runtime 才能热复用。任一环在宽限内无法确认，就回收 runtime，不把未知的上轮状态交给下一轮；
+- Stop 完成的 permission/Form 以 durable `cancelled`/`canceled` 终态替换 pending 快照，但不额外发送一个迟到的 live frame；最终由唯一的 EventAbort 带出已收口的 partial transcript；
 - prompt 完成与 Stop 同瞬发生时，Stop 获胜：完整输出照常保存，但本轮按 aborted 持久化，不做 memory extraction，终态事件是 abort 而不是 end。
 
 prompt 完成与取消同时发生时，清理逻辑会再次检查 context，避免 pending waiter 因 select 竞争残留。
@@ -158,6 +160,8 @@ Web registry 按 `bot_id + session_id` 保存最近一次 RuntimeStatus。以下
 
 `available_commands_update` 采用 full replacement 语义。Session 保存 name、description 和 unstructured input hint，slash picker 将它们放进单独的 Agent commands 分组。
 
+用户选好 Codex/Claude Code 但还没有发送第一条消息时，Web 会从 pending warm runtime 显示它已声明的 commands。这只是发现性数据；发送后仍由 Server 对绑定的 live session 做最终裁决。
+
 command name 视为 opaque、区分大小写。名称不能是空字符串、带空白或以 `/` 开头；`review:deep`、`plan/create` 和 Unicode 名称可以使用。选择命令只把 `/<name>` 写进输入框，有 input hint 时保留一个空格，不自动发送。
 
 Memoh 保留 `/help`、`/new`、`/permission`、`/skill`。Agent 声明同名命令也不会覆盖这些控制项。
@@ -176,7 +180,7 @@ Web 原始输入
 
 Server 比较当前 session id、live ACP session 和完整 command name。匹配后不剥离 selector，也不把命令解释成 Memoh skill，因此引号、连续空格和参数可以原样到达 Agent。
 
-admission 通过的 selector 随请求带到 SessionPool，在 runtime 操作锁内对**最终**接收 prompt 的 session 复验一次。runtime 在 admission 与 prompt 之间被 reaper 回收、替换或更新了命令集时，本轮以稳定错误 `acp_agent_command_stale` 失败并回滚已入库的 user message，而不是把过期的 `/name args` 当纯文本投给一个从未声明它的新 Agent。
+admission 通过的 selector 随请求带到 SessionPool。每轮 model/reasoning 配置先应用，然后在最终 `session/prompt` 发送边界对**真正接收 prompt**的 Session 和它最新的 command snapshot 复验。runtime 在 admission 与 prompt 之间被 reaper 回收、替换，或 Agent 在配置更新中撤销了命令时，本轮以稳定错误 `acp_agent_command_stale` 失败并回滚已入库的 user message，而不是把过期的 `/name args` 当纯文本投给一个从未声明它的新 Agent。
 
 ACP Agent command 可以带附件。Memoh quick action 拒绝附件由 Server 在 WS 命令分支强制（稳定错误 `slash_attachments_unsupported`），Web 客户端的拦截只是前置体验，避免 `/help`、`/permission` 等本地命令消费文本后静默丢掉文件。
 
@@ -225,6 +229,8 @@ selected_option_id TEXT NOT NULL DEFAULT ''
 ```
 
 operation CHECK 同时加入 `permission`。`0001_init.up.sql` 已同步最终 schema，sqlc 使用显式列，因此旧二进制可以忽略新增列。
+
+Create query 在 SQL 边界将 `NULL options` 收口为 `[]`。正常 domain service 本来就会传非空 JSON，这一层保证内部直接 sqlc 调用者也不会绕过 `NOT NULL` 合同。
 
 推荐顺序：
 

@@ -56,7 +56,7 @@ INSERT INTO tool_approval_requests (
   sqlc.arg(tool_name),
   sqlc.arg(operation),
   sqlc.arg(tool_input),
-  sqlc.arg(options),
+  COALESCE(sqlc.arg(options)::jsonb, '[]'::jsonb),
   next_short_id.short_id,
   sqlc.narg(runtime_fencing_token),
   sqlc.narg(requested_by_channel_identity_id),

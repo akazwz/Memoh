@@ -151,7 +151,10 @@
     },
     "acp": {
       "request_invalid": "The Agent runtime request is invalid. Check the request and try again.",
+      "access_forbidden": "You do not have permission to control this Agent runtime.",
       "runtime_not_found": "That Agent runtime is no longer available. It will be started again.",
+      "runtime_conflict": "The Agent runtime is not ready for this operation. Refresh and try again.",
+      "runtime_limit_reached": "Too many Agent runtimes are active. Close one and try again.",
       "operation_failed": "The Agent runtime operation failed. Please try again.",
       "turn_replacement_unsupported": "Retry and edit are unavailable for external agent sessions. Send a new message instead.",
       "model_selection_unsupported": "This external agent does not support model selection.",

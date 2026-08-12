@@ -14,7 +14,6 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/labstack/echo/v4"
 
-	acpfeedback "github.com/memohai/memoh/internal/agent/decision/feedback"
 	acpagent "github.com/memohai/memoh/internal/agent/runtime/acp"
 	acpclient "github.com/memohai/memoh/internal/agent/runtime/acp/client"
 	acpprofile "github.com/memohai/memoh/internal/agent/runtime/acp/profile"
@@ -301,13 +300,9 @@ func TestACPRuntimeHandlerEnsureRejectsMissingRuntimeOwner(t *testing.T) {
 	ctx.SetParamValues(botID, sessionID)
 
 	err := handler.EnsureRuntime(ctx)
-	var httpErr *echo.HTTPError
-	if !errors.As(err, &httpErr) || httpErr.Code != http.StatusConflict {
-		t.Fatalf("EnsureRuntime() error = %v, want %d", err, http.StatusConflict)
-	}
-	feedback, ok := httpErr.Message.(*acpfeedback.Error)
-	if !ok || feedback.Code != acpfeedback.CodeRuntimeOwnerMissing {
-		t.Fatalf("feedback = %#v, want runtime owner missing", httpErr.Message)
+	problem, ok := apperror.ProblemFrom(err, "")
+	if !ok || problem.Status != http.StatusConflict || problem.Code != string(apperror.CodeACPRuntimeConflict) {
+		t.Fatalf("EnsureRuntime() error = %v, want %d %s", err, http.StatusConflict, apperror.CodeACPRuntimeConflict)
 	}
 	if pool.ensureInput.BotID != "" {
 		t.Fatalf("pool should not be called without runtime owner: %#v", pool.ensureInput)
@@ -677,9 +672,9 @@ func TestACPRuntimeHandlerCreateRuntimeRejectsDisabledAgent(t *testing.T) {
 	ctx.SetParamValues(botID)
 
 	err := handler.CreateRuntime(ctx)
-	var httpErr *echo.HTTPError
-	if !errors.As(err, &httpErr) || httpErr.Code != http.StatusForbidden {
-		t.Fatalf("CreateRuntime() error = %v, want %d", err, http.StatusForbidden)
+	problem, ok := apperror.ProblemFrom(err, "")
+	if !ok || problem.Status != http.StatusForbidden || problem.Code != string(apperror.CodeACPAccessForbidden) {
+		t.Fatalf("CreateRuntime() error = %v, want %d %s", err, http.StatusForbidden, apperror.CodeACPAccessForbidden)
 	}
 	if pool.createInput.BotID != "" {
 		t.Fatalf("pool should not be called for a disabled agent: %#v", pool.createInput)
@@ -719,13 +714,9 @@ func TestACPRuntimeHandlerCreateRuntimeRejectsUnconfiguredAgent(t *testing.T) {
 	ctx.SetParamValues(botID)
 
 	err := handler.CreateRuntime(ctx)
-	var httpErr *echo.HTTPError
-	if !errors.As(err, &httpErr) || httpErr.Code != http.StatusBadRequest {
-		t.Fatalf("CreateRuntime() error = %v, want %d", err, http.StatusBadRequest)
-	}
-	feedback, ok := httpErr.Message.(*acpfeedback.Error)
-	if !ok || feedback.Code != acpfeedback.CodeAgentNotConfigured {
-		t.Fatalf("feedback = %#v, want code %s", httpErr.Message, acpfeedback.CodeAgentNotConfigured)
+	problem, ok := apperror.ProblemFrom(err, "")
+	if !ok || problem.Status != http.StatusBadRequest || problem.Code != string(apperror.CodeACPRequestInvalid) {
+		t.Fatalf("CreateRuntime() error = %v, want %d %s", err, http.StatusBadRequest, apperror.CodeACPRequestInvalid)
 	}
 	if pool.createInput.BotID != "" {
 		t.Fatalf("pool should not be called for an unconfigured agent: %#v", pool.createInput)
@@ -759,9 +750,9 @@ func TestACPRuntimeHandlerCreateRuntimeMapsCapToTooManyRequests(t *testing.T) {
 	ctx.SetParamValues(botID)
 
 	err := handler.CreateRuntime(ctx)
-	var httpErr *echo.HTTPError
-	if !errors.As(err, &httpErr) || httpErr.Code != http.StatusTooManyRequests {
-		t.Fatalf("CreateRuntime() error = %v, want %d", err, http.StatusTooManyRequests)
+	problem, ok := apperror.ProblemFrom(err, "")
+	if !ok || problem.Status != http.StatusTooManyRequests || problem.Code != string(apperror.CodeACPRuntimeLimitReached) {
+		t.Fatalf("CreateRuntime() error = %v, want %d %s", err, http.StatusTooManyRequests, apperror.CodeACPRuntimeLimitReached)
 	}
 }
 
@@ -792,16 +783,15 @@ func TestACPRuntimeHandlerCreateRuntimeRedactsStartFailure(t *testing.T) {
 	ctx.SetParamValues(botID)
 
 	err := handler.CreateRuntime(ctx)
-	var httpErr *echo.HTTPError
-	if !errors.As(err, &httpErr) || httpErr.Code != http.StatusInternalServerError {
-		t.Fatalf("CreateRuntime() error = %v, want %d", err, http.StatusInternalServerError)
+	problem, ok := apperror.ProblemFrom(err, "")
+	if !ok || problem.Status != http.StatusInternalServerError || problem.Code != string(apperror.CodeACPOperationFailed) {
+		t.Fatalf("CreateRuntime() error = %v, want %d %s", err, http.StatusInternalServerError, apperror.CodeACPOperationFailed)
 	}
-	feedback, ok := httpErr.Message.(*acpfeedback.Error)
-	if !ok || feedback.Code != acpfeedback.CodeRuntimeStartFailed {
-		t.Fatalf("feedback = %#v, want code %s", httpErr.Message, acpfeedback.CodeRuntimeStartFailed)
+	if strings.Contains(problem.Detail, "/Users/alice") || strings.Contains(problem.Detail, "sk-secret") {
+		t.Fatalf("runtime start problem leaked raw error: %q", problem.Detail)
 	}
-	if strings.Contains(feedback.Message, "/Users/alice") || strings.Contains(feedback.Message, "sk-secret") {
-		t.Fatalf("runtime start feedback leaked raw error: %q", feedback.Message)
+	if cause := apperror.CauseOf(err); cause == nil || !strings.Contains(cause.Error(), "sk-secret") {
+		t.Fatalf("runtime start cause = %v, want private diagnostic", cause)
 	}
 }
 
@@ -1013,6 +1003,40 @@ func TestACPRuntimeHandlerCloseRuntimeToleratesMissingRuntime(t *testing.T) {
 	}
 	if pool.closedBotID != botID || pool.closedRuntimeID != "rt_gone" {
 		t.Fatalf("CloseRuntime call = %q %q", pool.closedBotID, pool.closedRuntimeID)
+	}
+}
+
+func TestACPRuntimeHandlerCloseRuntimeToleratesReapedRuntimeLookup(t *testing.T) {
+	botID := "11111111-1111-1111-1111-111111111111"
+	queries := acpRuntimeQueries{
+		bot: testBotRow(botID, acpEnabledBotMetadata()),
+	}
+	pool := &fakeACPRuntimePool{
+		statusErr: acpagent.ErrRuntimeNotFound,
+	}
+	handler := newACPRuntimeHandler(
+		pool,
+		session.NewService(nil, queries, nil),
+		bots.NewService(nil, queries),
+		newTestAdminAccountService("admin"),
+	)
+
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodDelete, "/bots/"+botID+"/acp-runtimes/rt_gone", nil)
+	rec := httptest.NewRecorder()
+	ctx := testAuthContext(e, req, rec, "user-1")
+	ctx.SetPath("/bots/:bot_id/acp-runtimes/:runtime_id")
+	ctx.SetParamNames("bot_id", "runtime_id")
+	ctx.SetParamValues(botID, "rt_gone")
+
+	if err := handler.CloseRuntime(ctx); err != nil {
+		t.Fatalf("CloseRuntime() error = %v", err)
+	}
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusNoContent)
+	}
+	if pool.closedRuntimeID != "" {
+		t.Fatalf("CloseRuntime should not reach the pool, got %q", pool.closedRuntimeID)
 	}
 }
 

@@ -926,6 +926,15 @@ func (c *clientCallbacks) requireToolApproval(ctx context.Context, toolCallID, t
 	if strings.TrimSpace(session.BotID) == "" || strings.TrimSpace(session.SessionID) == "" {
 		return toolapproval.FlowResult{}, nil
 	}
+	cancelOnAbort := func(ctx context.Context, req toolapproval.Request, reason string) (toolapproval.Request, error) {
+		// ACP can cancel one nested request without stopping its owning prompt.
+		// Only a stopped run owns the session-wide cancellation semantics; an
+		// isolated request cancellation retains the legacy single-row rejection.
+		if session.RunContext == nil || session.RunContext.Err() == nil {
+			return c.approval.Reject(ctx, req.ID, "", reason)
+		}
+		return c.cancelApprovalOnAbort(ctx, req, reason)
+	}
 	ctx = runtimefence.WithContext(ctx, session.RuntimeFence)
 	return toolapproval.RunFlow(ctx, c.approval, toolapproval.FlowRequest{
 		Input: toolapproval.CreatePendingInput{
@@ -946,7 +955,36 @@ func (c *clientCallbacks) requireToolApproval(ctx context.Context, toolCallID, t
 		Interactive:    strings.TrimSpace(session.RunID) != "",
 		RegisterWaiter: c.approval.RegisterWaiter,
 		Emit:           c.emitToolApprovalRequest,
+		CancelOnAbort:  cancelOnAbort,
 	})
+}
+
+func (c *clientCallbacks) cancelApprovalOnAbort(ctx context.Context, req toolapproval.Request, reason string) (toolapproval.Request, error) {
+	canceller, ok := c.approval.(interface {
+		CancelPendingForSession(context.Context, string, string, string) ([]toolapproval.Request, error)
+	})
+	if !ok || strings.TrimSpace(req.BotID) == "" || strings.TrimSpace(req.SessionID) == "" {
+		return c.approval.Reject(ctx, req.ID, "", reason)
+	}
+	cancelled, err := canceller.CancelPendingForSession(ctx, req.BotID, req.SessionID, reason)
+	if err != nil {
+		return toolapproval.Request{}, err
+	}
+	for _, candidate := range cancelled {
+		if candidate.ID == req.ID {
+			return candidate, nil
+		}
+	}
+	// Pool-level Stop cleanup may have won the race. Preserve that durable
+	// terminal status rather than trying to rewrite it as rejected.
+	resolved, err := c.approval.Get(ctx, req.ID)
+	if err != nil {
+		return toolapproval.Request{}, err
+	}
+	if !strings.EqualFold(toolapproval.NormalizedStatus(resolved.Status), toolapproval.StatusPending) {
+		return resolved, nil
+	}
+	return toolapproval.Request{}, toolapproval.ErrAlreadyDecided
 }
 
 func (c *clientCallbacks) rememberApprovalGrant(toolCallID, toolName string, input map[string]any) {
@@ -1413,7 +1451,7 @@ func (c *clientCallbacks) emitToolApprovalRequest(req toolapproval.Request) bool
 	if c == nil || c.events == nil {
 		return false
 	}
-	return c.events.emit(event.StreamEvent{
+	ev := event.StreamEvent{
 		Type:       event.ToolApprovalRequest,
 		ToolCallID: req.ToolCallID,
 		ToolName:   req.ToolName,
@@ -1424,7 +1462,11 @@ func (c *clientCallbacks) emitToolApprovalRequest(req toolapproval.Request) bool
 		Metadata: map[string]any{
 			"approval": toolapproval.RequestMetadata(req),
 		},
-	})
+	}
+	if !strings.EqualFold(toolapproval.NormalizedStatus(req.Status), toolapproval.StatusPending) {
+		return c.events.emitTerminalDecision(ev)
+	}
+	return c.events.emit(ev)
 }
 
 func (c *clientCallbacks) SessionUpdate(_ context.Context, p acp.SessionNotification) error {

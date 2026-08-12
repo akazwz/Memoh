@@ -55,6 +55,10 @@ type FlowRequest struct {
 	UndeliveredReason string
 	// AbortReason is recorded when the caller is cancelled while waiting.
 	AbortReason string
+	// CancelOnAbort optionally supplies a runtime-specific cancellation path.
+	// ACP uses it to persist the distinct cancelled status for a stopped turn;
+	// other callers retain the existing rejected-on-abort behavior.
+	CancelOnAbort func(context.Context, Request, string) (Request, error)
 }
 
 // FlowResult describes how the approval flow concluded.
@@ -194,7 +198,13 @@ func RunFlow(ctx context.Context, svc FlowService, flow FlowRequest) (FlowResult
 			}
 			rejectCtx, rejectCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 			defer rejectCancel()
-			rejected, rejectErr := svc.Reject(rejectCtx, req.ID, "", reason)
+			var rejected Request
+			var rejectErr error
+			if flow.CancelOnAbort != nil {
+				rejected, rejectErr = flow.CancelOnAbort(rejectCtx, req, reason)
+			} else {
+				rejected, rejectErr = svc.Reject(rejectCtx, req.ID, "", reason)
+			}
 			if rejectErr != nil {
 				if recovered, ok := recoverTerminalDecision(rejectCtx, svc, req.ID, rejectErr); ok {
 					return resultFromDecision(req, recovered, emit), nil
@@ -204,10 +214,14 @@ func RunFlow(ctx context.Context, svc FlowService, flow FlowRequest) (FlowResult
 			if recorded := strings.TrimSpace(rejected.DecisionReason); recorded != "" {
 				reason = recorded
 			}
-			abortReq := req
-			abortReq.Status = StatusRejected
-			abortReq.DecisionReason = reason
-			_ = emit(abortReq)
+			if strings.TrimSpace(rejected.DecisionReason) == "" {
+				rejected.DecisionReason = reason
+			}
+			// Preserve the actual durable terminal status. A Service with the
+			// session-cancellation capability returns cancelled; a legacy FlowService
+			// may return rejected. resultFromDecision overlays either result onto the
+			// original request so the emitted snapshot keeps its tool metadata.
+			_ = resultFromDecision(req, rejected, emit)
 			return FlowResult{}, err
 		}
 		return FlowResult{}, err
