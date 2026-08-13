@@ -88,9 +88,8 @@ func (s *Service) CommitToolApprovalResponse(ctx context.Context, input ToolAppr
 	if optionID == "" && len(target.Options) > 0 {
 		// Older Web/Desktop clients only send approve/reject. Preserve that
 		// contract without inventing a durable choice: a binary response maps
-		// to the agent's one-shot option when one exists, and to the agent's
-		// sole allow option otherwise. Choosing among multiple durable options
-		// requires a client that can show their semantics.
+		// only to the agent's one-shot option. Session/always options must be
+		// selected explicitly by a client that can show their semantics.
 		optionID, err = legacyPermissionOptionID(target.Options, decision)
 	}
 	if err != nil {
@@ -184,26 +183,12 @@ func legacyPermissionOptionID(options []toolapproval.PermissionOption, decision 
 	if matches > 1 {
 		return "", fmt.Errorf("%w: legacy %s matches more than one %s option", toolapproval.ErrOptionUnavailable, decision, wantKind)
 	}
-	// No allow_once option exists. Selecting the agent's sole allow option is
-	// not a silent upgrade — there is no narrower grant the decider could have
-	// meant — and refusing here would leave binary surfaces (channel buttons)
-	// with no way to ever approve the request. Only an ambiguous set of
-	// multiple allow options without allow_once still fails.
-	allowMatch := ""
-	allowMatches := 0
-	for _, option := range options {
-		if option.Approves() {
-			allowMatches++
-			if allowMatches > 1 {
-				return "", fmt.Errorf("%w: legacy %s is ambiguous across multiple allow options without an %s option", toolapproval.ErrOptionUnavailable, decision, wantKind)
-			}
-			allowMatch = option.ID
-		}
-	}
-	if allowMatches == 1 {
-		return allowMatch, nil
-	}
-	return "", fmt.Errorf("%w: legacy %s requires an agent-provided allow option", toolapproval.ErrOptionUnavailable, decision)
+	// No allow_once option exists, so a binary approve cannot be honored:
+	// Memoh never persists ACP permission grants on the user's behalf, and
+	// every remaining allow option carries always/session persistence the
+	// binary surface could not show. The decider gets an explicit error and
+	// must approve from a surface that renders the agent's options.
+	return "", fmt.Errorf("%w: legacy %s requires an agent-provided %s option", toolapproval.ErrOptionUnavailable, decision, wantKind)
 }
 
 func (s *Service) ContinueCommittedToolApprovalResponse(ctx context.Context, committed CommittedToolApprovalResponse, eventCh chan<- WSStreamEvent) error {
@@ -301,7 +286,7 @@ func (s *Service) authorizeACPToolApprovalResponse(ctx context.Context, target t
 		botID = sess.BotID
 	}
 	target.BotID = botID
-	actorID := strings.TrimSpace(input.ActorUserID)
+	actorID := firstNonEmpty(input.ActorUserID, input.ActorChannelIdentityID)
 	if actorID == "" {
 		return toolapproval.ErrForbidden
 	}
@@ -321,7 +306,10 @@ func (s *Service) authorizeToolApprovalResponse(ctx context.Context, target tool
 		return errors.New("bot permission checker not configured")
 	}
 	botID := firstNonEmpty(target.BotID, input.BotID)
-	actorID := strings.TrimSpace(input.ActorUserID)
+	// Channel deciders without a bound account carry only their channel
+	// identity; grants are keyed on that identity, so it stays a valid
+	// authorization subject (base behavior).
+	actorID := firstNonEmpty(input.ActorUserID, input.ActorChannelIdentityID)
 	permission, ok := toolApprovalPermission(target.Operation)
 	if strings.TrimSpace(botID) == "" || strings.TrimSpace(actorID) == "" || !ok {
 		return toolapproval.ErrForbidden

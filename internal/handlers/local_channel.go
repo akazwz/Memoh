@@ -541,11 +541,18 @@ func (h *LocalChannelHandler) classifyWebSlashForSession(ctx context.Context, te
 		(decision.Invocation != nil && isReservedWebACPControl(decision.Invocation.Parsed.Resource)) {
 		return decision
 	}
-	if selector != "" && (liveACP || h.isACPRuntimeSession(ctx, sessionID)) {
+	pathProse := decision.Kind == slash.DecisionNormalChat && strings.Contains(selector, "/")
+	if selector != "" && !pathProse &&
+		(liveACP || h.isACPRuntimeSession(ctx, sessionID)) {
 		// ACP sessions never reinterpret an unadvertised Agent command as a
 		// Memoh skill activation. SessionPool's live full replacement is the sole
 		// command authority, so stale or unknown selectors fail with one stable
-		// command error (attachments included).
+		// command error (attachments included). One exception: the classifier's
+		// prose carve-out for a Unix path or URL after the slash ("/etc/hosts
+		// what does this line mean" — the head token itself contains a "/")
+		// stays normal chat and reaches the agent as text. Opaque command-ish
+		// tokens without a "/" (including case near-misses of advertised
+		// commands) still fail closed here.
 		return slash.Decision{
 			Kind:       slash.DecisionUnknownSlash,
 			Code:       slash.CodeUnknownSlash,
@@ -602,6 +609,18 @@ func (h *LocalChannelHandler) isACPRuntimeSession(ctx context.Context, sessionID
 	}
 	sess, err := h.sessionService.Get(ctx, strings.TrimSpace(sessionID))
 	return err == nil && sessionpkg.IsACPRuntime(sess)
+}
+
+// wsSessionAuthAckCode maps a session pre-authorization failure onto the ack
+// code the decision surfaces render. Authorization denials (403/404 masking)
+// keep the forbidden code; infrastructure failures must not masquerade as "you
+// do not have permission", so 5xx maps to the operation-failed code.
+func wsSessionAuthAckCode(err error, forbidden, failed apperror.Code) apperror.Code {
+	var httpErr *echo.HTTPError
+	if errors.As(err, &httpErr) && httpErr.Code >= http.StatusInternalServerError {
+		return failed
+	}
+	return forbidden
 }
 
 func isReservedWebACPControl(resource string) bool {
@@ -1767,7 +1786,7 @@ func (h *LocalChannelHandler) HandleWebSocket(c echo.Context) error {
 				continue
 			}
 			if err := h.authorizeWSSession(c.Request().Context(), channelIdentityID, botID, sessionID); err != nil {
-				sendWSControlAck(writer, ref, msg.Type, controlID, false, string(apperror.CodeToolApprovalForbidden))
+				sendWSControlAck(writer, ref, msg.Type, controlID, false, string(wsSessionAuthAckCode(err, apperror.CodeToolApprovalForbidden, apperror.CodeToolApprovalOperationFailed)))
 				continue
 			}
 			controller := h.sessionRuntimeController()
@@ -1833,7 +1852,7 @@ func (h *LocalChannelHandler) HandleWebSocket(c echo.Context) error {
 				continue
 			}
 			if err := h.authorizeWSSession(c.Request().Context(), channelIdentityID, botID, sessionID); err != nil {
-				sendWSControlAck(writer, ref, msg.Type, controlID, false, string(apperror.CodeUserInputForbidden))
+				sendWSControlAck(writer, ref, msg.Type, controlID, false, string(wsSessionAuthAckCode(err, apperror.CodeUserInputForbidden, apperror.CodeUserInputOperationFailed)))
 				continue
 			}
 			controller := h.sessionRuntimeController()

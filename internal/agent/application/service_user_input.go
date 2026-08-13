@@ -206,7 +206,10 @@ func (s *Service) authorizeACPUserInputResponse(ctx context.Context, target user
 	if strings.TrimSpace(botID) == "" {
 		botID = sess.BotID
 	}
-	actorID := strings.TrimSpace(input.ActorUserID)
+	// Channel responders without a bound account carry only their channel
+	// identity; grants are keyed on that identity, so it stays a valid
+	// authorization subject (base behavior).
+	actorID := firstNonEmpty(input.ActorUserID, input.ActorChannelIdentityID)
 	if actorID == "" {
 		return userinput.ErrForbidden
 	}

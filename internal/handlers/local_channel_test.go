@@ -561,6 +561,13 @@ func TestClassifyWebSlashForSessionUsesLiveAgentAuthority(t *testing.T) {
 	if unknown.Kind != slash.DecisionUnknownSlash || unknown.Code != slash.CodeUnknownSlash {
 		t.Fatalf("unadvertised decision = %#v, want stable unknown slash", unknown)
 	}
+	// The classifier's path/URL prose carve-out survives in ACP sessions:
+	// text whose head token contains a "/" is chat for the agent, not an
+	// unknown-slash error.
+	prose := handler.classifyWebSlashForSession(context.Background(), "/etc/hosts what does this line mean", false, sessionID)
+	if prose.Kind != slash.DecisionNormalChat {
+		t.Fatalf("path prose decision = %#v, want normal chat", prose)
+	}
 }
 
 type wsDecisionDispatch struct {
