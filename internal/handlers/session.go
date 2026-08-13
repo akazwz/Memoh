@@ -839,9 +839,10 @@ func authorizeACPRuntimeSessionAccess(actorUserID string, perms []string, runtim
 		feedback := acpRuntimeOwnerMissingFeedback()
 		return echo.NewHTTPError(feedback.HTTPStatus, feedback)
 	}
-	if actorUserID == runtimeOwnerAccountID {
-		return nil
-	}
+	// The runtime owner has no standing beyond their live grants: owner and
+	// members alike must hold workspace_exec, so a revoked owner loses
+	// runtime access at decision time (same model as the application-layer
+	// ACP decision authorizers).
 	if actorUserID == "" || !bots.HasPermission(perms, bots.PermissionWorkspaceExec) {
 		feedback := acpNoWorkspaceExecFeedback("missing_workspace_exec", "You do not have permission to run workspace commands for this bot.")
 		return echo.NewHTTPError(feedback.HTTPStatus, feedback)

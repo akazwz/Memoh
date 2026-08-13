@@ -165,7 +165,8 @@ func legacyPermissionOptionID(options []toolapproval.PermissionOption, decision 
 		if strings.EqualFold(strings.TrimSpace(option.Kind), wantKind) {
 			matches++
 			if matches > 1 {
-				return "", fmt.Errorf("%w: legacy %s matches more than one %s option", toolapproval.ErrOptionUnavailable, decision, wantKind)
+				match = ""
+				break
 			}
 			match = option.ID
 		}
@@ -174,10 +175,14 @@ func legacyPermissionOptionID(options []toolapproval.PermissionOption, decision 
 		return match, nil
 	}
 	if wantKind == toolapproval.OptionKindRejectOnce {
-		// A binary rejection is always safe. If the agent did not provide a
-		// reject_once option, the ACP adapter converts the rejected result to a
-		// cancelled outcome instead of selecting a broader reject_always scope.
+		// A binary rejection is always safe. With no reject_once option — or
+		// an ambiguous set of several — the ACP adapter converts the rejected
+		// result to a cancelled outcome instead of guessing an option or
+		// selecting a broader reject_always scope.
 		return "", nil
+	}
+	if matches > 1 {
+		return "", fmt.Errorf("%w: legacy %s matches more than one %s option", toolapproval.ErrOptionUnavailable, decision, wantKind)
 	}
 	// No allow_once option exists. Selecting the agent's sole allow option is
 	// not a silent upgrade — there is no narrower grant the decider could have

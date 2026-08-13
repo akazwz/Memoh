@@ -376,14 +376,17 @@ func TestAuthorizeACPRuntimeSessionAccess(t *testing.T) {
 		}
 	})
 
-	t.Run("runtime owner does not need a second permission check", func(t *testing.T) {
+	t.Run("runtime owner without workspace exec is forbidden", func(t *testing.T) {
+		// The owner has no standing beyond their live grants: revoking
+		// workspace_exec must lock the owner out at decision time.
 		err := authorizeACPRuntimeSessionAccess(
 			"user-1",
 			[]string{bots.PermissionChat},
 			"user-1",
 		)
-		if err != nil {
-			t.Fatalf("authorizeACPRuntimeSessionAccess() error = %v", err)
+		var httpErr *echo.HTTPError
+		if !errors.As(err, &httpErr) || httpErr.Code != http.StatusForbidden {
+			t.Fatalf("authorizeACPRuntimeSessionAccess() error = %v, want HTTP 403", err)
 		}
 	})
 

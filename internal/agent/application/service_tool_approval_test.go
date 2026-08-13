@@ -99,4 +99,14 @@ func TestLegacyPermissionOptionID(t *testing.T) {
 	if got, err := legacyPermissionOptionID(options[2:], "reject"); got != "" || err != nil {
 		t.Fatalf("reject without reject_once = %q, %v", got, err)
 	}
+	// Rejection is always safe: an ambiguous set of several reject_once
+	// options degrades to the binary reject (cancelled outcome downstream)
+	// instead of dead-ending the request.
+	ambiguousReject := []toolapproval.PermissionOption{
+		{ID: "reject-a", Kind: toolapproval.OptionKindRejectOnce},
+		{ID: "reject-b", Kind: toolapproval.OptionKindRejectOnce},
+	}
+	if got, err := legacyPermissionOptionID(ambiguousReject, "reject"); got != "" || err != nil {
+		t.Fatalf("ambiguous reject = %q, %v, want binary fallback", got, err)
+	}
 }
