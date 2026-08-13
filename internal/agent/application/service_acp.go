@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	acpfeedback "github.com/memohai/memoh/internal/agent/decision/feedback"
 	"github.com/memohai/memoh/internal/agent/event"
@@ -22,6 +23,12 @@ import (
 	messagepkg "github.com/memohai/memoh/internal/chat/message"
 	session "github.com/memohai/memoh/internal/chat/thread"
 )
+
+// acpSinkStallTimeout bounds how long a live-turn event delivery may wait on
+// a WS consumer that is connected but not draining. Reaching it cancels the
+// stream (client-disconnect semantics) so the adapter callback — and the
+// prompt's runtime slot behind it — cannot stall indefinitely.
+const acpSinkStallTimeout = 30 * time.Second
 
 type acpPrompter interface {
 	Prompt(ctx context.Context, input acpagent.PromptInput) (acpclient.PromptResult, error)
@@ -238,9 +245,18 @@ func (s *Service) streamACPAgentWS(ctx context.Context, req ChatRequest, eventCh
 			return
 		default:
 		}
+		stall := time.NewTimer(acpSinkStallTimeout)
+		defer stall.Stop()
 		select {
 		case eventCh <- json.RawMessage(data):
 		case <-deliveryCtx.Done():
+		case <-stall.C:
+			// A live stream that has not accepted a single event for this long
+			// has a dead consumer (e.g. a WS client that stopped draining
+			// without disconnecting). Cancel the stream so the turn tears down
+			// like a client disconnect instead of blocking the adapter callback
+			// — and with it the prompt's runtime slot — indefinitely.
+			cancel()
 		}
 	}
 	emit := func(ev native.StreamEvent) {

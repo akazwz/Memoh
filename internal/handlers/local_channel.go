@@ -233,22 +233,32 @@ func (h *LocalChannelHandler) ExecuteQuickAction(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
 	actionID := strings.TrimSpace(req.ActionID)
-	if actionID != "permission" {
+	sessionID := strings.TrimSpace(req.SessionID)
+	skillActivationAllowed := true
+	if actionID == "permission" {
+		// The permission action targets a live ACP session, so enforce session
+		// visibility (chat or workspace_exec plus canAccessSession) instead of
+		// the chat-only bot access check. An empty session falls through so the
+		// executor returns its session-required command error.
+		if sessionID != "" {
+			if err := h.authorizeWSSession(c.Request().Context(), channelIdentityID, botID, sessionID); err != nil {
+				return err
+			}
+		}
+	} else {
 		if _, err := h.authorizeBotAccess(c.Request().Context(), channelIdentityID, botID); err != nil {
 			return err
 		}
-	}
-	sessionID := strings.TrimSpace(req.SessionID)
-	skillActivationAllowed := true
-	if sessionID != "" && actionID != "permission" {
-		if err := h.authorizeWSSession(c.Request().Context(), channelIdentityID, botID, sessionID); err != nil {
-			return err
+		if sessionID != "" {
+			if err := h.authorizeWSSession(c.Request().Context(), channelIdentityID, botID, sessionID); err != nil {
+				return err
+			}
+			supported, supportErr := h.wsSessionSupportsRequestedSkills(c.Request().Context(), sessionID)
+			if supportErr != nil {
+				return echo.NewHTTPError(http.StatusInternalServerError, supportErr.Error())
+			}
+			skillActivationAllowed = supported
 		}
-		supported, supportErr := h.wsSessionSupportsRequestedSkills(c.Request().Context(), sessionID)
-		if supportErr != nil {
-			return echo.NewHTTPError(http.StatusInternalServerError, supportErr.Error())
-		}
-		skillActivationAllowed = supported
 	}
 	if !quickActionSkillActivationAllowedHint(req.Params) {
 		skillActivationAllowed = false
@@ -1912,7 +1922,18 @@ func (h *LocalChannelHandler) HandleWebSocket(c echo.Context) error {
 				}
 				actionID := webActionID(decision.Command.Resource, decision.Command.Action)
 				permissionAction := actionID == "permission"
-				if !permissionAction {
+				if permissionAction {
+					// The permission action targets a live ACP session, so enforce
+					// session visibility with the same check the WS approval path
+					// uses. An empty session falls through so the executor returns
+					// its session-required command error.
+					if strings.TrimSpace(sessionID) != "" {
+						if err := h.authorizeWSSession(streamBaseCtx, channelIdentityID, botID, sessionID); err != nil {
+							sendWSError(writer, ref, wsErrorMessage(err))
+							continue
+						}
+					}
+				} else {
 					if err := h.authorizeWSChatAccess(streamBaseCtx, channelIdentityID, botID); err != nil {
 						sendWSError(writer, ref, wsErrorMessage(err))
 						continue

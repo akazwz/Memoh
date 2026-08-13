@@ -653,6 +653,17 @@ func (c *clientCallbacks) RequestPermission(ctx context.Context, p acp.RequestPe
 	defer c.decisions.exit()
 	approvalOptions, err := approvalOptionsFromACP(p.Options)
 	if err != nil {
+		if errors.Is(err, errUnsupportedOptionKind) {
+			// A vendor or future option kind is not a protocol violation; the
+			// options simply cannot be shown to a decider, so resolve the
+			// request as cancelled instead of aborting the agent's turn.
+			if c.logger != nil {
+				c.logger.Warn("permission options unmappable; cancelling",
+					slog.String("tool_call_id", strings.TrimSpace(string(p.ToolCall.ToolCallId))),
+					slog.String("error", err.Error()))
+			}
+			return cancelledPermission(), nil
+		}
 		return acp.RequestPermissionResponse{}, acp.NewInvalidParams(map[string]any{"error": err.Error()})
 	}
 	if c.toolMapper != nil && c.toolMapper.isTombstoned(p.SessionId, string(p.ToolCall.ToolCallId)) {
@@ -795,12 +806,17 @@ func (c *clientCallbacks) RequestPermission(ctx context.Context, p acp.RequestPe
 		if strings.TrimSpace(result.SelectedOptionID) != "" {
 			return selectedPermission(acp.PermissionOptionId(result.SelectedOptionID)), nil
 		}
-		// Select the agent's reject option for user rejections and system
-		// outcomes alike (policy deny, approval timeout, non-interactive
-		// auto-reject, missing session identity): the turn is still live, and
-		// agents treat the cancelled outcome as a whole-turn abort rather
-		// than a per-tool refusal they can react to.
-		return rejectOncePermission(p), nil
+		if result.DecidedByUser {
+			// A live user said no: select the agent's reject option so the
+			// turn continues with a clean refusal instead of an aborted turn.
+			return rejectOncePermission(p), nil
+		}
+		// System outcomes (policy deny, approval timeout, non-interactive
+		// auto-reject, missing session identity) cancel the request: there
+		// was no user decision to report, and answering with reject_once
+		// would invite an unattended agent to retry-loop against
+		// auto-rejections no user made.
+		return cancelledPermission(), nil
 	}
 	resp := allowOncePermission(p)
 	if strings.TrimSpace(result.SelectedOptionID) != "" {
@@ -1115,9 +1131,12 @@ func isConsentShapedPermission(state *acpToolState) bool {
 		return true
 	}
 	input, ok := state.input.(map[string]any)
-	if !ok || len(input) != 2 {
+	if !ok {
 		return false
 	}
+	// Match on the load-bearing fields rather than an exact key count: an
+	// upstream adapter adding a field must not silently reclassify a consent
+	// as an auto-allowable tool preflight.
 	return strings.TrimSpace(stringFromAny(input["serverName"])) != "" &&
 		strings.TrimSpace(stringFromAny(input["url"])) != ""
 }
@@ -1187,6 +1206,12 @@ func limitPermissionDetail(text string) string {
 // approvalOptionsFromACP preserves the agent's permission options verbatim for
 // the approval pipeline: ids are returned to the agent unchanged, names are
 // rendered to the user, kinds drive approve/reject validation.
+// errUnsupportedOptionKind marks an option set that is well-formed JSON-RPC
+// but uses a kind outside the four canonical values. The SDK's option kind is
+// an open string, so this degrades to a cancelled outcome rather than an
+// InvalidParams hard failure that would abort the agent's whole turn.
+var errUnsupportedOptionKind = errors.New("permission option kind is unsupported")
+
 func approvalOptionsFromACP(options []acp.PermissionOption) ([]toolapproval.PermissionOption, error) {
 	if len(options) == 0 {
 		return nil, errors.New("permission options must not be empty")
@@ -1202,12 +1227,12 @@ func approvalOptionsFromACP(options []acp.PermissionOption) ([]toolapproval.Perm
 			return nil, fmt.Errorf("permission option id %q is duplicated", id)
 		}
 		seen[id] = struct{}{}
-		kind := string(option.Kind)
+		kind := string(normalizeACPOptionKind(option.Kind))
 		switch kind {
 		case toolapproval.OptionKindAllowOnce, toolapproval.OptionKindAllowAlways,
 			toolapproval.OptionKindRejectOnce, toolapproval.OptionKindRejectAlways:
 		default:
-			return nil, fmt.Errorf("permission option %q has unsupported kind %q", id, option.Kind)
+			return nil, fmt.Errorf("%w: option %q has kind %q", errUnsupportedOptionKind, id, option.Kind)
 		}
 		converted = append(converted, toolapproval.PermissionOption{
 			ID:   id,
@@ -1252,6 +1277,16 @@ const (
 func mcpPermissionPreflightFromState(state *acpToolState) (mcpPermissionPreflight, bool) {
 	if state == nil {
 		return mcpPermissionPreflight{}, false
+	}
+	if input, ok := state.input.(map[string]any); ok {
+		if strings.TrimSpace(stringFromAny(input["url"])) != "" {
+			// A top-level url marks a consent-style ask ("open this link"),
+			// never a tool-call preflight (tool arguments nest under their own
+			// key). Refusing to parse it here means a consent whose id prefix
+			// or key set drifts upstream still lands on the forced-review lane
+			// instead of the Memoh-server auto-allow.
+			return mcpPermissionPreflight{}, false
+		}
 	}
 	title, _ := permissionToolIdentityFromState(state)
 	if toolName, serverName, ok := mcpToolCallFromStructuredTitle(title); ok {
@@ -1489,6 +1524,9 @@ func (c *clientCallbacks) SessionUpdate(_ context.Context, p acp.SessionNotifica
 	// Keep the read lock through delivery. Clearing prompt state takes the
 	// write lock, so Prompt cannot return and let its owner close the sink
 	// while a callback that already observed that sink is still emitting.
+	// Delivery is bounded: a sink whose consumer stops draining cancels its
+	// own stream after acpSinkStallTimeout (application layer), so this lock
+	// cannot pin the prompt's runtime slot indefinitely.
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	collector := c.collector

@@ -1151,6 +1151,62 @@ func TestResolveWebRequestedSkillContextsRejectsBlankName(t *testing.T) {
 	}
 }
 
+func TestExecuteQuickActionPermissionEnforcesSessionVisibility(t *testing.T) {
+	t.Parallel()
+
+	const (
+		botID        = "11111111-1111-1111-1111-111111111111"
+		sessionID    = "22222222-2222-2222-2222-222222222222"
+		sessionOwner = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+		currentUser  = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+	)
+	queries := localChannelSessionAuthQueries{
+		bot: testBotRow(botID, map[string]any{}),
+		session: sqlc.BotSession{
+			ID:              testUUID(sessionID),
+			BotID:           testUUID(botID),
+			Type:            sessionpkg.TypeChat,
+			SessionMode:     sessionpkg.TypeChat,
+			RuntimeType:     sessionpkg.RuntimeACPAgent,
+			CreatedByUserID: testUUID(sessionOwner),
+			Metadata:        []byte(`{}`),
+		},
+		grants: []sqlc.ListBotUserGrantsForUserRow{
+			{
+				ID:          testUUID("dddddddd-dddd-dddd-dddd-dddddddddddd"),
+				BotID:       testUUID(botID),
+				SubjectType: bots.GrantSubjectUser,
+				UserID:      testUUID(currentUser),
+				Permissions: []byte(`["chat","workspace_exec"]`),
+			},
+		},
+	}
+	handler := &LocalChannelHandler{
+		botService:     bots.NewService(nil, queries),
+		accountService: accounts.NewService(nil, testAdminAccountStore{role: "user"}),
+		sessionService: sessionpkg.NewService(nil, queries, nil),
+		logger:         slog.Default(),
+	}
+
+	body := strings.NewReader(`{"action_id":"permission","session_id":"` + sessionID + `","params":{"mode_id":"bypassPermissions"}}`)
+	req := httptest.NewRequest(http.MethodPost, "/bots/"+botID+"/quick-actions/execute", body)
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec := httptest.NewRecorder()
+	e := echo.New()
+	c := testAuthContext(e, req, rec, currentUser)
+	c.SetParamNames("bot_id")
+	c.SetParamValues(botID)
+
+	err := handler.ExecuteQuickAction(c)
+	if err == nil {
+		t.Fatalf("ExecuteQuickAction should deny permission action on a session the actor cannot access; body=%s", rec.Body.String())
+	}
+	var httpErr *echo.HTTPError
+	if !errors.As(err, &httpErr) || httpErr.Code != http.StatusNotFound {
+		t.Fatalf("error = %v, want 404 session not found", err)
+	}
+}
+
 func TestExecuteQuickActionAcceptsSessionIDAsCapabilityContext(t *testing.T) {
 	t.Parallel()
 

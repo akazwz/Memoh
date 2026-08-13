@@ -402,7 +402,10 @@ func elicitationFormInput(message string, schema map[string]any) (map[string]any
 
 	questions := make([]any, 0, len(propertyIDs))
 	mapping := elicitationFormMapping{fields: make([]elicitationField, 0, len(propertyIDs))}
-	for index, propertyID := range propertyIDs {
+	// Option values per field, in option order. Canonical question/option IDs
+	// are assigned by ParseAskUserPayload below rather than duplicated here.
+	fieldValues := make([][]string, 0, len(propertyIDs))
+	for _, propertyID := range propertyIDs {
 		property := properties[propertyID].(map[string]any)
 		propertyType := propertyTypes[propertyID]
 		description, err := optionalSchemaString(property, "description", "property "+propertyID)
@@ -424,12 +427,11 @@ func elicitationFormInput(message string, schema map[string]any) (map[string]any
 			questionText = propertyID
 		}
 
-		questionID := fmt.Sprintf("q%d", index+1)
 		field := elicitationField{
 			propertyID: propertyID,
-			questionID: questionID,
 			required:   requiredProperties[propertyID],
 		}
+		var orderedValues []string
 		// Always emit the boolean. The shared ask_user payload treats an absent
 		// field as legacy/native behavior; ACP needs explicit false to preserve
 		// optional JSON Schema properties.
@@ -444,12 +446,12 @@ func elicitationFormInput(message string, schema map[string]any) (map[string]any
 			if hasChoices {
 				field.kind = userinput.QuestionKindSingleSelect
 				question["kind"] = field.kind
-				options, values, err := elicitationOptions(questionID, choices)
+				options, values, err := elicitationOptions(choices)
 				if err != nil {
 					return nil, elicitationFormMapping{}, fmt.Errorf("property %q: %w", propertyID, err)
 				}
 				question["options"] = options
-				field.optionValues = values
+				orderedValues = values
 			} else {
 				field.kind = userinput.QuestionKindText
 				question["kind"] = field.kind
@@ -477,12 +479,12 @@ func elicitationFormInput(message string, schema map[string]any) (map[string]any
 			}
 			field.kind = userinput.QuestionKindMultiSelect
 			question["kind"] = field.kind
-			options, values, err := elicitationOptions(questionID, choices)
+			options, values, err := elicitationOptions(choices)
 			if err != nil {
 				return nil, elicitationFormMapping{}, fmt.Errorf("property %q: %w", propertyID, err)
 			}
 			question["options"] = options
-			field.optionValues = values
+			orderedValues = values
 		default:
 			return nil, elicitationFormMapping{}, fmt.Errorf("property %q type %q is unsupported", propertyID, propertyType)
 		}
@@ -524,11 +526,34 @@ func elicitationFormInput(message string, schema map[string]any) (map[string]any
 
 		questions = append(questions, question)
 		mapping.fields = append(mapping.fields, field)
+		fieldValues = append(fieldValues, orderedValues)
 	}
 
 	input := map[string]any{"questions": questions}
-	if err := userinput.ValidateAskUserInput(input); err != nil {
+	// ParseAskUserPayload owns question/option ID assignment; reading the IDs
+	// it generated keeps this mapping correct even if the ID scheme changes.
+	payload, err := userinput.ParseAskUserPayload(input)
+	if err != nil {
 		return nil, elicitationFormMapping{}, err
+	}
+	if len(payload.Questions) != len(mapping.fields) {
+		return nil, elicitationFormMapping{}, fmt.Errorf("elicitation form built %d fields but the payload parsed %d questions", len(mapping.fields), len(payload.Questions))
+	}
+	for i := range mapping.fields {
+		parsed := payload.Questions[i]
+		mapping.fields[i].questionID = parsed.ID
+		values := fieldValues[i]
+		if len(values) == 0 {
+			continue
+		}
+		if len(parsed.Options) != len(values) {
+			return nil, elicitationFormMapping{}, fmt.Errorf("question %q built %d option values but the payload parsed %d options", parsed.ID, len(values), len(parsed.Options))
+		}
+		optionValues := make(map[string]string, len(values))
+		for j, option := range parsed.Options {
+			optionValues[option.ID] = values[j]
+		}
+		mapping.fields[i].optionValues = optionValues
 	}
 	return input, mapping, nil
 }
@@ -722,22 +747,24 @@ func elicitationChoices(schema map[string]any, path string) ([]elicitationChoice
 	return choices, true, nil
 }
 
-func elicitationOptions(questionID string, choices []elicitationChoice) ([]any, map[string]string, error) {
+// elicitationOptions renders the choices as ask_user options and returns their
+// schema values in option order. Option IDs are not assigned here — the caller
+// reads the canonical IDs from the parsed payload.
+func elicitationOptions(choices []elicitationChoice) ([]any, []string, error) {
 	options := make([]any, 0, len(choices))
-	values := make(map[string]string, len(choices))
+	values := make([]string, 0, len(choices))
 	seenValues := make(map[string]struct{}, len(choices))
-	for index, choice := range choices {
+	for _, choice := range choices {
 		if _, duplicate := seenValues[choice.value]; duplicate {
 			return nil, nil, fmt.Errorf("choice value %q is duplicated", choice.value)
 		}
 		seenValues[choice.value] = struct{}{}
-		optionID := fmt.Sprintf("%s.o%d", questionID, index+1)
 		option := map[string]any{"label": strings.TrimSpace(choice.label)}
 		if choice.description != "" {
 			option["description"] = choice.description
 		}
 		options = append(options, option)
-		values[optionID] = choice.value
+		values = append(values, choice.value)
 	}
 	return options, values, nil
 }

@@ -1931,6 +1931,189 @@ func TestRequestPermissionCarriesAgentOptionsVerbatim(t *testing.T) {
 	}
 }
 
+// TestRequestPermissionDriftedConsentShapeStillForcesReview pins the fail-closed
+// contract for consent detection: even when the adapter's "elicitation-" id
+// prefix drifts and extra raw-input keys appear, a URL-bearing ask for a Memoh
+// server name must land on the forced-review lane, never on the MCP-preflight
+// auto-allow — a consent is never a policy shortcut.
+func TestRequestPermissionDriftedConsentShapeStillForcesReview(t *testing.T) {
+	t.Parallel()
+
+	approval := &fakeACPToolApproval{decision: toolapproval.Request{
+		Status: toolapproval.StatusApproved, DecidedByUser: true,
+		SelectedOptionID: "allow-once",
+	}}
+	callbacks := &clientCallbacks{
+		approval:    approval,
+		toolGateway: testACPToolGateway("native_tool"),
+		baseSession: ToolSessionContext{
+			BotID: "bot-1", SessionID: "session-1", RunID: "run-1",
+		},
+		events: &toolEventEmitter{},
+	}
+	callbacks.setPromptState(newEventCollector(), nil, callbacks.baseSession)
+	response, err := callbacks.RequestPermission(context.Background(), acp.RequestPermissionRequest{
+		ToolCall: acp.ToolCallUpdate{
+			// Drifted upstream shape: renamed id prefix and a third raw-input key.
+			ToolCallId: "consent-2", Title: acp.Ptr("Approve MCP tool call"), Kind: acp.Ptr(acp.ToolKindOther),
+			RawInput: map[string]any{
+				"serverName": "Memoh Tools",
+				"url":        "https://example.test/authorize",
+				"detail":     "extra field a future adapter might add",
+			},
+		},
+		Options: []acp.PermissionOption{
+			{Kind: acp.PermissionOptionKindAllowOnce, Name: "Allow", OptionId: "allow-once"},
+			{Kind: acp.PermissionOptionKindRejectOnce, Name: "Reject", OptionId: "reject-once"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("RequestPermission() error = %v", err)
+	}
+	if response.Outcome.Selected == nil || response.Outcome.Selected.OptionId != "allow-once" {
+		t.Fatalf("outcome = %#v, want the user's selected option", response.Outcome)
+	}
+	created := approval.createdInput()
+	if created.ToolName != "permission" || !created.ForceReview {
+		t.Fatalf("created approval = %+v, want generic permission with ForceReview (not auto-allowed)", created)
+	}
+}
+
+// TestRequestPermissionUnsupportedOptionKindCancels pins the open-enum
+// contract: a vendor or future option kind is not a protocol violation, so the
+// request resolves as cancelled instead of a JSON-RPC InvalidParams error that
+// would abort the agent's whole turn.
+func TestRequestPermissionUnsupportedOptionKindCancels(t *testing.T) {
+	t.Parallel()
+
+	approval := &fakeACPToolApproval{}
+	callbacks := &clientCallbacks{
+		root:     "/data",
+		cwd:      "/data",
+		approval: approval,
+		baseSession: ToolSessionContext{
+			BotID:     "bot-1",
+			SessionID: "session-1",
+			RunID:     "run-1",
+		},
+		events: &toolEventEmitter{},
+	}
+	callbacks.setPromptState(newEventCollector(), nil, callbacks.baseSession)
+
+	resp, err := callbacks.RequestPermission(context.Background(), acp.RequestPermissionRequest{
+		ToolCall: acp.ToolCallUpdate{
+			ToolCallId: acp.ToolCallId("exec-1"),
+			Title:      acp.Ptr("Shell"),
+			Kind:       acp.Ptr(acp.ToolKindExecute),
+			RawInput:   map[string]any{"command": "ls"},
+		},
+		Options: []acp.PermissionOption{
+			{Kind: acp.PermissionOptionKind("confirm"), Name: "Confirm", OptionId: acp.PermissionOptionId("confirm")},
+		},
+	})
+	if err != nil {
+		t.Fatalf("RequestPermission error = %v", err)
+	}
+	if resp.Outcome.Cancelled == nil {
+		t.Fatalf("permission outcome = %#v, want cancelled for unmappable options", resp.Outcome)
+	}
+	if got := approval.createdCount(); got != 0 {
+		t.Fatalf("pending approvals created = %d, want 0 for unmappable options", got)
+	}
+}
+
+// TestRequestPermissionNormalizesOptionKindCase pins that non-canonical option
+// kind casing is tolerated end to end: storage and classification both see the
+// normalized kind, so the approval is answered instead of hard-failing.
+func TestRequestPermissionNormalizesOptionKindCase(t *testing.T) {
+	t.Parallel()
+
+	approval := &fakeACPToolApproval{
+		decision: toolapproval.Request{
+			ID:            "approval-3",
+			Status:        toolapproval.StatusApproved,
+			DecidedByUser: true,
+		},
+	}
+	callbacks := &clientCallbacks{
+		root:     "/data",
+		cwd:      "/data",
+		approval: approval,
+		baseSession: ToolSessionContext{
+			BotID:     "bot-1",
+			SessionID: "session-1",
+			RunID:     "run-1",
+		},
+		events: &toolEventEmitter{},
+	}
+	callbacks.setPromptState(newEventCollector(), nil, callbacks.baseSession)
+
+	resp, err := callbacks.RequestPermission(context.Background(), acp.RequestPermissionRequest{
+		ToolCall: acp.ToolCallUpdate{
+			ToolCallId: acp.ToolCallId("exec-2"),
+			Title:      acp.Ptr("Shell"),
+			Kind:       acp.Ptr(acp.ToolKindExecute),
+			RawInput:   map[string]any{"command": "ls"},
+		},
+		Options: []acp.PermissionOption{
+			{Kind: acp.PermissionOptionKind("Allow_Once"), Name: "Allow", OptionId: acp.PermissionOptionId("allow")},
+			{Kind: acp.PermissionOptionKind("REJECT_ONCE"), Name: "Reject", OptionId: acp.PermissionOptionId("reject")},
+		},
+	})
+	if err != nil {
+		t.Fatalf("RequestPermission error = %v", err)
+	}
+	if resp.Outcome.Selected == nil || resp.Outcome.Selected.OptionId != acp.PermissionOptionId("allow") {
+		t.Fatalf("permission outcome = %#v, want allow once", resp.Outcome)
+	}
+	if len(approval.created.Options) != 2 || approval.created.Options[0].Kind != toolapproval.OptionKindAllowOnce {
+		t.Fatalf("stored options = %#v, want normalized kinds", approval.created.Options)
+	}
+}
+
+// TestRequestPermissionNonInteractiveCancels pins the system-outcome contract:
+// with nobody attached who could answer (no RunID), the auto-reject must reach
+// the agent as a cancelled outcome, not as the reject_once option — a per-tool
+// refusal would invite an unattended agent to retry-loop against rejections no
+// user made.
+func TestRequestPermissionNonInteractiveCancels(t *testing.T) {
+	t.Parallel()
+
+	approval := &fakeACPToolApproval{}
+	callbacks := &clientCallbacks{
+		root:     "/data",
+		cwd:      "/data",
+		approval: approval,
+		baseSession: ToolSessionContext{
+			BotID:             "bot-1",
+			SessionID:         "session-1",
+			ChannelIdentityID: "channel-1",
+			// No RunID: nobody can see or answer the approval.
+		},
+		events: &toolEventEmitter{},
+	}
+	callbacks.setPromptState(newEventCollector(), nil, callbacks.baseSession)
+
+	resp, err := callbacks.RequestPermission(context.Background(), acp.RequestPermissionRequest{
+		ToolCall: acp.ToolCallUpdate{
+			ToolCallId: acp.ToolCallId("exec-bg"),
+			Title:      acp.Ptr("rm -rf /data/tmp"),
+			Kind:       acp.Ptr(acp.ToolKindExecute),
+			RawInput:   map[string]any{"command": "rm -rf /data/tmp"},
+		},
+		Options: []acp.PermissionOption{
+			{Kind: acp.PermissionOptionKindAllowOnce, Name: "Allow", OptionId: acp.PermissionOptionId("allow")},
+			{Kind: acp.PermissionOptionKindRejectOnce, Name: "Reject", OptionId: acp.PermissionOptionId("reject")},
+		},
+	})
+	if err != nil {
+		t.Fatalf("RequestPermission error = %v", err)
+	}
+	if resp.Outcome.Cancelled == nil {
+		t.Fatalf("permission outcome = %#v, want cancelled for system rejection", resp.Outcome)
+	}
+}
+
 func TestRequestPermissionRejectedByMemohToolApprovalSelectsRejectOption(t *testing.T) {
 	t.Parallel()
 

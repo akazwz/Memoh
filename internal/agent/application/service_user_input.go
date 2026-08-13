@@ -215,9 +215,9 @@ func (s *Service) authorizeACPUserInputResponse(ctx context.Context, target user
 	if runtimeOwnerID == "" {
 		return userinput.ErrForbidden
 	}
-	if actorID == runtimeOwnerID {
-		return nil
-	}
+	// The runtime owner has no standing beyond their live grants: a revoked
+	// or offboarded owner must lose response authority at decision time, so
+	// every actor — owner included — passes the permission check.
 	if s.botPermissions == nil {
 		return errors.New("bot permission checker not configured")
 	}

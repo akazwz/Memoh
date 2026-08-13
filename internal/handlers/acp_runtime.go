@@ -604,13 +604,18 @@ func (h *ACPRuntimeHandler) authorizedRuntimeByID(c echo.Context) (bots.Bot, str
 	if err != nil {
 		return bots.Bot{}, "", acpagent.RuntimeStatus{}, err
 	}
+	// Authorize before consulting the pool so callers without workspace_exec
+	// cannot probe runtime liveness through 403/404 response differences.
+	bot, err := AuthorizeBotAccessWithPermission(c.Request().Context(), h.botService, h.accountService, channelIdentityID, botID, bots.PermissionWorkspaceExec)
+	if err != nil {
+		return bots.Bot{}, "", acpagent.RuntimeStatus{}, acpRuntimeControlError(err)
+	}
 	status, err := h.pool.RuntimeStatusByID(botID, runtimeID)
 	if err != nil {
 		return bots.Bot{}, "", acpagent.RuntimeStatus{}, runtimePoolError(err)
 	}
-	bot, err := h.authorizedRuntimeControlBot(c, channelIdentityID, botID, status.RuntimeOwnerAccountID)
-	if err != nil {
-		return bots.Bot{}, "", acpagent.RuntimeStatus{}, err
+	if strings.TrimSpace(status.RuntimeOwnerAccountID) == "" {
+		return bots.Bot{}, "", acpagent.RuntimeStatus{}, apperror.New(apperror.CodeACPRuntimeConflict, nil)
 	}
 	return bot, runtimeID, status, nil
 }
@@ -654,16 +659,9 @@ func (h *ACPRuntimeHandler) authorizedRuntimeControlBot(c echo.Context, actorID,
 	if runtimeOwnerID == "" {
 		return bots.Bot{}, apperror.New(apperror.CodeACPRuntimeConflict, nil)
 	}
-	if strings.TrimSpace(actorID) == runtimeOwnerID {
-		if h.botService == nil {
-			return bots.Bot{}, apperror.Wrap(apperror.CodeACPOperationFailed, errors.New("bot service is not configured"), nil)
-		}
-		bot, err := h.botService.GetForAccess(c.Request().Context(), botID)
-		if err != nil {
-			return bots.Bot{}, acpRuntimeControlError(err)
-		}
-		return bot, nil
-	}
+	// The runtime owner has no standing beyond their live grants: a revoked
+	// or offboarded owner must lose runtime control, so every actor — owner
+	// included — passes the workspace_exec check.
 	bot, err := AuthorizeBotAccessWithPermission(c.Request().Context(), h.botService, h.accountService, actorID, botID, bots.PermissionWorkspaceExec)
 	if err != nil {
 		return bots.Bot{}, acpRuntimeControlError(err)

@@ -2073,3 +2073,69 @@ func withTranscriptOutput(result acpclient.PromptResult) acpclient.PromptResult 
 	result.Output = acpclient.TranscriptFromEvents(result.Events, result.Text)
 	return result
 }
+
+// TestACPDecisionAuthorityRequiresLiveWorkspaceExec pins the decision-time
+// authority model: the runtime owner has no standing beyond their live grants,
+// so a revoked or offboarded owner loses approval/response authority, while
+// any member holding workspace_exec (the disclosed widened semantics) keeps it.
+func TestACPDecisionAuthorityRequiresLiveWorkspaceExec(t *testing.T) {
+	t.Parallel()
+
+	const (
+		ownerID    = "owner-user"
+		memberID   = "member-user"
+		chatOnlyID = "chat-only-user"
+	)
+	perms := &fakeBotPermissionChecker{
+		values: map[string]bool{
+			"bot-1:" + ownerID + ":" + bots.PermissionWorkspaceExec:  true,
+			"bot-1:" + memberID + ":" + bots.PermissionWorkspaceExec: true,
+			"bot-1:" + chatOnlyID + ":" + bots.PermissionChat:        true,
+		},
+	}
+	svc := &Service{
+		botPermissions: perms,
+		sessionService: &fakeBackgroundSessionService{
+			getFn: func(_ context.Context, sessionID string) (session.Thread, error) {
+				return session.Thread{
+					ID:          sessionID,
+					BotID:       "bot-1",
+					Type:        session.TypeACPAgent,
+					RuntimeType: session.RuntimeACPAgent,
+					RuntimeMetadata: map[string]any{
+						"runtime_owner_account_id": ownerID,
+					},
+				}, nil
+			},
+		},
+	}
+	inputTarget := userinput.Request{BotID: "bot-1", SessionID: "session-1"}
+	approvalTarget := toolapproval.Request{BotID: "bot-1", SessionID: "session-1", Operation: toolapproval.OperationExec}
+
+	if err := svc.authorizeACPUserInputResponse(context.Background(), inputTarget, UserInputResponseInput{ActorUserID: ownerID}); err != nil {
+		t.Fatalf("owner user-input authorization error = %v", err)
+	}
+	if err := svc.authorizeACPToolApprovalResponse(context.Background(), approvalTarget, ToolApprovalResponseInput{ActorUserID: ownerID}); err != nil {
+		t.Fatalf("owner approval authorization error = %v", err)
+	}
+	if err := svc.authorizeACPUserInputResponse(context.Background(), inputTarget, UserInputResponseInput{ActorUserID: memberID}); err != nil {
+		t.Fatalf("workspace_exec member user-input authorization error = %v", err)
+	}
+	if err := svc.authorizeACPToolApprovalResponse(context.Background(), approvalTarget, ToolApprovalResponseInput{ActorUserID: memberID}); err != nil {
+		t.Fatalf("workspace_exec member approval authorization error = %v", err)
+	}
+	if err := svc.authorizeACPUserInputResponse(context.Background(), inputTarget, UserInputResponseInput{ActorUserID: chatOnlyID}); !errors.Is(err, userinput.ErrForbidden) {
+		t.Fatalf("chat-only user-input authorization error = %v, want forbidden", err)
+	}
+	if err := svc.authorizeACPToolApprovalResponse(context.Background(), approvalTarget, ToolApprovalResponseInput{ActorUserID: chatOnlyID}); !errors.Is(err, toolapproval.ErrForbidden) {
+		t.Fatalf("chat-only approval authorization error = %v, want forbidden", err)
+	}
+
+	delete(perms.values, "bot-1:"+ownerID+":"+bots.PermissionWorkspaceExec)
+	if err := svc.authorizeACPUserInputResponse(context.Background(), inputTarget, UserInputResponseInput{ActorUserID: ownerID}); !errors.Is(err, userinput.ErrForbidden) {
+		t.Fatalf("revoked owner user-input authorization error = %v, want forbidden", err)
+	}
+	if err := svc.authorizeACPToolApprovalResponse(context.Background(), approvalTarget, ToolApprovalResponseInput{ActorUserID: ownerID}); !errors.Is(err, toolapproval.ErrForbidden) {
+		t.Fatalf("revoked owner approval authorization error = %v, want forbidden", err)
+	}
+}

@@ -84,8 +84,17 @@ func TestLegacyPermissionOptionID(t *testing.T) {
 	if got, err := legacyPermissionOptionID(options, "approve"); err != nil || got != "allow-once" {
 		t.Fatalf("legacy approve = %q, %v", got, err)
 	}
-	if got, err := legacyPermissionOptionID(options[:1], "approve"); got != "" || !errors.Is(err, toolapproval.ErrOptionUnavailable) {
-		t.Fatalf("approve without allow_once = %q, %v", got, err)
+	// Without allow_once, the sole allow option is the only possible grant, so
+	// a binary approve selects it instead of dead-ending the request.
+	if got, err := legacyPermissionOptionID(options[:2], "approve"); err != nil || got != "allow-session" {
+		t.Fatalf("approve without allow_once = %q, %v, want allow-session", got, err)
+	}
+	ambiguous := []toolapproval.PermissionOption{
+		{ID: "allow-session", Kind: toolapproval.OptionKindAllowAlways},
+		{ID: "allow-project", Kind: toolapproval.OptionKindAllowAlways},
+	}
+	if got, err := legacyPermissionOptionID(ambiguous, "approve"); got != "" || !errors.Is(err, toolapproval.ErrOptionUnavailable) {
+		t.Fatalf("ambiguous approve = %q, %v, want option-unavailable", got, err)
 	}
 	if got, err := legacyPermissionOptionID(options[2:], "reject"); got != "" || err != nil {
 		t.Fatalf("reject without reject_once = %q, %v", got, err)

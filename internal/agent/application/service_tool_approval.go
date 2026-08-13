@@ -88,8 +88,9 @@ func (s *Service) CommitToolApprovalResponse(ctx context.Context, input ToolAppr
 	if optionID == "" && len(target.Options) > 0 {
 		// Older Web/Desktop clients only send approve/reject. Preserve that
 		// contract without inventing a durable choice: a binary response maps
-		// only to the agent's one-shot option. Session/always options must be
-		// selected explicitly by a client that can show their semantics.
+		// to the agent's one-shot option when one exists, and to the agent's
+		// sole allow option otherwise. Choosing among multiple durable options
+		// requires a client that can show their semantics.
 		optionID, err = legacyPermissionOptionID(target.Options, decision)
 	}
 	if err != nil {
@@ -178,7 +179,26 @@ func legacyPermissionOptionID(options []toolapproval.PermissionOption, decision 
 		// cancelled outcome instead of selecting a broader reject_always scope.
 		return "", nil
 	}
-	return "", fmt.Errorf("%w: legacy %s requires an agent-provided %s option", toolapproval.ErrOptionUnavailable, decision, wantKind)
+	// No allow_once option exists. Selecting the agent's sole allow option is
+	// not a silent upgrade — there is no narrower grant the decider could have
+	// meant — and refusing here would leave binary surfaces (channel buttons)
+	// with no way to ever approve the request. Only an ambiguous set of
+	// multiple allow options without allow_once still fails.
+	allowMatch := ""
+	allowMatches := 0
+	for _, option := range options {
+		if option.Approves() {
+			allowMatches++
+			if allowMatches > 1 {
+				return "", fmt.Errorf("%w: legacy %s is ambiguous across multiple allow options without an %s option", toolapproval.ErrOptionUnavailable, decision, wantKind)
+			}
+			allowMatch = option.ID
+		}
+	}
+	if allowMatches == 1 {
+		return allowMatch, nil
+	}
+	return "", fmt.Errorf("%w: legacy %s requires an agent-provided allow option", toolapproval.ErrOptionUnavailable, decision)
 }
 
 func (s *Service) ContinueCommittedToolApprovalResponse(ctx context.Context, committed CommittedToolApprovalResponse, eventCh chan<- WSStreamEvent) error {
@@ -285,9 +305,9 @@ func (s *Service) authorizeACPToolApprovalResponse(ctx context.Context, target t
 	if runtimeOwnerID == "" {
 		return toolapproval.ErrForbidden
 	}
-	if runtimeOwnerID == actorID {
-		return nil
-	}
+	// The runtime owner has no standing beyond their live grants: a revoked
+	// or offboarded owner must lose approval authority at decision time, so
+	// every actor — owner included — passes the permission check.
 	return s.authorizeToolApprovalResponse(ctx, target, input)
 }
 
