@@ -43,29 +43,29 @@ func TestToolApprovalMigrationContracts(t *testing.T) {
 		t.Fatalf("%s tool_approval_requests CHECK must not include ACP tools", path)
 	}
 
-	upSQL := readEmbeddedMigration(t, "postgres/migrations/0130_tool_approval_options.up.sql")
+	upSQL := readEmbeddedMigration(t, "postgres/migrations/0131_tool_approval_options.up.sql")
 	for _, contract := range []string{
 		"ADD COLUMN IF NOT EXISTS options JSONB NOT NULL DEFAULT '[]'::jsonb",
 		"ADD COLUMN IF NOT EXISTS selected_option_id TEXT NOT NULL DEFAULT ''",
-		"VALIDATE CONSTRAINT tool_approval_operation_check_0130",
+		"VALIDATE CONSTRAINT tool_approval_operation_check_0131",
 	} {
 		if !strings.Contains(upSQL, contract) {
-			t.Fatalf("0130 up missing %q", contract)
+			t.Fatalf("0131 up missing %q", contract)
 		}
 	}
-	downSQL := readEmbeddedMigration(t, "postgres/migrations/0130_tool_approval_options.down.sql")
+	downSQL := readEmbeddedMigration(t, "postgres/migrations/0131_tool_approval_options.down.sql")
 	for _, guard := range []string{
 		"CHECK (operation IN ('read', 'write', 'exec')) NOT VALID",
 		"CHECK (options = '[]'::jsonb AND selected_option_id = '') NOT VALID",
 		"RAISE EXCEPTION",
 	} {
 		if !strings.Contains(downSQL, guard) {
-			t.Fatalf("0130 down must fail closed on audit data; missing %q", guard)
+			t.Fatalf("0131 down must fail closed on audit data; missing %q", guard)
 		}
 	}
 	if strings.Contains(downSQL, "DISABLE ROW LEVEL SECURITY") ||
 		strings.Contains(downSQL, "NO FORCE ROW LEVEL SECURITY") {
-		t.Fatal("0130 down must not disable FORCE RLS")
+		t.Fatal("0131 down must not disable FORCE RLS")
 	}
 }
 

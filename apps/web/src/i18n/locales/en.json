@@ -676,6 +676,13 @@
       "rejectReasonLabel": "Reason for rejection",
       "rejectReasonPlaceholder": "Add a reason (optional)",
       "confirmReject": "Reject",
+      "agentOption": "Agent option",
+      "option": {
+        "allowOnce": "Allow once",
+        "allowAlways": "Allow beyond this request",
+        "rejectOnce": "Reject once",
+        "rejectAlways": "Always reject"
+      },
       "action": {
         "exec": "Run a command",
         "write": "Write a file",

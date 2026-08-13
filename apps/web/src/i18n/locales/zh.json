@@ -676,6 +676,13 @@
       "rejectReasonLabel": "拒绝理由",
       "rejectReasonPlaceholder": "填写理由（可选）",
       "confirmReject": "拒绝",
+      "agentOption": "Agent 选项",
+      "option": {
+        "allowOnce": "仅允许本次",
+        "allowAlways": "允许后续使用",
+        "rejectOnce": "仅拒绝本次",
+        "rejectAlways": "始终拒绝"
+      },
       "action": {
         "exec": "运行命令",
         "write": "写入文件",

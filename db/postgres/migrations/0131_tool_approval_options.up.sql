@@ -1,4 +1,4 @@
--- 0130_tool_approval_options
+-- 0131_tool_approval_options
 -- Add ACP permission choices and the selected choice to approval audit rows.
 --
 -- This file deliberately spans three transactions. PostgreSQL retains ALTER
@@ -22,10 +22,10 @@ BEGIN
   IF to_regclass('public.tool_approval_requests') IS NOT NULL AND NOT EXISTS (
     SELECT 1 FROM pg_constraint
      WHERE conrelid = 'public.tool_approval_requests'::regclass
-       AND conname = 'tool_approval_operation_check_0130'
+       AND conname = 'tool_approval_operation_check_0131'
   ) THEN
     ALTER TABLE public.tool_approval_requests
-      ADD CONSTRAINT tool_approval_operation_check_0130
+      ADD CONSTRAINT tool_approval_operation_check_0131
       CHECK (operation IN ('read', 'write', 'exec', 'permission')) NOT VALID;
   END IF;
 END $$;
@@ -40,11 +40,11 @@ BEGIN
   IF to_regclass('public.tool_approval_requests') IS NOT NULL AND EXISTS (
     SELECT 1 FROM pg_constraint
      WHERE conrelid = 'public.tool_approval_requests'::regclass
-       AND conname = 'tool_approval_operation_check_0130'
+       AND conname = 'tool_approval_operation_check_0131'
        AND NOT convalidated
   ) THEN
     ALTER TABLE public.tool_approval_requests
-      VALIDATE CONSTRAINT tool_approval_operation_check_0130;
+      VALIDATE CONSTRAINT tool_approval_operation_check_0131;
   END IF;
 END $$;
 
@@ -62,21 +62,21 @@ BEGIN
   IF EXISTS (
     SELECT 1 FROM pg_constraint
      WHERE conrelid = 'public.tool_approval_requests'::regclass
-       AND conname = 'tool_approval_operation_check_0130'
+       AND conname = 'tool_approval_operation_check_0131'
        AND convalidated
   ) THEN
     ALTER TABLE public.tool_approval_requests
       DROP CONSTRAINT IF EXISTS tool_approval_operation_check;
     ALTER TABLE public.tool_approval_requests
-      RENAME CONSTRAINT tool_approval_operation_check_0130 TO tool_approval_operation_check;
+      RENAME CONSTRAINT tool_approval_operation_check_0131 TO tool_approval_operation_check;
   END IF;
 
   -- Completing a roll-forward after a failed down must remove the rollback
-  -- guards, which intentionally reject new 0130 data while down is pending.
+  -- guards, which intentionally reject new 0131 data while down is pending.
   ALTER TABLE public.tool_approval_requests
-    DROP CONSTRAINT IF EXISTS tool_approval_operation_check_down_0130;
+    DROP CONSTRAINT IF EXISTS tool_approval_operation_check_down_0131;
   ALTER TABLE public.tool_approval_requests
-    DROP CONSTRAINT IF EXISTS tool_approval_options_rollback_guard_0130;
+    DROP CONSTRAINT IF EXISTS tool_approval_options_rollback_guard_0131;
 END $$;
 
 COMMIT;

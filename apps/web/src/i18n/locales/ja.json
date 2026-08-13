@@ -647,6 +647,13 @@
       "rejectReasonLabel": "拒否理由",
       "rejectReasonPlaceholder": "理由を追加（任意）",
       "confirmReject": "拒否",
+      "agentOption": "Agent オプション",
+      "option": {
+        "allowOnce": "今回のみ許可",
+        "allowAlways": "今回以降も許可",
+        "rejectOnce": "今回のみ拒否",
+        "rejectAlways": "常に拒否"
+      },
       "action": {
         "exec": "コマンドを実行",
         "write": "ファイルを書き込み",

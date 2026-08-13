@@ -47,6 +47,10 @@
         @click="action.approves ? emit('approve', action.optionId) : emit('begin-reject', action.optionId)"
       >
         {{ action.name }}
+        <template v-if="action.agentName">
+          <span aria-hidden="true"> — </span>
+          <span>{{ $t('chat.approval.agentOption') }}: <bdi>{{ action.agentName }}</bdi></span>
+        </template>
       </Button>
     </div>
   </div>
@@ -78,8 +82,19 @@ const emit = defineEmits<{
 type ApprovalAction = {
   key: string
   name: string
+  agentName?: string
   optionId?: string
   approves: boolean
+}
+
+function optionKindLabel(kind: string | undefined) {
+  switch (kind) {
+    case 'allow_once': return t('chat.approval.option.allowOnce')
+    case 'allow_always': return t('chat.approval.option.allowAlways')
+    case 'reject_once': return t('chat.approval.option.rejectOnce')
+    case 'reject_always': return t('chat.approval.option.rejectAlways')
+    default: return t('chat.tools.reject')
+  }
 }
 
 const agentOptions = computed(() => props.options
@@ -90,7 +105,8 @@ const agentOptions = computed(() => props.options
     return {
       id,
       key: `option:${id}`,
-      name: option.name?.trim() || id,
+      name: optionKindLabel(kind),
+      agentName: option.name?.trim() || id,
       optionId: id,
       approves: kind === 'allow_once' || kind === 'allow_always',
     }
