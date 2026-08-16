@@ -73,10 +73,13 @@ CREATE TABLE IF NOT EXISTS public.acp_session_states (
         CHECK (jsonb_typeof(file_shapes) = 'array')
 );
 
--- Single line set per session: staging appends each file's tail and rewrites
--- a file only when its canonical prefix digest no longer matches. Lines
--- reference the session directly (not a version header) because versions
--- share them; version membership is defined by the header's file_shapes.
+-- Single line set per session: staging appends each file's tail after proving
+-- the stored canonical prefix byte-identical. When the proof fails, staging
+-- DECLINES without touching canonical rows - the turn publishes a reset head,
+-- and only once that reset is canonical may the next turn stage a full
+-- rewrite. Lines reference the session directly (not a version header)
+-- because versions share them; version membership is defined by the header's
+-- file_shapes.
 CREATE TABLE IF NOT EXISTS public.acp_session_state_lines (
     team_id       UUID   NOT NULL DEFAULT public.memoh_current_team_id()
                           REFERENCES public.teams(id) ON DELETE RESTRICT,
