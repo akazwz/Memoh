@@ -44,10 +44,18 @@ func TestCompactionArtifactMigrationPostgresPath(t *testing.T) {
 	}
 	bindTeamQueryFixture(t, ctx, tx)
 	if _, err := tx.Exec(ctx, `
+CREATE SEQUENCE session_runtime_fencing_token_seq AS BIGINT NO CYCLE;
+
 CREATE TABLE bot_sessions (
   id UUID PRIMARY KEY,
   bot_id UUID NOT NULL,
-  team_id UUID NOT NULL DEFAULT public.memoh_current_team_id()
+  team_id UUID NOT NULL DEFAULT public.memoh_current_team_id(),
+  runtime_fencing_token BIGINT NOT NULL DEFAULT 0
+);
+
+CREATE TABLE acp_session_states (
+  team_id UUID NOT NULL DEFAULT public.memoh_current_team_id(),
+  session_id UUID NOT NULL
 );
 
 CREATE TABLE bot_history_message_compacts (
