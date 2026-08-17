@@ -1,4 +1,4 @@
--- 0135_acp_session_state
+-- 0136_acp_session_state
 -- Persist ordered ACP JSONL session state independently of ephemeral runtime
 -- homes. Lines form a single per-session set that staging appends to; version
 -- headers are small run-keyed rows carrying each file's shape (record count +
@@ -8,9 +8,9 @@
 -- crashed round is invisible.
 
 -- through_run_id must belong to the same tenant and session as the snapshot.
--- session_runs_team_run_key already proves tenant ownership, but it cannot be
--- the target of the stronger three-column foreign key below. Add the redundant
--- candidate key deliberately so PostgreSQL can enforce the complete invariant.
+-- 0135 builds the redundant candidate key's unique index concurrently. Attach
+-- it as a constraint here so PostgreSQL can enforce the complete invariant
+-- without rebuilding the index while session_runs is write-locked.
 DO $add_session_runs_team_session_run_key$
 BEGIN
     IF NOT EXISTS (
@@ -20,7 +20,8 @@ BEGIN
           AND conname = 'session_runs_team_session_run_key'
     ) THEN
         ALTER TABLE public.session_runs
-            ADD CONSTRAINT session_runs_team_session_run_key UNIQUE (team_id, session_id, run_id);
+            ADD CONSTRAINT session_runs_team_session_run_key
+            UNIQUE USING INDEX session_runs_team_session_run_key;
     END IF;
 END
 $add_session_runs_team_session_run_key$;

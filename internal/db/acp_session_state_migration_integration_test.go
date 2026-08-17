@@ -17,11 +17,24 @@ func TestACPSessionStateMigrationAndCanonicalSchema(t *testing.T) {
 		pool := freshMigratedDB(t)
 
 		assertACPSessionStateSchema(t, ctx, pool, true)
-		// 0136 follows ACP state, so cross both migrations to exercise 0135.
+		assertACPSessionRunCandidateIndex(t, ctx, pool, true, true)
+
+		// 0137 is the reset fence. Crossing 0136 removes the ACP tables and
+		// detaches the constraint while preserving 0135's standalone index.
 		stepDown(t, dsn, 2)
 		assertACPSessionStateSchema(t, ctx, pool, false)
+		assertACPSessionRunCandidateIndex(t, ctx, pool, true, false)
+
+		// 0135 is deliberately a single concurrent-index statement and is
+		// independently reversible.
+		stepDown(t, dsn, 1)
+		assertACPSessionRunCandidateIndex(t, ctx, pool, false, false)
+		stepUp(t, dsn, 1)
+		assertACPSessionRunCandidateIndex(t, ctx, pool, true, false)
+
 		stepUp(t, dsn, 2)
 		assertACPSessionStateSchema(t, ctx, pool, true)
+		assertACPSessionRunCandidateIndex(t, ctx, pool, true, true)
 	})
 
 	t.Run("canonical init contains final ACP state schema", func(t *testing.T) {
@@ -30,7 +43,41 @@ func TestACPSessionStateMigrationAndCanonicalSchema(t *testing.T) {
 		pool := resetToEmpty(t)
 		applyCanonicalInitOnly(t, dsn)
 		assertACPSessionStateSchema(t, ctx, pool, true)
+		assertACPSessionRunCandidateIndex(t, ctx, pool, true, true)
 	})
+}
+
+func assertACPSessionRunCandidateIndex(
+	t *testing.T,
+	ctx context.Context,
+	pool *pgxpool.Pool,
+	wantIndex bool,
+	wantConstraintOwner bool,
+) {
+	t.Helper()
+	var indexExists, constraintOwnsIndex bool
+	if err := pool.QueryRow(ctx, `
+		SELECT
+			to_regclass('public.session_runs_team_session_run_key') IS NOT NULL,
+			EXISTS (
+				SELECT 1
+				FROM pg_constraint
+				WHERE conrelid = to_regclass('public.session_runs')
+				  AND conname = 'session_runs_team_session_run_key'
+				  AND conindid = to_regclass('public.session_runs_team_session_run_key')
+			)
+	`).Scan(&indexExists, &constraintOwnsIndex); err != nil {
+		t.Fatalf("inspect ACP session run candidate index: %v", err)
+	}
+	if indexExists != wantIndex || constraintOwnsIndex != wantConstraintOwner {
+		t.Fatalf(
+			"ACP session run candidate index: exists=%t constraint_owner=%t, want exists=%t constraint_owner=%t",
+			indexExists,
+			constraintOwnsIndex,
+			wantIndex,
+			wantConstraintOwner,
+		)
+	}
 }
 
 func assertACPSessionStateSchema(t *testing.T, ctx context.Context, pool *pgxpool.Pool, want bool) {
