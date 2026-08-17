@@ -19,13 +19,13 @@ func TestACPSessionStateMigrationAndCanonicalSchema(t *testing.T) {
 		assertACPSessionStateSchema(t, ctx, pool, true)
 		assertACPSessionRunCandidateIndex(t, ctx, pool, true, true)
 
-		// 0137 is the reset fence. Crossing 0136 removes the ACP tables and
-		// detaches the constraint while preserving 0135's standalone index.
+		// 0139 is the reset fence. Crossing 0138 removes the ACP tables and
+		// detaches the constraint while preserving 0137's standalone index.
 		stepDown(t, dsn, 2)
 		assertACPSessionStateSchema(t, ctx, pool, false)
 		assertACPSessionRunCandidateIndex(t, ctx, pool, true, false)
 
-		// 0135 is deliberately a single concurrent-index statement and is
+		// 0137 is deliberately a single concurrent-index statement and is
 		// independently reversible.
 		stepDown(t, dsn, 1)
 		assertACPSessionRunCandidateIndex(t, ctx, pool, false, false)

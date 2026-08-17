@@ -1,4 +1,4 @@
--- 0136_acp_session_state
+-- 0138_acp_session_state
 -- Persist ordered ACP JSONL session state independently of ephemeral runtime
 -- homes. Lines form a single per-session set that staging appends to; version
 -- headers are small run-keyed rows carrying each file's shape (record count +
@@ -8,7 +8,7 @@
 -- crashed round is invisible.
 
 -- through_run_id must belong to the same tenant and session as the snapshot.
--- 0135 builds the redundant candidate key's unique index concurrently. Attach
+-- 0137 builds the redundant candidate key's unique index concurrently. Attach
 -- it as a constraint here so PostgreSQL can enforce the complete invariant
 -- without rebuilding the index while session_runs is write-locked.
 DO $add_session_runs_team_session_run_key$

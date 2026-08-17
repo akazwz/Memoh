@@ -1,4 +1,4 @@
--- 0137_session_runtime_reset_fence
+-- 0139_session_runtime_reset_fence
 -- Add crash-recoverable bot/session reset leases that fence new run admission.
 
 ALTER TABLE public.bots

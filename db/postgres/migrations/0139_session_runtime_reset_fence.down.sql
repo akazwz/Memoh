@@ -1,4 +1,4 @@
--- 0137_session_runtime_reset_fence
+-- 0139_session_runtime_reset_fence
 -- Remove crash-recoverable bot/session reset leases.
 
 ALTER TABLE public.bot_sessions
