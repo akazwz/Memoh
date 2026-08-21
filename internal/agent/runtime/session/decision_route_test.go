@@ -14,13 +14,19 @@ import (
 )
 
 func TestRunControlCommandContextPreservesOwnershipLossCause(t *testing.T) {
-	lifecycleCtx, lifecycleCancel := context.WithCancel(context.Background())
+	type contextKey struct{}
+	lifecycleCtx, lifecycleCancel := context.WithCancel(
+		context.WithValue(context.Background(), contextKey{}, "run-scope"),
+	)
 	ctrl := &runControl{
 		lifecycleCtx:    lifecycleCtx,
 		lifecycleCancel: lifecycleCancel,
 	}
 	ctx, cancel := ctrl.commandContext(context.Background())
 	defer cancel()
+	if got := ctx.Value(contextKey{}); got != "run-scope" {
+		t.Fatalf("command context value = %v, want run-scope", got)
+	}
 
 	ctrl.revokeOwnership(ErrRunOwnershipLost)
 	ctrl.stopCommands()

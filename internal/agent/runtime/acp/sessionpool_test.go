@@ -41,6 +41,9 @@ import (
 // injectRuntime registers a hand-built handle for tests that exercise
 // internal state without booting a real agent process.
 func injectRuntime(p *SessionPool, h *runtimeHandle) {
+	if h.ownerCtx == nil {
+		h.ownerCtx = context.Background()
+	}
 	p.mu.Lock()
 	p.runtimes[h.id] = h
 	if h.boundSession != "" {
@@ -570,6 +573,8 @@ func TestSessionPoolCreateRuntimeGeneratesIDAndReportsModels(t *testing.T) {
 }
 
 func TestSessionPoolBindRuntimeAttachesWarmProcessToSession(t *testing.T) {
+	type contextKey struct{}
+
 	t.Setenv("MEMOH_ACP_SESSION_POOL_FAKE_AGENT_MODELS", "1")
 	pool := newFakeScriptPool(t)
 
@@ -586,12 +591,29 @@ func TestSessionPoolBindRuntimeAttachesWarmProcessToSession(t *testing.T) {
 		t.Fatalf("SetRuntimeModel() error = %v", err)
 	}
 
-	if err := pool.BindRuntime("bot-1", created.RuntimeID, "session-1", acpprofile.AgentCodexID, "/data/project", "user-1"); err != nil {
+	bindCtx, cancelBind := context.WithCancel(
+		context.WithValue(context.Background(), contextKey{}, "bind-scope"),
+	)
+	defer cancelBind()
+	if err := pool.BindRuntime(bindCtx, "bot-1", created.RuntimeID, "session-1", acpprofile.AgentCodexID, "/data/project", "user-1"); err != nil {
 		t.Fatalf("BindRuntime() error = %v", err)
 	}
+	cancelBind()
 	h := pool.sessionHandle("session-1")
 	if h == nil || h.id != created.RuntimeID {
 		t.Fatalf("session index does not point at the bound runtime")
+	}
+	h.state.Lock()
+	ownerCtx := h.ownerCtx
+	h.state.Unlock()
+	if ownerCtx == nil {
+		t.Fatal("bound runtime owner context is nil")
+	}
+	if got := ownerCtx.Value(contextKey{}); got != "bind-scope" {
+		t.Fatalf("bound runtime owner context value = %v, want bind-scope", got)
+	}
+	if err := ownerCtx.Err(); err != nil {
+		t.Fatalf("bound runtime owner context error = %v, want request cancellation detached", err)
 	}
 
 	// The bound session reuses the warm process - including its model.
@@ -616,7 +638,7 @@ func TestSessionPoolBindRuntimeAttachesWarmProcessToSession(t *testing.T) {
 	}
 
 	// A bound runtime cannot be bound again.
-	if err := pool.BindRuntime("bot-1", created.RuntimeID, "session-2", acpprofile.AgentCodexID, "/data/project", "user-1"); !errors.Is(err, ErrRuntimeBindRejected) {
+	if err := pool.BindRuntime(context.Background(), "bot-1", created.RuntimeID, "session-2", acpprofile.AgentCodexID, "/data/project", "user-1"); !errors.Is(err, ErrRuntimeBindRejected) {
 		t.Fatalf("second BindRuntime() error = %v, want ErrRuntimeBindRejected", err)
 	}
 }
@@ -698,30 +720,30 @@ func TestSessionPoolBindRuntimeRejectsMismatches(t *testing.T) {
 		{"wrong project", "bot-2", "real", acpprofile.AgentCodexID, "/other", ErrRuntimeBindRejected},
 	}
 	for _, tc := range cases {
-		if err := pool.BindRuntime(tc.botID, pending.id, tc.sessionID, tc.agent, tc.path, "user-1"); !errors.Is(err, tc.wantErr) {
+		if err := pool.BindRuntime(context.Background(), tc.botID, pending.id, tc.sessionID, tc.agent, tc.path, "user-1"); !errors.Is(err, tc.wantErr) {
 			t.Fatalf("%s: BindRuntime() error = %v, want %v", tc.name, err, tc.wantErr)
 		}
 	}
-	if err := pool.BindRuntime("bot-2", "rt_missing", "real", acpprofile.AgentCodexID, "/data", "user-1"); !errors.Is(err, ErrRuntimeNotFound) {
+	if err := pool.BindRuntime(context.Background(), "bot-2", "rt_missing", "real", acpprofile.AgentCodexID, "/data", "user-1"); !errors.Is(err, ErrRuntimeNotFound) {
 		t.Fatalf("missing runtime: BindRuntime() error = %v, want ErrRuntimeNotFound", err)
 	}
 
 	// Session already served by another runtime.
 	other := &runtimeHandle{id: newRuntimeID(), botID: "bot-2", boundSession: "real", status: stateIdle}
 	injectRuntime(pool, other)
-	if err := pool.BindRuntime("bot-2", pending.id, "real", acpprofile.AgentCodexID, "/data", "user-1"); !errors.Is(err, ErrRuntimeBindRejected) {
+	if err := pool.BindRuntime(context.Background(), "bot-2", pending.id, "real", acpprofile.AgentCodexID, "/data", "user-1"); !errors.Is(err, ErrRuntimeBindRejected) {
 		t.Fatalf("occupied session: BindRuntime() error = %v, want ErrRuntimeBindRejected", err)
 	}
 
 	// A still-starting runtime (no live process yet) is not bindable.
 	starting := &runtimeHandle{id: newRuntimeID(), botID: "bot-2", agentID: acpprofile.AgentCodexID, projectPath: "/data", status: stateStarting}
 	injectRuntime(pool, starting)
-	if err := pool.BindRuntime("bot-2", starting.id, "real-2", acpprofile.AgentCodexID, "/data", "user-1"); !errors.Is(err, ErrRuntimeBindRejected) {
+	if err := pool.BindRuntime(context.Background(), "bot-2", starting.id, "real-2", acpprofile.AgentCodexID, "/data", "user-1"); !errors.Is(err, ErrRuntimeBindRejected) {
 		t.Fatalf("starting runtime: BindRuntime() error = %v, want ErrRuntimeBindRejected", err)
 	}
 
 	// Everything matching succeeds.
-	if err := pool.BindRuntime("bot-2", pending.id, "real-2", acpprofile.AgentCodexID, "/data", "user-1"); err != nil {
+	if err := pool.BindRuntime(context.Background(), "bot-2", pending.id, "real-2", acpprofile.AgentCodexID, "/data", "user-1"); err != nil {
 		t.Fatalf("matching BindRuntime() error = %v", err)
 	}
 	if pool.sessionHandle("real-2") != pending {
@@ -752,7 +774,7 @@ func TestSessionPoolOwnedGateHasZeroSideEffectsAcrossBots(t *testing.T) {
 	if err := pool.CloseRuntime("bot-1", foreign.id); !errors.Is(err, ErrRuntimeNotFound) {
 		t.Fatalf("CloseRuntime(cross bot) error = %v, want ErrRuntimeNotFound", err)
 	}
-	if err := pool.BindRuntime("bot-1", foreign.id, "my-session", acpprofile.AgentCodexID, "/data", "user-1"); !errors.Is(err, ErrRuntimeNotFound) {
+	if err := pool.BindRuntime(context.Background(), "bot-1", foreign.id, "my-session", acpprofile.AgentCodexID, "/data", "user-1"); !errors.Is(err, ErrRuntimeNotFound) {
 		t.Fatalf("BindRuntime(cross bot) error = %v, want ErrRuntimeNotFound", err)
 	}
 	if _, ok := pool.ResolveRuntimeToolContext("bot-1", foreign.id, "runtime-token-1"); ok {
@@ -2237,6 +2259,7 @@ func TestSessionPoolReapIdlePolicies(t *testing.T) {
 
 func TestCloseSessionCancelsPendingDecisions(t *testing.T) {
 	t.Parallel()
+	type contextKey struct{}
 
 	approval := &fakeToolApprovalService{}
 	userInput := &fakeUserInputCanceller{}
@@ -2250,6 +2273,7 @@ func TestCloseSessionCancelsPendingDecisions(t *testing.T) {
 		boundSession: "session-1",
 		lastActive:   time.Now(),
 		hadPrompt:    true,
+		ownerCtx:     context.WithValue(context.Background(), contextKey{}, "runtime-scope"),
 	})
 
 	if err := pool.CloseSession("session-1"); err != nil {
@@ -2263,6 +2287,12 @@ func TestCloseSessionCancelsPendingDecisions(t *testing.T) {
 	}
 	if approval.cancelCount != 2 || userInput.cancelCount != 2 {
 		t.Fatalf("decision cleanup count = approval:%d user_input:%d, want pre and final cleanup", approval.cancelCount, userInput.cancelCount)
+	}
+	if got := approval.cancelCtx.Value(contextKey{}); got != "runtime-scope" {
+		t.Fatalf("approval cleanup context value = %v, want runtime-scope", got)
+	}
+	if got := userInput.cancelCtx.Value(contextKey{}); got != "runtime-scope" {
+		t.Fatalf("user input cleanup context value = %v, want runtime-scope", got)
 	}
 }
 
@@ -2509,6 +2539,7 @@ func (s *recordingSessionStateStore) setHead(head SessionPublicationHead, found 
 }
 
 type fakeToolApprovalService struct {
+	cancelCtx       context.Context
 	cancelBotID     string
 	cancelSessionID string
 	cancelReason    string
@@ -2549,6 +2580,7 @@ func (f *fakeToolApprovalService) CancelPendingForSession(ctx context.Context, b
 	if f.cancelRelease != nil {
 		<-f.cancelRelease
 	}
+	f.cancelCtx = ctx
 	f.cancelBotID = botID
 	f.cancelSessionID = sessionID
 	f.cancelReason = reason
@@ -2558,6 +2590,7 @@ func (f *fakeToolApprovalService) CancelPendingForSession(ctx context.Context, b
 }
 
 type fakeUserInputCanceller struct {
+	cancelCtx       context.Context
 	cancelBotID     string
 	cancelSessionID string
 	cancelReason    string
@@ -2586,6 +2619,7 @@ func (f *fakeUserInputCanceller) CancelPendingForSession(ctx context.Context, bo
 	if f.cancelStarted != nil {
 		f.cancelStarted <- struct{}{}
 	}
+	f.cancelCtx = ctx
 	f.cancelBotID = botID
 	f.cancelSessionID = sessionID
 	f.cancelReason = reason
