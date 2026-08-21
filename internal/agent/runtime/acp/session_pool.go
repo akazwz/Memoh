@@ -197,9 +197,12 @@ type runtimeHandle struct {
 	hadPrompt                bool
 	decisionPreCleanupOnce   sync.Once
 	decisionFinalCleanupOnce sync.Once
-	closeStarted             bool
-	closeDone                chan struct{}
-	closeErr                 error
+	// decisionFallbackOnce keeps the malformed-handle report to one log line
+	// even though closeHandle and teardown both reach the cleanup path.
+	decisionFallbackOnce sync.Once
+	closeStarted         bool
+	closeDone            chan struct{}
+	closeErr             error
 	// nativeHead names the publication head this process's native conversation
 	// corresponds to. It advances locally the moment a turn's state is staged
 	// (checkpoint) or a snapshot-incapable turn completes (reset). The database
@@ -2162,7 +2165,7 @@ func (p *SessionPool) closeHandle(h *runtimeHandle) error {
 		sessionID = activeSession
 	}
 	if cleanupParent == nil && sessionID != "" {
-		cleanupParent = p.decisionCleanupRoot(h.botID, sessionID)
+		cleanupParent = p.fallbackDecisionCleanupRoot(h, sessionID)
 	}
 	p.cancelHandlePendingDecisions(cleanupParent, h, sessionID, fence, decisionCleanupPre, "decision cancelled: ACP runtime closed before a response arrived")
 	h.op.Lock()
@@ -2253,7 +2256,7 @@ func (p *SessionPool) teardown(h *runtimeHandle) error {
 		sessionID = activeSession
 	}
 	if cleanupParent == nil && sessionID != "" {
-		cleanupParent = p.decisionCleanupRoot(h.botID, sessionID)
+		cleanupParent = p.fallbackDecisionCleanupRoot(h, sessionID)
 	}
 	p.cancelHandlePendingDecisions(cleanupParent, h, sessionID, fence, decisionCleanupPre, "decision cancelled: ACP runtime closed before a response arrived")
 
@@ -2284,12 +2287,15 @@ const (
 	decisionCleanupFinal
 )
 
-// decisionCleanupRoot is the single fail-open boundary for a malformed handle
-// that has pending decisions but no owner context. The cleanup loses values,
-// but skipping it would leave approvals or questions stranded in the UI.
-func (p *SessionPool) decisionCleanupRoot(botID, sessionID string) context.Context {
-	p.logger.Error("pending ACP decision cleanup without runtime context",
-		slog.String("bot_id", botID), slog.String("session_id", sessionID))
+// fallbackDecisionCleanupRoot is the single fail-open boundary for a malformed
+// handle that has pending decisions but no owner context. The cleanup loses
+// values, but skipping it would leave approvals or questions stranded in the
+// UI. The report is logged once per handle.
+func (p *SessionPool) fallbackDecisionCleanupRoot(h *runtimeHandle, sessionID string) context.Context {
+	h.decisionFallbackOnce.Do(func() {
+		p.logger.Error("pending ACP decision cleanup without runtime context",
+			slog.String("bot_id", h.botID), slog.String("session_id", sessionID))
+	})
 	return context.Background()
 }
 

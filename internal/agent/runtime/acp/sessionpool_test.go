@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"os"
 	"path/filepath"
@@ -2325,7 +2326,8 @@ func TestCloseSessionCancelsPendingDecisionsWithoutOwnerContext(t *testing.T) {
 
 	approval := &fakeToolApprovalService{}
 	userInput := &fakeUserInputCanceller{}
-	pool := newSessionPool(nil, nil, fakeBotGetter{})
+	logs := &countingLogHandler{}
+	pool := newSessionPool(slog.New(logs), nil, fakeBotGetter{})
 	pool.SetToolApprovalService(approval)
 	pool.SetUserInputService(userInput)
 	h := &runtimeHandle{
@@ -2343,6 +2345,43 @@ func TestCloseSessionCancelsPendingDecisionsWithoutOwnerContext(t *testing.T) {
 	if approval.cancelCount != 2 || userInput.cancelCount != 2 {
 		t.Fatalf("decision cleanup count = approval:%d user_input:%d, want pre and final cleanup", approval.cancelCount, userInput.cancelCount)
 	}
+	// closeHandle and teardown both reach the cleanup path; the malformed
+	// handle is still reported once.
+	if got := logs.count(slog.LevelError); got != 1 {
+		t.Fatalf("fallback error logs = %d, want 1", got)
+	}
+}
+
+// countingLogHandler records log levels so tests can assert how often a
+// condition is reported.
+type countingLogHandler struct {
+	mu     sync.Mutex
+	levels []slog.Level
+}
+
+func (*countingLogHandler) Enabled(context.Context, slog.Level) bool { return true }
+
+func (h *countingLogHandler) Handle(_ context.Context, r slog.Record) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.levels = append(h.levels, r.Level)
+	return nil
+}
+
+func (h *countingLogHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
+
+func (h *countingLogHandler) WithGroup(string) slog.Handler { return h }
+
+func (h *countingLogHandler) count(level slog.Level) int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	n := 0
+	for _, l := range h.levels {
+		if l == level {
+			n++
+		}
+	}
+	return n
 }
 
 func TestPendingDecisionCleanupRunsServicesIndependently(t *testing.T) {
