@@ -2161,6 +2161,9 @@ func (p *SessionPool) closeHandle(h *runtimeHandle) error {
 	if sessionID == "" {
 		sessionID = activeSession
 	}
+	if cleanupParent == nil && sessionID != "" {
+		cleanupParent = p.decisionCleanupRoot(h.botID, sessionID)
+	}
 	p.cancelHandlePendingDecisions(cleanupParent, h, sessionID, fence, decisionCleanupPre, "decision cancelled: ACP runtime closed before a response arrived")
 	h.op.Lock()
 	closeErr := p.teardown(h)
@@ -2249,6 +2252,9 @@ func (p *SessionPool) teardown(h *runtimeHandle) error {
 	if sessionID == "" {
 		sessionID = activeSession
 	}
+	if cleanupParent == nil && sessionID != "" {
+		cleanupParent = p.decisionCleanupRoot(h.botID, sessionID)
+	}
 	p.cancelHandlePendingDecisions(cleanupParent, h, sessionID, fence, decisionCleanupPre, "decision cancelled: ACP runtime closed before a response arrived")
 
 	if cancel != nil {
@@ -2277,6 +2283,15 @@ const (
 	decisionCleanupPre decisionCleanupPhase = iota
 	decisionCleanupFinal
 )
+
+// decisionCleanupRoot is the single fail-open boundary for a malformed handle
+// that has pending decisions but no owner context. The cleanup loses values,
+// but skipping it would leave approvals or questions stranded in the UI.
+func (p *SessionPool) decisionCleanupRoot(botID, sessionID string) context.Context {
+	p.logger.Error("pending ACP decision cleanup without runtime context",
+		slog.String("bot_id", botID), slog.String("session_id", sessionID))
+	return context.Background()
+}
 
 func (p *SessionPool) cancelHandlePendingDecisions(parent context.Context, h *runtimeHandle, sessionID string, fence runtimefence.Fence, phase decisionCleanupPhase, reason string) {
 	if p == nil || h == nil {
@@ -2308,7 +2323,7 @@ func (p *SessionPool) cancelHandlePendingDecisions(parent context.Context, h *ru
 		return
 	}
 	if parent == nil {
-		p.logger.Error("skip pending ACP decision cleanup without runtime context",
+		p.logger.Error("skip pending ACP decision cleanup without normalized context",
 			slog.String("bot_id", h.botID), slog.String("session_id", sessionID))
 		return
 	}
@@ -2329,7 +2344,7 @@ func (p *SessionPool) cancelPendingDecisions(parent context.Context, botID, sess
 		return
 	}
 	if parent == nil {
-		p.logger.Error("skip pending ACP decision cleanup without parent context",
+		p.logger.Error("skip pending ACP decision cleanup without normalized parent context",
 			slog.String("bot_id", botID), slog.String("session_id", sessionID))
 		return
 	}

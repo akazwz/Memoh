@@ -193,8 +193,29 @@ func (c *runControl) commandContext(parent context.Context) (context.Context, co
 
 	// The run owns context values; the command transport only contributes its
 	// cancellation. Detach both here so ownership loss can retain its cause.
-	ctx, cancelCause := context.WithCancelCause(context.WithoutCancel(c.lifecycleCtx))
-	cancelParent := func() { cancelCause(context.Cause(parent)) }
+	base, cancelCause := context.WithCancelCause(context.WithoutCancel(c.lifecycleCtx))
+	ctx := base
+	stopDeadline := func() {}
+	// A command deadline must stay a deadline: callers distinguish an expired
+	// command from a cancelled one by ctx.Err(), which a cancel-only relay
+	// would always report as context.Canceled.
+	deadline, hasDeadline := parent.Deadline()
+	if hasDeadline {
+		var cancelDeadline context.CancelFunc
+		ctx, cancelDeadline = context.WithDeadline(base, deadline)
+		stopDeadline = cancelDeadline
+	}
+	cancelParent := func() {
+		cause := context.Cause(parent)
+		// The deadline layer expires on its own at the same instant and is the
+		// only path that can report ctx.Err() as context.DeadlineExceeded. Check
+		// Err rather than Cause: a parent cancelled early may carry a
+		// DeadlineExceeded cause while its cancellation mode is still Canceled.
+		if hasDeadline && errors.Is(parent.Err(), context.DeadlineExceeded) {
+			return
+		}
+		cancelCause(cause)
+	}
 	cancelOwner := func() {
 		if c.ownershipWasLost() {
 			cancelCause(ErrRunOwnershipLost)
@@ -215,6 +236,7 @@ func (c *runControl) commandContext(parent context.Context) (context.Context, co
 	return ctx, func() {
 		stopParent()
 		stopOwner()
+		stopDeadline()
 		cancelCause(context.Canceled)
 	}
 }

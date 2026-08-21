@@ -2317,6 +2317,34 @@ func TestCloseSessionWithoutPromptDoesNotCancelPendingDecisions(t *testing.T) {
 	}
 }
 
+// A handle built without an owner context still has pending approvals and
+// questions to release. Cleanup degrades to a value-less context rather than
+// skipping, which would strand those decisions in the UI.
+func TestCloseSessionCancelsPendingDecisionsWithoutOwnerContext(t *testing.T) {
+	t.Parallel()
+
+	approval := &fakeToolApprovalService{}
+	userInput := &fakeUserInputCanceller{}
+	pool := newSessionPool(nil, nil, fakeBotGetter{})
+	pool.SetToolApprovalService(approval)
+	pool.SetUserInputService(userInput)
+	h := &runtimeHandle{
+		id: "rt-no-owner-ctx", botID: "bot-1", status: stateIdle,
+		boundSession: "session-1", lastActive: time.Now(), hadPrompt: true,
+	}
+	pool.mu.Lock()
+	pool.runtimes[h.id] = h
+	pool.bySession[h.boundSession] = h.id
+	pool.mu.Unlock()
+
+	if err := pool.CloseSession("session-1"); err != nil {
+		t.Fatalf("CloseSession() error = %v", err)
+	}
+	if approval.cancelCount != 2 || userInput.cancelCount != 2 {
+		t.Fatalf("decision cleanup count = approval:%d user_input:%d, want pre and final cleanup", approval.cancelCount, userInput.cancelCount)
+	}
+}
+
 func TestPendingDecisionCleanupRunsServicesIndependently(t *testing.T) {
 	t.Parallel()
 
