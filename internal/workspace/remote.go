@@ -10,11 +10,11 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/memohai/memoh/internal/db"
-	dbstore "github.com/memohai/memoh/internal/db/store"
-	"github.com/memohai/memoh/internal/settings"
-	"github.com/memohai/memoh/internal/userruntime"
-	"github.com/memohai/memoh/internal/workspace/bridge"
+	"github.com/felinics/memoh/internal/db"
+	dbstore "github.com/felinics/memoh/internal/db/store"
+	"github.com/felinics/memoh/internal/settings"
+	"github.com/felinics/memoh/internal/userruntime"
+	"github.com/felinics/memoh/internal/workspace/bridge"
 )
 
 const (
@@ -259,9 +259,10 @@ func (s *RemoteWorkspaceService) DeleteMount(ctx context.Context, botID, targetI
 	if !ok {
 		return ErrWorkspaceTargetNotFound
 	}
-	if err := s.store.DeleteMount(ctx, botID, targetID); errors.Is(err, db.ErrNotFound) {
-		return ErrWorkspaceTargetNotFound
-	} else if errors.Is(err, db.ErrWorkspaceTargetInUse) {
+	if _, err := s.getRecord(ctx, botID, targetID); err != nil {
+		return err
+	}
+	if err := s.store.DeleteMount(ctx, botID, targetID); errors.Is(err, db.ErrWorkspaceTargetInUse) {
 		return ErrWorkspaceTargetInUse
 	} else {
 		return err

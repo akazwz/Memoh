@@ -11,28 +11,26 @@ import (
 	"testing"
 	"time"
 
+	sdk "github.com/felinics/twilight/sdk"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
-	sdk "github.com/memohai/twilight-ai/sdk"
 
-	contextfrag "github.com/memohai/memoh/internal/agent/context/fragment"
-	toolapproval "github.com/memohai/memoh/internal/agent/decision/approval"
-	acpfeedback "github.com/memohai/memoh/internal/agent/decision/feedback"
-	userinput "github.com/memohai/memoh/internal/agent/decision/input"
-	"github.com/memohai/memoh/internal/agent/event"
-	acpagent "github.com/memohai/memoh/internal/agent/runtime/acp"
-	acpclient "github.com/memohai/memoh/internal/agent/runtime/acp/client"
-	"github.com/memohai/memoh/internal/agent/runtime/native"
-	"github.com/memohai/memoh/internal/apperror"
-	"github.com/memohai/memoh/internal/bots"
-	messagepkg "github.com/memohai/memoh/internal/chat/message"
-	session "github.com/memohai/memoh/internal/chat/thread"
-	"github.com/memohai/memoh/internal/db/postgres/sqlc"
-	dbstore "github.com/memohai/memoh/internal/db/store"
-	memprovider "github.com/memohai/memoh/internal/memory/adapters"
-	"github.com/memohai/memoh/internal/settings"
-	"github.com/memohai/memoh/internal/workdir"
-	"github.com/memohai/memoh/internal/workspace"
+	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
+	toolapproval "github.com/felinics/memoh/internal/agent/decision/approval"
+	acpfeedback "github.com/felinics/memoh/internal/agent/decision/feedback"
+	userinput "github.com/felinics/memoh/internal/agent/decision/input"
+	"github.com/felinics/memoh/internal/agent/event"
+	acpagent "github.com/felinics/memoh/internal/agent/runtime/acp"
+	acpclient "github.com/felinics/memoh/internal/agent/runtime/acp/client"
+	"github.com/felinics/memoh/internal/agent/runtime/native"
+	"github.com/felinics/memoh/internal/apperror"
+	"github.com/felinics/memoh/internal/bots"
+	messagepkg "github.com/felinics/memoh/internal/chat/message"
+	session "github.com/felinics/memoh/internal/chat/thread"
+	"github.com/felinics/memoh/internal/db/postgres/sqlc"
+	dbstore "github.com/felinics/memoh/internal/db/store"
+	memprovider "github.com/felinics/memoh/internal/memory/adapters"
+	"github.com/felinics/memoh/internal/settings"
 )
 
 const (
@@ -253,24 +251,19 @@ func TestStreamChatWSRoutesACPAgentSessionToACPPool(t *testing.T) {
 	resolver := &Service{
 		messageService: messages,
 		acpPool:        pool,
-		botPermissions: allowWorkspaceReadAndExecFor("user-1"),
-		workdirs: fakeSessionWorkdirResolver{resolved: workdir.Resolved{
-			WorkdirID: "workdir-1", TargetID: "computer-b", Kind: workdir.TargetKindRemote, WorkDir: "/Users/alice/app",
-		}},
-		workspaceTargets: workspaceRequestTargetService{},
+		botPermissions: allowWorkspaceExecFor("user-1"),
 		sessionService: &fakeBackgroundSessionService{
 			getFn: func(_ context.Context, sessionID string) (session.Thread, error) {
 				if sessionID != "session-1" {
 					t.Fatalf("unexpected session id: %s", sessionID)
 				}
 				return session.Thread{
-					ID:        "session-1",
-					BotID:     "bot-1",
-					Type:      session.TypeACPAgent,
-					WorkdirID: "workdir-1",
+					ID:    "session-1",
+					BotID: "bot-1",
+					Type:  session.TypeACPAgent,
 					Metadata: map[string]any{
 						"acp_agent_id":             "codex",
-						"project_path":             "/Users/alice/app",
+						"project_path":             "/data/app",
 						"runtime_owner_account_id": "user-1",
 					},
 				}, nil
@@ -285,7 +278,6 @@ func TestStreamChatWSRoutesACPAgentSessionToACPPool(t *testing.T) {
 		ChatRequest{
 			BotID:           "bot-1",
 			ThreadID:        "session-1",
-			UserID:          "user-1",
 			Query:           "inspect the app",
 			Model:           "gpt-5.1-codex",
 			ReasoningEffort: "high",
@@ -310,11 +302,8 @@ func TestStreamChatWSRoutesACPAgentSessionToACPPool(t *testing.T) {
 	if pool.calls != 1 {
 		t.Fatalf("ACP pool calls = %d, want 1", pool.calls)
 	}
-	if pool.input.BotID != "bot-1" || pool.input.SessionID != "session-1" || pool.input.AgentID != "codex" || pool.input.ProjectPath != "/Users/alice/app" {
+	if pool.input.BotID != "bot-1" || pool.input.SessionID != "session-1" || pool.input.AgentID != "codex" || pool.input.ProjectPath != "/data/app" {
 		t.Fatalf("ACP prompt input = %#v", pool.input)
-	}
-	if pool.input.WorkspaceTargetID != "computer-b" || pool.input.WorkspaceTargetKind != workspace.WorkspaceTargetRemote || pool.input.WorkspaceTargetName != "Computer B" {
-		t.Fatalf("ACP prompt workspace target = %#v", pool.input)
 	}
 	if pool.input.ModelID != "gpt-5.1-codex" || pool.input.ReasoningEffort != "high" {
 		t.Fatalf("ACP turn config = model %q reasoning %q", pool.input.ModelID, pool.input.ReasoningEffort)
@@ -432,10 +421,9 @@ func TestStreamChatRoutesACPAgentSessionToACPPool(t *testing.T) {
 		},
 	}
 	resolver := &Service{
-		messageService:   &recordingMessageService{},
-		acpPool:          pool,
-		botPermissions:   allowWorkspaceReadAndExecFor("user-1"),
-		workspaceTargets: workspaceRequestTargetService{},
+		messageService: &recordingMessageService{},
+		acpPool:        pool,
+		botPermissions: allowWorkspaceExecFor("user-1"),
 		sessionService: &fakeBackgroundSessionService{
 			getFn: func(_ context.Context, sessionID string) (session.Thread, error) {
 				if sessionID != "session-1" {
@@ -457,11 +445,9 @@ func TestStreamChatRoutesACPAgentSessionToACPPool(t *testing.T) {
 	}
 
 	chunks, errs := resolver.StreamChat(context.Background(), ChatRequest{
-		BotID:             "bot-1",
-		ThreadID:          "session-1",
-		UserID:            "user-1",
-		Query:             "inspect the app",
-		WorkspaceTargetID: "computer-b",
+		BotID:    "bot-1",
+		ThreadID: "session-1",
+		Query:    "inspect the app",
 	})
 	events := drainStreamChunks(t, chunks)
 	if err := <-errs; err != nil {
@@ -473,9 +459,6 @@ func TestStreamChatRoutesACPAgentSessionToACPPool(t *testing.T) {
 	if pool.input.BotID != "bot-1" || pool.input.SessionID != "session-1" || pool.input.AgentID != "codex" || pool.input.ProjectPath != "/data/app" {
 		t.Fatalf("ACP prompt input = %#v", pool.input)
 	}
-	if pool.input.WorkspaceTargetID != "computer-b" || pool.input.WorkspaceTargetKind != workspace.WorkspaceTargetRemote || pool.input.WorkspaceTargetName != "Computer B" {
-		t.Fatalf("ACP prompt workspace target = %#v", pool.input)
-	}
 	if !containsStreamEvent(events, native.EventStart) || !containsStreamEvent(events, native.EventEnd) {
 		t.Fatalf("events = %#v, want agent start/end", events)
 	}
@@ -485,51 +468,6 @@ func TestStreamChatRoutesACPAgentSessionToACPPool(t *testing.T) {
 	end := requireStreamEvent(t, events, native.EventEnd)
 	if got := terminalAssistantText(t, end); got != "done from codex" {
 		t.Fatalf("terminal assistant text = %q, want done from codex", got)
-	}
-}
-
-func TestChatACPWorkspaceTargetRunsWorkspacePreparation(t *testing.T) {
-	t.Parallel()
-
-	resolver := &Service{
-		botPermissions:   allowWorkspaceExecFor("user-1"),
-		workspaceTargets: workspaceRequestTargetService{},
-		sessionService:   acpRuntimeSessionServiceForTest("user-1"),
-		logger:           slog.New(slog.DiscardHandler),
-	}
-	_, err := resolver.Chat(context.Background(), ChatRequest{
-		BotID:             "bot-1",
-		ThreadID:          "session-1",
-		UserID:            "user-1",
-		Query:             "inspect the app",
-		WorkspaceTargetID: "computer-b",
-	})
-	if err == nil || !strings.Contains(err.Error(), "workspace_read") {
-		t.Fatalf("Chat() error = %v, want workspace_read preparation failure", err)
-	}
-}
-
-func TestStreamACPAgentWSPromptTargetIDFallsBackToRequest(t *testing.T) {
-	t.Parallel()
-
-	pool := &recordingACPPrompter{result: acpclient.PromptResult{Text: "done", StopReason: "end_turn"}}
-	resolver := &Service{
-		messageService: &recordingMessageService{},
-		acpPool:        pool,
-		botPermissions: allowWorkspaceExecFor("user-1"),
-		sessionService: acpRuntimeSessionServiceForTest("user-1"),
-		logger:         slog.New(slog.DiscardHandler),
-	}
-	if err := resolver.streamACPAgentWS(context.Background(), ChatRequest{
-		BotID:             "bot-1",
-		ThreadID:          "session-1",
-		Query:             "inspect the app",
-		WorkspaceTargetID: "computer-b",
-	}, make(chan WSStreamEvent, 8), make(chan struct{})); err != nil {
-		t.Fatalf("streamACPAgentWS() error = %v", err)
-	}
-	if pool.input.WorkspaceTargetID != "computer-b" || pool.input.WorkspaceTargetKind != "" || pool.input.WorkspaceTargetName != "" {
-		t.Fatalf("ACP prompt workspace target fallback = %#v", pool.input)
 	}
 }
 
@@ -1202,6 +1140,8 @@ func TestPersistACPRoundUsesDedicatedSessionMetadata(t *testing.T) {
 			StopReason: "end_turn",
 		}),
 		nil,
+		true,
+		nil,
 		nil,
 	)
 	if err != nil {
@@ -1220,6 +1160,16 @@ func TestPersistACPRoundUsesDedicatedSessionMetadata(t *testing.T) {
 	}
 	if assistantMeta["stop_reason"] != "end_turn" {
 		t.Fatalf("stop_reason = %#v, want end_turn", assistantMeta["stop_reason"])
+	}
+	if assistantMeta["acp_turn_outcome"] != "succeeded" {
+		t.Fatalf("ACP outcome metadata = %#v", assistantMeta)
+	}
+	if len(messages.roundOptions) == 0 {
+		t.Fatal("round persisted without atomic options")
+	}
+	publication := messages.roundOptions[len(messages.roundOptions)-1].ACPPublication
+	if publication == nil || publication.CheckpointReset {
+		t.Fatalf("ACP publication = %#v, want resumable checkpoint", publication)
 	}
 }
 
@@ -1257,6 +1207,8 @@ func TestPersistACPRoundStoresACPEventsAsNativeToolMessages(t *testing.T) {
 			StopReason: "end_turn",
 		}),
 		nil,
+		true,
+		nil,
 		nil,
 	)
 	if err != nil {
@@ -1292,6 +1244,16 @@ func TestPersistACPRoundStoresACPEventsAsNativeToolMessages(t *testing.T) {
 	if got := after.TextContent(); got != "After" {
 		t.Fatalf("last assistant text = %q, want After", got)
 	}
+	if messages.persisted[1].Metadata["acp_turn_outcome"] != nil {
+		t.Fatalf("intermediate assistant unexpectedly claims the turn outcome: %#v", messages.persisted[1].Metadata)
+	}
+	if messages.persisted[3].Metadata["acp_turn_outcome"] != "succeeded" {
+		t.Fatalf("final assistant outcome metadata = %#v", messages.persisted[3].Metadata)
+	}
+	publication := messages.roundOptions[len(messages.roundOptions)-1].ACPPublication
+	if publication == nil || publication.CheckpointReset {
+		t.Fatalf("ACP publication = %#v, want resumable checkpoint", publication)
+	}
 }
 
 func TestPersistACPRoundAttachesLifecycleOnlyToFinalAssistant(t *testing.T) {
@@ -1319,7 +1281,9 @@ func TestPersistACPRoundAttachesLifecycleOnlyToFinalAssistant(t *testing.T) {
 			},
 		}),
 		nil,
+		true,
 		holder,
+		nil,
 	)
 	if err != nil {
 		t.Fatalf("persistACPRound() error = %v", err)
@@ -1357,7 +1321,12 @@ func TestPersistACPRoundStoresACPThoughtsAsReasoningParts(t *testing.T) {
 			StopReason: "end_turn",
 		}),
 		nil,
+		true,
 		nil,
+		[]messagepkg.ReasoningTimingSegment{{
+			DurationMS: 2000,
+			State:      "completed",
+		}},
 	)
 	if err != nil {
 		t.Fatalf("persistACPRound returned error: %v", err)
@@ -1372,6 +1341,10 @@ func TestPersistACPRoundStoresACPThoughtsAsReasoningParts(t *testing.T) {
 	parts := assistant.ContentParts()
 	if len(parts) < 2 || parts[0].Type != "reasoning" || parts[0].Text != "I should inspect first." {
 		t.Fatalf("assistant parts = %#v, want leading reasoning part", parts)
+	}
+	segments := messagepkg.ReasoningTimingFromMetadata(messages.persisted[1].Metadata)
+	if len(segments) != 1 || segments[0].DurationMS != 2000 {
+		t.Fatalf("assistant reasoning timing = %#v", segments)
 	}
 }
 
@@ -1389,6 +1362,8 @@ func TestPersistACPRoundEmptyTextLeavesAssistantBlank(t *testing.T) {
 		"codex",
 		"/data/app",
 		acpclient.PromptResult{},
+		nil,
+		true,
 		nil,
 		nil,
 	); err != nil {
@@ -1421,6 +1396,8 @@ func TestPersistACPRoundEmptyOutputKeepsUsage(t *testing.T) {
 				OutputTokens: 4,
 			},
 		},
+		nil,
+		true,
 		nil,
 		nil,
 	); err != nil {
@@ -1494,6 +1471,12 @@ func TestStreamACPAgentWSFailurePersistsRoundAndSkipsMemory(t *testing.T) {
 	}
 	if got, _ := messages.persisted[1].Metadata["error_code"].(string); got != "acp_runtime_prompt_failed" {
 		t.Fatalf("assistant error code metadata = %#v", messages.persisted[1].Metadata)
+	}
+	if got := messages.persisted[1].Metadata["acp_turn_outcome"]; got != "failed" {
+		t.Fatalf("assistant failure outcome = %#v, want failed", got)
+	}
+	if publication := messages.roundOptions[len(messages.roundOptions)-1].ACPPublication; publication != nil {
+		t.Fatalf("failed turn unexpectedly published head: %#v", publication)
 	}
 	events := drainAgentEvents(t, eventCh)
 	abort := requireStreamEvent(t, events, native.EventAbort)
@@ -2126,6 +2109,8 @@ type recordingACPPrompter struct {
 	onPrompt     func()
 	streamEvents []event.StreamEvent
 	afterEvents  func()
+	closed       []string
+	closeErr     error
 }
 
 type storeRoundMemoryProvider struct {
@@ -2151,7 +2136,6 @@ func (*storeRoundSettingsQueries) GetSettingsByBotID(_ context.Context, botID pg
 		BotID:                   botID,
 		Language:                "auto",
 		ReasoningEffort:         "medium",
-		HeartbeatInterval:       30,
 		CompactionTargetPercent: pgtype.Int4{},
 		MemoryProviderID:        flowTestUUID(storeRoundMemoryProviderID),
 	}, nil
@@ -2189,6 +2173,11 @@ func (p *recordingACPPrompter) Prompt(ctx context.Context, input acpagent.Prompt
 	return p.result, p.err
 }
 
+func (p *recordingACPPrompter) CloseSession(sessionID string) error {
+	p.closed = append(p.closed, sessionID)
+	return p.closeErr
+}
+
 type fakeBotPermissionChecker struct {
 	values map[string]bool
 	err    error
@@ -2202,12 +2191,6 @@ func allowWorkspaceExecForBot(botID, accountID string) *fakeBotPermissionChecker
 	return &fakeBotPermissionChecker{values: map[string]bool{
 		strings.TrimSpace(botID) + ":" + strings.TrimSpace(accountID) + ":" + bots.PermissionWorkspaceExec: true,
 	}}
-}
-
-func allowWorkspaceReadAndExecFor(accountID string) *fakeBotPermissionChecker {
-	checker := allowWorkspaceExecFor(accountID)
-	checker.values["bot-1:"+strings.TrimSpace(accountID)+":"+bots.PermissionWorkspaceRead] = true
-	return checker
 }
 
 func (f *fakeBotPermissionChecker) HasBotPermission(_ context.Context, botID, accountID, permission string) (bool, error) {
@@ -2374,6 +2357,7 @@ func transcriptModelMessages(result acpclient.PromptResult) []ModelMessage {
 // withTranscriptOutput fills PromptResult.Output from streamed events.
 func withTranscriptOutput(result acpclient.PromptResult) acpclient.PromptResult {
 	result.Output = acpclient.TranscriptFromEvents(result.Events, result.Text)
+	result.CheckpointStaged = true
 	return result
 }
 

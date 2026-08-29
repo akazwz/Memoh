@@ -14,34 +14,25 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/labstack/echo/v4"
 
-	acpprofile "github.com/memohai/memoh/internal/agent/runtime/acp/profile"
-	"github.com/memohai/memoh/internal/apperror"
-	"github.com/memohai/memoh/internal/bots"
-	session "github.com/memohai/memoh/internal/chat/thread"
-	"github.com/memohai/memoh/internal/db/postgres/sqlc"
-	dbstore "github.com/memohai/memoh/internal/db/store"
-	"github.com/memohai/memoh/internal/workdir"
+	acpprofile "github.com/felinics/memoh/internal/agent/runtime/acp/profile"
+	"github.com/felinics/memoh/internal/botagents"
+	"github.com/felinics/memoh/internal/bots"
+	session "github.com/felinics/memoh/internal/chat/thread"
+	"github.com/felinics/memoh/internal/db/postgres/sqlc"
+	dbstore "github.com/felinics/memoh/internal/db/store"
 )
 
 type sessionCreateQueries struct {
 	dbstore.Queries
 	bot          sqlc.GetBotByIDRow
 	permissions  []byte
+	botAgent     sqlc.BotAgent
 	createCalled bool
 	createParams sqlc.CreateSessionParams
 }
 
-type sessionCreateWorkdirService struct {
-	bound     workdir.Workdir
-	err       error
-	botID     string
-	workdirID string
-}
-
-func (s *sessionCreateWorkdirService) RequireActive(_ context.Context, botID, workdirID string) (workdir.Workdir, error) {
-	s.botID = botID
-	s.workdirID = workdirID
-	return s.bound, s.err
+func (q *sessionCreateQueries) GetBotAgentByID(_ context.Context, _ sqlc.GetBotAgentByIDParams) (sqlc.BotAgent, error) {
+	return q.botAgent, nil
 }
 
 func (q *sessionCreateQueries) GetBotByID(_ context.Context, _ pgtype.UUID) (sqlc.GetBotByIDRow, error) {
@@ -64,14 +55,18 @@ func (q *sessionCreateQueries) CreateSession(_ context.Context, arg sqlc.CreateS
 	q.createCalled = true
 	q.createParams = arg
 	return sqlc.BotSession{
-		ID:          testUUID("22222222-2222-2222-2222-222222222222"),
-		BotID:       arg.BotID,
-		ChannelType: arg.ChannelType,
-		Type:        arg.Type,
-		Title:       arg.Title,
-		Metadata:    arg.Metadata,
-		CreatedAt:   pgtype.Timestamptz{Valid: true},
-		UpdatedAt:   pgtype.Timestamptz{Valid: true},
+		ID:              testUUID("22222222-2222-2222-2222-222222222222"),
+		BotID:           arg.BotID,
+		BotAgentID:      arg.BotAgentID,
+		ChannelType:     arg.ChannelType,
+		Type:            arg.Type,
+		SessionMode:     arg.SessionMode,
+		RuntimeType:     arg.RuntimeType,
+		RuntimeMetadata: arg.RuntimeMetadata,
+		Title:           arg.Title,
+		Metadata:        arg.Metadata,
+		CreatedAt:       pgtype.Timestamptz{Valid: true},
+		UpdatedAt:       pgtype.Timestamptz{Valid: true},
 	}, nil
 }
 
@@ -170,111 +165,56 @@ func TestCreateSessionAcceptsACPAgentType(t *testing.T) {
 	}
 }
 
-func TestCreateSessionAcceptsRemoteWorkdirForACPAgent(t *testing.T) {
+func TestCreateSessionResolvesPersistedBotAgentDescriptor(t *testing.T) {
 	const (
-		botID     = "11111111-1111-1111-1111-111111111111"
-		workdirID = "33333333-3333-4333-8333-333333333333"
-		targetID  = "44444444-4444-4444-8444-444444444444"
+		botID      = "11111111-1111-1111-1111-111111111111"
+		botAgentID = "33333333-3333-3333-3333-333333333333"
 	)
 	queries := &sessionCreateQueries{
 		bot: testBotRow(botID, map[string]any{
 			acpprofile.MetadataKeyACP: map[string]any{
 				"agents": map[string]any{
-					acpprofile.AgentCodexID: map[string]any{"enabled": true, "setup_mode": "self"},
+					// BotAgent.Enabled is authoritative for new sessions. The legacy
+					// provider bit may be false on migrated data and must not reject it.
+					acpprofile.AgentCodexID: map[string]any{"enabled": false, "setup_mode": "self"},
 				},
 			},
 		}),
+		botAgent: sqlc.BotAgent{
+			ID:        testUUID(botAgentID),
+			BotID:     testUUID(botID),
+			Name:      "Primary Codex",
+			Runtime:   botagents.RuntimeACP,
+			Enabled:   true,
+			Metadata:  []byte(`{"provider":"codex"}`),
+			CreatedAt: pgtype.Timestamptz{Valid: true},
+			UpdatedAt: pgtype.Timestamptz{Valid: true},
+		},
 	}
-	workdirs := &sessionCreateWorkdirService{bound: workdir.Workdir{
-		ID:                workdirID,
-		BotID:             botID,
-		Name:              "Laptop project",
-		TargetKind:        workdir.TargetKindRemote,
-		WorkspaceTargetID: targetID,
-		Path:              "/Users/alice/project",
-	}}
-	binder := &recordingRuntimeBinder{}
 	handler := NewSessionHandler(
 		slog.Default(),
 		newThreadServiceForTest(queries),
-		binder,
+		nil,
 		bots.NewService(nil, queries),
 		newTestAdminAccountService("admin"),
 	)
-	handler.SetWorkdirService(workdirs)
+	handler.SetBotAgents(botagents.NewService(slog.Default(), queries))
 
-	body := `{"type":"acp_agent","title":"Codex","metadata":{"acp_agent_id":"codex"},"workdir_id":"` + workdirID + `","acp_runtime_id":"rt_remote"}`
-	if err := callCreateSession(handler, botID, body); err != nil {
+	if err := callCreateSession(handler, botID, `{"type":"chat","bot_agent_id":"`+botAgentID+`","title":"Codex"}`); err != nil {
 		t.Fatalf("CreateSession() error = %v", err)
 	}
-	if workdirs.botID != botID || workdirs.workdirID != workdirID {
-		t.Fatalf("RequireActive args = bot %q workdir %q", workdirs.botID, workdirs.workdirID)
+	if queries.createParams.BotAgentID.String() != botAgentID {
+		t.Fatalf("bot_agent_id = %q, want %q", queries.createParams.BotAgentID.String(), botAgentID)
 	}
-	if got, want := queries.createParams.WorkdirID, testUUID(workdirID); got != want {
-		t.Fatalf("CreateSession workdir = %#v, want %#v", got, want)
+	if queries.createParams.RuntimeType != session.RuntimeACPAgent {
+		t.Fatalf("runtime_type = %q, want %q", queries.createParams.RuntimeType, session.RuntimeACPAgent)
 	}
-	if len(binder.bindArgs) != 7 || binder.bindArgs[1] != "rt_remote" || binder.bindArgs[5] != targetID {
-		t.Fatalf("remote runtime bind args = %#v, want runtime and workspace target", binder.bindArgs)
+	var metadata map[string]any
+	if err := json.Unmarshal(queries.createParams.Metadata, &metadata); err != nil {
+		t.Fatalf("metadata json = %v", err)
 	}
-	for label, raw := range map[string][]byte{
-		"metadata":         queries.createParams.Metadata,
-		"runtime metadata": queries.createParams.RuntimeMetadata,
-	} {
-		var metadata map[string]any
-		if err := json.Unmarshal(raw, &metadata); err != nil {
-			t.Fatalf("%s json = %v", label, err)
-		}
-		if metadata["project_path"] != "/Users/alice/project" {
-			t.Fatalf("%s project_path = %#v, want remote workdir path", label, metadata["project_path"])
-		}
-	}
-}
-
-func TestCreateSessionRequiresWorkspaceReadForRemoteWorkdir(t *testing.T) {
-	const (
-		botID     = "11111111-1111-1111-1111-111111111111"
-		workdirID = "33333333-3333-4333-8333-333333333333"
-	)
-	queries := &sessionCreateQueries{
-		bot: testBotRow(botID, map[string]any{
-			acpprofile.MetadataKeyACP: map[string]any{
-				"agents": map[string]any{
-					acpprofile.AgentCodexID: map[string]any{"enabled": true, "setup_mode": "self"},
-				},
-			},
-		}),
-		permissions: []byte(`["workspace_exec"]`),
-	}
-	workdirs := &sessionCreateWorkdirService{bound: workdir.Workdir{
-		ID:                workdirID,
-		BotID:             botID,
-		TargetKind:        workdir.TargetKindRemote,
-		WorkspaceTargetID: "44444444-4444-4444-8444-444444444444",
-		Path:              "/Users/alice/project",
-	}}
-	binder := &recordingRuntimeBinder{}
-	handler := NewSessionHandler(
-		slog.Default(),
-		newThreadServiceForTest(queries),
-		binder,
-		bots.NewService(nil, queries),
-		newTestAdminAccountService("user"),
-	)
-	handler.SetWorkdirService(workdirs)
-
-	err := callCreateSession(handler, botID, `{"type":"acp_agent","title":"Codex","metadata":{"acp_agent_id":"codex"},"workdir_id":"`+workdirID+`","acp_runtime_id":"rt_remote"}`)
-	if got := apperror.CodeOf(err); got != apperror.CodeWorkspaceReadPermissionRequired {
-		t.Fatalf("CreateSession() code = %q, want %q (error %v)", got, apperror.CodeWorkspaceReadPermissionRequired, err)
-	}
-	problem, ok := apperror.ProblemFrom(err, "req-create")
-	if !ok || problem.Status != http.StatusForbidden || problem.Code != string(apperror.CodeWorkspaceReadPermissionRequired) {
-		t.Fatalf("CreateSession() problem = %#v, recognized = %v", problem, ok)
-	}
-	if queries.createCalled {
-		t.Fatal("CreateSession should not insert a session without workspace_read")
-	}
-	if len(binder.bindArgs) != 0 {
-		t.Fatalf("runtime should not be bound without workspace_read: %#v", binder.bindArgs)
+	if metadata["acp_agent_id"] != "codex" || metadata["project_path"] != session.DefaultACPProjectPath {
+		t.Fatalf("metadata = %#v, want resolved Codex descriptor", metadata)
 	}
 }
 
@@ -365,18 +305,26 @@ func TestCreateSessionDefaultsACPProjectPath(t *testing.T) {
 }
 
 type recordingRuntimeBinder struct {
+	bindCtx  context.Context
 	bindArgs []string
 	bindErr  error
 }
 
 func (*recordingRuntimeBinder) CloseSession(string) error { return nil }
 
-func (b *recordingRuntimeBinder) BindRuntime(botID, runtimeID, sessionID, agentID, projectPath, workspaceTargetID, runtimeOwnerAccountID string) error {
+func (*recordingRuntimeBinder) BeginSessionHistoryReset(ctx context.Context, _, _ string) (context.Context, func(), error) {
+	return ctx, func() {}, nil
+}
+
+func (b *recordingRuntimeBinder) BindRuntime(ctx context.Context, botID, runtimeID, sessionID, agentID, projectPath, workspaceTargetID, runtimeOwnerAccountID string) error {
+	b.bindCtx = ctx
 	b.bindArgs = []string{botID, runtimeID, sessionID, agentID, projectPath, workspaceTargetID, runtimeOwnerAccountID}
 	return b.bindErr
 }
 
 func TestCreateSessionBindsWarmACPRuntime(t *testing.T) {
+	type contextKey struct{}
+
 	botID := "11111111-1111-1111-1111-111111111111"
 	queries := &sessionCreateQueries{
 		bot: testBotRow(botID, map[string]any{
@@ -397,12 +345,20 @@ func TestCreateSessionBindsWarmACPRuntime(t *testing.T) {
 	)
 
 	body := `{"type":"acp_agent","title":"Codex","metadata":{"acp_agent_id":"codex"},"acp_runtime_id":"rt_warm"}`
-	if err := callCreateSession(handler, botID, body); err != nil {
+	requestCtx := context.WithValue(context.Background(), contextKey{}, "create-session-scope")
+	req := httptest.NewRequestWithContext(requestCtx, http.MethodPost, "/bots/"+botID+"/sessions", bytes.NewBufferString(body))
+	if err := callCreateSessionRequest(handler, botID, req); err != nil {
 		t.Fatalf("CreateSession() error = %v", err)
 	}
 	want := []string{botID, "rt_warm", "22222222-2222-2222-2222-222222222222", "codex", session.DefaultACPProjectPath, "", "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"}
 	if len(binder.bindArgs) != len(want) {
 		t.Fatalf("bind args = %#v, want %#v", binder.bindArgs, want)
+	}
+	if binder.bindCtx == nil {
+		t.Fatal("BindRuntime context is nil")
+	}
+	if got := binder.bindCtx.Value(contextKey{}); got != "create-session-scope" {
+		t.Fatalf("BindRuntime context value = %v, want create-session-scope", got)
 	}
 	for i := range want {
 		if binder.bindArgs[i] != want[i] {
@@ -443,8 +399,12 @@ func TestCreateSessionToleratesFailedRuntimeBind(t *testing.T) {
 }
 
 func callCreateSession(handler *SessionHandler, botID string, body string) error {
-	e := echo.New()
 	req := httptest.NewRequest(http.MethodPost, "/bots/"+botID+"/sessions", bytes.NewBufferString(body))
+	return callCreateSessionRequest(handler, botID, req)
+}
+
+func callCreateSessionRequest(handler *SessionHandler, botID string, req *http.Request) error {
+	e := echo.New()
 	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
 	rec := httptest.NewRecorder()
 	ctx := testAuthContext(e, req, rec, "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")

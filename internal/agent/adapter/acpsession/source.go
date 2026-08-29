@@ -7,9 +7,9 @@ import (
 	"errors"
 	"strings"
 
-	acp "github.com/memohai/memoh/internal/agent/runtime/acp"
-	"github.com/memohai/memoh/internal/chat/thread"
-	"github.com/memohai/memoh/internal/workdir"
+	acp "github.com/felinics/memoh/internal/agent/runtime/acp"
+	"github.com/felinics/memoh/internal/chat/thread"
+	"github.com/felinics/memoh/internal/workdir"
 )
 
 type Source struct {

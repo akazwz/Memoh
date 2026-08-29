@@ -12,15 +12,15 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
-	contextfrag "github.com/memohai/memoh/internal/agent/context/fragment"
-	"github.com/memohai/memoh/internal/agent/decision"
-	toolapproval "github.com/memohai/memoh/internal/agent/decision/approval"
-	userinput "github.com/memohai/memoh/internal/agent/decision/input"
-	"github.com/memohai/memoh/internal/agent/runtime/native"
-	sessionruntime "github.com/memohai/memoh/internal/agent/runtime/session"
-	"github.com/memohai/memoh/internal/apperror"
-	"github.com/memohai/memoh/internal/db"
-	dbsqlc "github.com/memohai/memoh/internal/db/postgres/sqlc"
+	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
+	"github.com/felinics/memoh/internal/agent/decision"
+	toolapproval "github.com/felinics/memoh/internal/agent/decision/approval"
+	userinput "github.com/felinics/memoh/internal/agent/decision/input"
+	"github.com/felinics/memoh/internal/agent/runtime/native"
+	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
+	"github.com/felinics/memoh/internal/apperror"
+	"github.com/felinics/memoh/internal/db"
+	dbsqlc "github.com/felinics/memoh/internal/db/postgres/sqlc"
 )
 
 type continuationLifecycleResult struct {
@@ -208,11 +208,13 @@ func implicitDecisionControlID(commandType, decisionID string) string {
 // handleRuntimeDecisionCommand commits on the routed-command deadline, then
 // continues independently on the owning run. The command result therefore
 // means "the decision was durably accepted", not "the model finished".
+//
+//nolint:contextcheck // the continuation is rooted in the owning run, not the acknowledgement request.
 func (s *Service) handleRuntimeDecisionCommand(ctx context.Context, command sessionruntime.Command) error {
 	if s == nil || s.decisionRuntime == nil {
 		return errors.New("runtime decision handler is not configured")
 	}
-	runCtx, runCancel, err := s.decisionRuntime.DecisionContinuationContext(ctx, command)
+	runCtx, runCancel, err := s.decisionRuntime.DecisionContinuationContext(command)
 	if err != nil {
 		return err
 	}
@@ -371,7 +373,7 @@ func (s *Service) continueRuntimeDecision(
 		if err := json.Unmarshal(raw, &event); err != nil {
 			continue
 		}
-		if eventErr := agentStreamEventError(event); eventErr != nil && eventCause == nil {
+		if eventErr := agentStreamLifecycleError(event); eventErr != nil && eventCause == nil {
 			eventCause = eventErr
 		}
 		if event.IsTerminal() {

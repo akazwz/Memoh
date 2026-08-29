@@ -10,16 +10,16 @@ import (
 	"strings"
 	"time"
 
+	sdk "github.com/felinics/twilight/sdk"
 	"github.com/jackc/pgx/v5/pgtype"
-	sdk "github.com/memohai/twilight-ai/sdk"
 
-	"github.com/memohai/memoh/internal/apperror"
-	"github.com/memohai/memoh/internal/db"
-	"github.com/memohai/memoh/internal/db/postgres/sqlc"
-	dbstore "github.com/memohai/memoh/internal/db/store"
-	"github.com/memohai/memoh/internal/models"
-	"github.com/memohai/memoh/internal/providertemplates"
-	"github.com/memohai/memoh/internal/registry"
+	"github.com/felinics/memoh/internal/apperror"
+	"github.com/felinics/memoh/internal/db"
+	"github.com/felinics/memoh/internal/db/postgres/sqlc"
+	dbstore "github.com/felinics/memoh/internal/db/store"
+	"github.com/felinics/memoh/internal/models"
+	"github.com/felinics/memoh/internal/providertemplates"
+	"github.com/felinics/memoh/internal/registry"
 )
 
 // Service handles provider operations.
@@ -278,7 +278,20 @@ const (
 )
 
 // Test probes the provider using the Twilight AI SDK to check
-// reachability and authentication.
+// reachability and authentication. A successful models-list response is
+// conclusive; no follow-up generation probe is made. An earlier fake-model
+// probe was removed (#1042): some OpenAI-compatible gateways validate the
+// model before auth and answer 401 for an unknown model, which the probe
+// misclassified as "Invalid API key" even after the key had authenticated.
+// Per-model availability is covered by models.Service.Test instead.
+//
+// Outcome semantics (#1087) — the models list is only a partial falsifier:
+//   - reachable + 200: verified (ok);
+//   - reachable + 401/403: auth failed (auth_error) — the request carries no
+//     model parameter, so this cannot be confused with "model not found";
+//   - reachable + anything else (404/5xx): unverified, NOT a failure — the
+//     base URL may be wrong, or the provider may not implement model listing;
+//   - unreachable (DNS/TCP): error, the only hard failure kept at this layer.
 func (s *Service) Test(ctx context.Context, id string) (TestResponse, error) {
 	providerID, err := db.ParseUUID(id)
 	if err != nil {
@@ -314,27 +327,21 @@ func (s *Service) Test(ctx context.Context, id string) (TestResponse, error) {
 			Message:   message,
 		}, nil
 	case sdk.ProviderStatusUnhealthy:
-		status := TestStatusError
 		if strings.Contains(result.Message, "authentication failed") {
-			status = TestStatusAuthError
+			return TestResponse{
+				Status:    TestStatusAuthError,
+				Reachable: true,
+				LatencyMs: time.Since(start).Milliseconds(),
+				Message:   message,
+			}, nil
 		}
 		return TestResponse{
-			Status:    status,
+			Status:    TestStatusUnverified,
 			Reachable: true,
 			LatencyMs: time.Since(start).Milliseconds(),
 			Message:   message,
 		}, nil
 	default:
-		if _, probeErr := sdkProvider.TestModel(ctx, "__ping__"); probeErr != nil {
-			if strings.Contains(probeErr.Error(), "authentication failed") {
-				return TestResponse{
-					Status:    TestStatusAuthError,
-					Reachable: true,
-					LatencyMs: time.Since(start).Milliseconds(),
-					Message:   probeErr.Error(),
-				}, nil
-			}
-		}
 		return TestResponse{
 			Status:    TestStatusOK,
 			Reachable: true,

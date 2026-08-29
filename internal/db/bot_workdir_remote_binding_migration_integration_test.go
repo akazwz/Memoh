@@ -11,7 +11,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/memohai/memoh/internal/team"
+	"github.com/felinics/memoh/internal/team"
 )
 
 func TestBotWorkdirRemoteBindingRestrictMigrationRoundTrip(t *testing.T) {
@@ -20,9 +20,9 @@ func TestBotWorkdirRemoteBindingRestrictMigrationRoundTrip(t *testing.T) {
 	dsn := teamMigrationDSN(t)
 
 	assertBotWorkdirRemoteBindingDeleteAction(t, ctx, pool, "r")
-	stepDown(t, dsn, countMigrationsFrom(t, "0135_bot_workdirs_remote_binding_restrict.up.sql"))
+	stepDown(t, dsn, countMigrationsFrom(t, "0142_bot_workdirs_remote_binding_restrict.up.sql"))
 	assertBotWorkdirRemoteBindingDeleteAction(t, ctx, pool, "c")
-	stepUp(t, dsn, countMigrationsFrom(t, "0135_bot_workdirs_remote_binding_restrict.up.sql"))
+	stepUp(t, dsn, countMigrationsFrom(t, "0142_bot_workdirs_remote_binding_restrict.up.sql"))
 	assertBotWorkdirRemoteBindingDeleteAction(t, ctx, pool, "r")
 }
 

@@ -4,9 +4,9 @@ import (
 	"context"
 	"testing"
 
-	"github.com/memohai/memoh/internal/agent/sessionmode"
-	"github.com/memohai/memoh/internal/chat/thread"
-	"github.com/memohai/memoh/internal/workdir"
+	"github.com/felinics/memoh/internal/agent/sessionmode"
+	"github.com/felinics/memoh/internal/chat/thread"
+	"github.com/felinics/memoh/internal/workdir"
 )
 
 type fakeThreadGetter struct {
@@ -35,7 +35,7 @@ func TestSourceProjectsThreadDescriptor(t *testing.T) {
 		Metadata:        map[string]any{"acp_agent_id": "codex"},
 		RuntimeMetadata: map[string]any{"project_path": "/workspace"},
 	}
-	got, err := newSource(fakeThreadGetter{item: item}).Get(context.Background(), "session-1")
+	got, err := (&Source{threads: fakeThreadGetter{item: item}}).Get(context.Background(), "session-1")
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}

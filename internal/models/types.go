@@ -6,7 +6,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/memohai/memoh/internal/reasoning"
+	"github.com/felinics/memoh/internal/reasoning"
 )
 
 type ModelType string
@@ -176,6 +176,15 @@ func normalizeModelConfig(config ModelConfig) ModelConfig {
 // callers migrate to the reasoning leaf package.
 func NormalizeAdvertisedEfforts(efforts []string) []string {
 	return reasoning.NormalizeAdvertised(efforts)
+}
+
+// ContextBudgetMaxTokens returns the configured model context window, or zero
+// when budget enforcement is unavailable for this model.
+func (c ModelConfig) ContextBudgetMaxTokens() int {
+	if c.ContextWindow != nil && *c.ContextWindow > 0 {
+		return *c.ContextWindow
+	}
+	return 0
 }
 
 type Model struct {

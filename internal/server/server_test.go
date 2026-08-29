@@ -14,10 +14,10 @@ import (
 
 	"github.com/labstack/echo/v4"
 
-	"github.com/memohai/memoh/internal/apperror"
-	"github.com/memohai/memoh/internal/config"
-	apphandlers "github.com/memohai/memoh/internal/handlers"
-	mcpgw "github.com/memohai/memoh/internal/mcp"
+	"github.com/felinics/memoh/internal/apperror"
+	"github.com/felinics/memoh/internal/config"
+	apphandlers "github.com/felinics/memoh/internal/handlers"
+	mcpgw "github.com/felinics/memoh/internal/mcp"
 )
 
 func TestShouldSkipJWT_ChannelWebhookPaths(t *testing.T) {
@@ -366,5 +366,22 @@ func TestRuntimeCredentialAuthenticatesExactMCPRouteWithoutUserJWT(t *testing.T)
 	}
 	if resolver.calls != resolverCalls {
 		t.Fatalf("non-runtime requests reached runtime resolver: calls = %d, want %d", resolver.calls, resolverCalls)
+	}
+}
+
+func TestShouldSkipJWTOnlyForDigestAddressedSupermarketSkillIcons(t *testing.T) {
+	t.Parallel()
+	digest := strings.Repeat("a", 64)
+	if !shouldSkipJWT("/supermarket/artifacts/icon/" + digest) {
+		t.Fatal("digest-addressed Skill icon must be readable by img elements")
+	}
+	for _, path := range []string{
+		"/supermarket/artifacts/icon/", "/supermarket/artifacts/icon/short",
+		"/supermarket/artifacts/icon/" + strings.ToUpper(digest),
+		"/supermarket/artifacts/icon/" + digest + "/extra",
+	} {
+		if shouldSkipJWT(path) {
+			t.Fatalf("path=%q unexpectedly skips JWT", path)
+		}
 	}
 }

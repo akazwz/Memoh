@@ -3,7 +3,7 @@ package providers
 import (
 	"time"
 
-	"github.com/memohai/memoh/internal/models"
+	"github.com/felinics/memoh/internal/models"
 )
 
 // CreateRequest represents a request to create a new provider.
@@ -65,6 +65,11 @@ const (
 	TestStatusOK        TestStatus = "ok"
 	TestStatusAuthError TestStatus = "auth_error"
 	TestStatusError     TestStatus = "error"
+	// TestStatusUnverified means the endpoint answered but the models list
+	// could not confirm it works (e.g. the provider does not implement model
+	// listing). It is deliberately not a failure: only a real generation
+	// against a concrete model can settle that (see models.Service.Test).
+	TestStatusUnverified TestStatus = "unverified"
 )
 
 // TestResponse is returned by POST /providers/:id/test.

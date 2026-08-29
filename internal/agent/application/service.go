@@ -20,34 +20,34 @@ import (
 	"sync/atomic"
 	"time"
 
+	sdk "github.com/felinics/twilight/sdk"
 	"github.com/google/uuid"
-	sdk "github.com/memohai/twilight-ai/sdk"
 
-	"github.com/memohai/memoh/internal/accounts"
-	"github.com/memohai/memoh/internal/agent/background"
-	"github.com/memohai/memoh/internal/agent/context/compaction"
-	contextfrag "github.com/memohai/memoh/internal/agent/context/fragment"
-	historyfrag "github.com/memohai/memoh/internal/agent/context/history"
-	toolapproval "github.com/memohai/memoh/internal/agent/decision/approval"
-	userinput "github.com/memohai/memoh/internal/agent/decision/input"
-	"github.com/memohai/memoh/internal/agent/runtime/native"
-	sessionruntime "github.com/memohai/memoh/internal/agent/runtime/session"
-	"github.com/memohai/memoh/internal/agent/sessionmode"
-	turnpkg "github.com/memohai/memoh/internal/agent/turn"
-	messageevent "github.com/memohai/memoh/internal/chat/event"
-	messagepkg "github.com/memohai/memoh/internal/chat/message"
-	sessionpkg "github.com/memohai/memoh/internal/chat/thread"
-	"github.com/memohai/memoh/internal/chat/timeline"
-	"github.com/memohai/memoh/internal/db/postgres/sqlc"
-	dbstore "github.com/memohai/memoh/internal/db/store"
-	"github.com/memohai/memoh/internal/hooks"
-	memprovider "github.com/memohai/memoh/internal/memory/adapters"
-	"github.com/memohai/memoh/internal/models"
-	"github.com/memohai/memoh/internal/oauthctx"
-	"github.com/memohai/memoh/internal/providers"
-	"github.com/memohai/memoh/internal/reasoning"
-	"github.com/memohai/memoh/internal/settings"
-	"github.com/memohai/memoh/internal/workspace"
+	"github.com/felinics/memoh/internal/accounts"
+	"github.com/felinics/memoh/internal/agent/background"
+	"github.com/felinics/memoh/internal/agent/context/compaction"
+	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
+	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
+	toolapproval "github.com/felinics/memoh/internal/agent/decision/approval"
+	userinput "github.com/felinics/memoh/internal/agent/decision/input"
+	"github.com/felinics/memoh/internal/agent/runtime/native"
+	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
+	"github.com/felinics/memoh/internal/agent/sessionmode"
+	turnpkg "github.com/felinics/memoh/internal/agent/turn"
+	messageevent "github.com/felinics/memoh/internal/chat/event"
+	messagepkg "github.com/felinics/memoh/internal/chat/message"
+	sessionpkg "github.com/felinics/memoh/internal/chat/thread"
+	"github.com/felinics/memoh/internal/chat/timeline"
+	"github.com/felinics/memoh/internal/db/postgres/sqlc"
+	dbstore "github.com/felinics/memoh/internal/db/store"
+	"github.com/felinics/memoh/internal/hooks"
+	memprovider "github.com/felinics/memoh/internal/memory/adapters"
+	"github.com/felinics/memoh/internal/models"
+	"github.com/felinics/memoh/internal/oauthctx"
+	"github.com/felinics/memoh/internal/providers"
+	"github.com/felinics/memoh/internal/reasoning"
+	"github.com/felinics/memoh/internal/settings"
+	"github.com/felinics/memoh/internal/workspace"
 )
 
 const (
@@ -103,33 +103,36 @@ type compactionRunner interface {
 
 // Service orchestrates chat with the internal agent.
 type Service struct {
-	agent              *native.Agent
-	modelsService      *models.Service
-	queries            dbstore.Queries
-	memoryRegistry     *memprovider.Registry
-	messageService     messagepkg.Service
-	settingsService    *settings.Service
-	accountService     *accounts.Service
-	sessionService     SessionService
-	acpPool            acpPrompter
-	compactionService  compactionRunner
-	eventPublisher     messageevent.Publisher
-	skillLoader        SkillLoader
-	assetLoader        gatewayAssetLoader
-	platformIdentities PlatformIdentitySource
-	botPermissions     botPermissionChecker
-	workspaceTargets   workspaceTargetResolver
-	workdirs           sessionWorkdirResolver
-	pipeline           *timeline.Pipeline
-	streamHTTPClient   *http.Client
-	bgManager          *background.Manager
-	toolApproval       *toolapproval.Service
-	userInput          userInputService
-	hookService        *hooks.Service
-	memoryContextMu    sync.Mutex
-	memoryContextCache *memprovider.MemoryContextCache
-	acpPromptMu        sync.Mutex
-	acpPromptHubs      map[string]*acpActivePromptHub
+	agent                  *native.Agent
+	modelsService          *models.Service
+	queries                dbstore.Queries
+	memoryRegistry         *memprovider.Registry
+	messageService         messagepkg.Service
+	settingsService        *settings.Service
+	accountService         *accounts.Service
+	sessionService         SessionService
+	acpPool                acpPrompter
+	compactionService      compactionRunner
+	eventPublisher         messageevent.Publisher
+	skillLoader            SkillLoader
+	assetLoader            gatewayAssetLoader
+	platformIdentities     PlatformIdentitySource
+	botPermissions         botPermissionChecker
+	workspaceTargets       workspaceTargetResolver
+	workdirs               sessionWorkdirResolver
+	pipeline               *timeline.Pipeline
+	streamHTTPClient       *http.Client
+	nonStreamingHTTPClient *http.Client
+	streamIdleTimeout      time.Duration
+	streamIdleTimeoutMax   time.Duration
+	bgManager              *background.Manager
+	toolApproval           *toolapproval.Service
+	userInput              userInputService
+	hookService            *hooks.Service
+	memoryContextMu        sync.Mutex
+	memoryContextCache     *memprovider.MemoryContextCache
+	acpPromptMu            sync.Mutex
+	acpPromptHubs          map[string]*acpActivePromptHub
 	// continueUserInputFn overrides the application resume after a user input
 	// response; nil means storeUserInputResultAndContinue. Test seam.
 	continueUserInputFn               func(ctx context.Context, req userinput.Request, input UserInputResponseInput, result sdk.ToolResultPart, eventCh chan<- WSStreamEvent) error
@@ -137,6 +140,7 @@ type Service struct {
 	sessionCompactions                map[string]*sessionCompactionGate
 	timeout                           time.Duration
 	memorySearchTimeout               time.Duration
+	contextAbsoluteCapTokens          int
 	clockLocation                     *time.Location
 	logger                            *slog.Logger
 	allowedTeam                       string
@@ -169,39 +173,75 @@ func NewService(
 	if clockLocation == nil {
 		clockLocation = time.UTC
 	}
-	// HTTP client with timeouts for LLM provider streaming.
-	// - DialTimeout: fail fast on connection issues
-	// - ResponseHeaderTimeout: catch servers that accept TCP but never respond
-	// - Timeout: overall request lifetime cap (prevents stuck SSE body reads)
+	// Streaming requests keep transport establishment bounded, while the
+	// application idle watchdog owns first-byte and between-event silence. A
+	// client-wide or response-header deadline would otherwise preempt that
+	// policy and turn one intentional timeout into repeated transport retries.
+	streamTransport := &http.Transport{
+		DialContext: (&net.Dialer{
+			Timeout:   30 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		TLSHandshakeTimeout: 10 * time.Second,
+		MaxIdleConns:        100,
+		MaxIdleConnsPerHost: 10,
+		IdleConnTimeout:     90 * time.Second,
+	}
 	streamHTTPClient := &http.Client{
-		Timeout: 10 * time.Minute, // overall cap, matches the application timeout
-		Transport: &http.Transport{
-			DialContext: (&net.Dialer{
-				Timeout:   30 * time.Second,
-				KeepAlive: 30 * time.Second,
-			}).DialContext,
-			TLSHandshakeTimeout:   10 * time.Second,
-			ResponseHeaderTimeout: 30 * time.Second,
-			MaxIdleConns:          100,
-			MaxIdleConnsPerHost:   10,
-			IdleConnTimeout:       90 * time.Second,
-		},
+		Transport: streamTransport,
+	}
+	nonStreamingTransport := streamTransport.Clone()
+	nonStreamingTransport.ResponseHeaderTimeout = 30 * time.Second
+	nonStreamingHTTPClient := &http.Client{
+		Transport: nonStreamingTransport,
+		Timeout:   10 * time.Minute,
 	}
 
 	return &Service{
-		agent:               a,
-		modelsService:       modelsService,
-		queries:             queries,
-		contextLifecycles:   queries,
-		messageService:      messageService,
-		settingsService:     settingsService,
-		accountService:      accountService,
-		streamHTTPClient:    streamHTTPClient,
-		timeout:             timeout,
-		memorySearchTimeout: defaultMemorySearchTimeout,
-		clockLocation:       clockLocation,
-		logger:              log.With(slog.String("service", "agent/application")),
+		agent:                  a,
+		modelsService:          modelsService,
+		queries:                queries,
+		contextLifecycles:      queries,
+		messageService:         messageService,
+		settingsService:        settingsService,
+		accountService:         accountService,
+		streamHTTPClient:       streamHTTPClient,
+		nonStreamingHTTPClient: nonStreamingHTTPClient,
+		timeout:                timeout,
+		memorySearchTimeout:    defaultMemorySearchTimeout,
+		clockLocation:          clockLocation,
+		logger:                 log.With(slog.String("service", "agent/application")),
 	}
+}
+
+// SetContextAbsoluteMaxTokens sets the server-wide context admission cap
+// (CM-ADM-001). Zero keeps the shared default; the cap is never disabled.
+func (s *Service) SetContextAbsoluteMaxTokens(v int) {
+	s.contextAbsoluteCapTokens = v
+}
+
+// contextAbsoluteMaxTokens resolves the effective admission cap.
+func (s *Service) contextAbsoluteMaxTokens() int {
+	if s.contextAbsoluteCapTokens > 0 {
+		return s.contextAbsoluteCapTokens
+	}
+	return contextfrag.DefaultAbsoluteCapTokens
+}
+
+// effectiveContextTokenBudget derives the per-turn context budget as
+// min(model context window, absolute cap), falling back to the cap alone
+// when the model has no configured window. A missing window therefore
+// degrades to a smaller bounded context, never to an unbounded one.
+func (s *Service) effectiveContextTokenBudget(chatModel models.GetResponse) int {
+	budget := contextBudgetFromChatModel(chatModel)
+	capTokens := s.contextAbsoluteMaxTokens()
+	if budget <= 0 {
+		s.logger.Warn("context budget: model context window missing, applying absolute cap",
+			slog.String("model_id", chatModel.ID),
+			slog.Int("absolute_cap_tokens", capTokens))
+		return capTokens
+	}
+	return min(budget, capTokens)
 }
 
 // SetMemoryRegistry sets the provider registry for memory operations.
@@ -331,6 +371,35 @@ func runIDForChatRequest(admittedRunID string) string {
 	return uuid.NewString()
 }
 
+func contextBudgetFromChatModel(chatModel models.GetResponse) int {
+	return chatModel.Config.ContextBudgetMaxTokens()
+}
+
+func markRequiredHistoryMessageCurrent(cfg *native.RunConfig, requiredMessageID string) {
+	if cfg == nil {
+		return
+	}
+	cfg.ContextCurrentUserMessageIndex = nil
+	requiredMessageID = strings.TrimSpace(requiredMessageID)
+	if requiredMessageID == "" {
+		return
+	}
+	for index, sourceMessageID := range cfg.ForkContextSourceMessageIDs {
+		if strings.TrimSpace(sourceMessageID) != requiredMessageID {
+			continue
+		}
+		if index >= len(cfg.Messages) || cfg.Messages[index].Role != sdk.MessageRoleUser {
+			return
+		}
+		cfg.ContextCurrentUserMessageIndex = intPointer(index)
+		return
+	}
+}
+
+func defaultToolExchangePolicy() *contextfrag.ToolExchangePolicy {
+	return contextfrag.DefaultToolExchangePolicy()
+}
+
 // resolve builds the run context for one turn and returns the effective
 // request alongside it. Resolution fills in defaults the caller's copy does not
 // have — a direct turn on a subagent thread learns its session type, pinned
@@ -339,6 +408,10 @@ func runIDForChatRequest(admittedRunID string) string {
 // request, not the one that went in. Query is deliberately untouched: callers
 // that persist a headerified user message still take it from resolvedContext.
 func (s *Service) resolve(ctx context.Context, req ChatRequest) (resolvedContext, ChatRequest, error) {
+	return s.resolveWithHTTPClient(ctx, req, nil)
+}
+
+func (s *Service) resolveWithHTTPClient(ctx context.Context, req ChatRequest, modelHTTPClient *http.Client) (resolvedContext, ChatRequest, error) {
 	modelQuery := modelQueryText(req)
 	if strings.TrimSpace(modelQuery) == "" && len(req.Attachments) == 0 {
 		return resolvedContext{}, req, errors.New("query or attachments is required")
@@ -369,6 +442,7 @@ func (s *Service) resolve(ctx context.Context, req ChatRequest) (resolvedContext
 		Model:             req.Model,
 		Provider:          req.Provider,
 		ReasoningEffort:   req.ReasoningEffort,
+		HTTPClient:        modelHTTPClient,
 	})
 	if err != nil {
 		s.logger.Error("resolve: buildBaseRunConfig failed",
@@ -405,10 +479,8 @@ func (s *Service) resolve(ctx context.Context, req ChatRequest) (resolvedContext
 		}
 	}
 
-	contextTokenBudget := 0
-	if chatModel.Config.ContextWindow != nil && *chatModel.Config.ContextWindow > 0 {
-		contextTokenBudget = *chatModel.Config.ContextWindow
-	}
+	contextTokenBudget := s.effectiveContextTokenBudget(chatModel)
+	runCfg.ContextBudgetMaxTokens = contextTokenBudget
 
 	var messages []ModelMessage
 	var historyRecords []historyfrag.HistoryRecord
@@ -477,6 +549,7 @@ func (s *Service) resolve(ctx context.Context, req ChatRequest) (resolvedContext
 		// exactly as parent-driven subagent tasks assemble it.
 		messages, currentMessageIndex = prependContextMessages(forkContext, messages, currentMessageIndex)
 	}
+	historyMessageCount := len(messages)
 	if notice := s.currentWorkspaceContextMessage(ctx, req); notice != nil {
 		messages = append(messages, *notice)
 	}
@@ -491,11 +564,20 @@ func (s *Service) resolve(ctx context.Context, req ChatRequest) (resolvedContext
 	if !usePipeline && !req.ReusePersistedUserMessage {
 		messages = append(messages, reqMessages...)
 	}
+	trimmableMessages := normalizedContextPrefixLength(messages, historyMessageCount)
 	messages, currentMessageIndex, memoryMessageIndex = normalizeContextMessages(
 		messages,
 		currentMessageIndex,
 		memoryMessageIndex,
 	)
+	runCfg.ContextHistoryTokenEstimates = make([]int, len(messages))
+	for index := range messages {
+		runCfg.ContextHistoryTokenEstimates[index] = estimateMessageTokens(messages[index])
+	}
+	runCfg.ContextTrimmableMessages = min(trimmableMessages, len(messages))
+	if runCfg.ContextToolExchangePolicy == nil {
+		runCfg.ContextToolExchangePolicy = defaultToolExchangePolicy()
+	}
 
 	displayName := s.resolveDisplayName(ctx, req)
 	mergedAttachments := s.routeAndMergeAttachments(ctx, chatModel, req)
@@ -531,6 +613,8 @@ func (s *Service) resolve(ctx context.Context, req ChatRequest) (resolvedContext
 	runCfg.ContextMemoryMessageIndex = memoryMessageIndex
 	if usePipeline {
 		runCfg.ContextCurrentUserMessageIndex = currentMessageIndex
+	} else if req.ReusePersistedUserMessage {
+		markRequiredHistoryMessageCurrent(&runCfg, req.RequiredHistoryMessageID)
 	}
 	// When using the pipeline the user message is already in the RC;
 	// don't send it to the LLM again. headerifiedQuery is still kept
@@ -616,7 +700,7 @@ func (s *Service) Chat(ctx context.Context, req ChatRequest) (ChatResponse, erro
 			return ChatResponse{}, err
 		}
 	}
-	rc, req, err := s.resolve(ctx, req)
+	rc, req, err := s.resolveWithHTTPClient(ctx, req, s.nonStreamingHTTPClient)
 	if err != nil {
 		return ChatResponse{}, err
 	}
@@ -697,6 +781,7 @@ type baseRunConfigParams struct {
 	Model             string
 	Provider          string
 	ReasoningEffort   string // caller-provided override (empty = use bot default)
+	HTTPClient        *http.Client
 }
 
 // buildBaseRunConfig creates a RunConfig with model, credentials, skills,
@@ -737,6 +822,10 @@ func (s *Service) buildBaseRunConfig(ctx context.Context, p baseRunConfigParams)
 
 	reasoningConfig := resolveReasoningConfig(chatModel, botSettings, p.ReasoningEffort, provider.ClientType)
 
+	modelHTTPClient := p.HTTPClient
+	if modelHTTPClient == nil {
+		modelHTTPClient = s.streamHTTPClient
+	}
 	sdkModel := models.NewSDKChatModel(models.SDKModelConfig{
 		ModelID:               chatModel.ModelID,
 		ClientType:            provider.ClientType,
@@ -744,13 +833,14 @@ func (s *Service) buildBaseRunConfig(ctx context.Context, p baseRunConfigParams)
 		CodexAccountID:        creds.CodexAccountID,
 		BaseURL:               baseURL,
 		ChatCompletionsCompat: chatCompletionsCompat,
-		HTTPClient:            s.streamHTTPClient,
+		HTTPClient:            modelHTTPClient,
 		ReasoningConfig:       reasoningConfig,
 		ReasoningDialect:      chatModel.Config.ReasoningDialect,
 		ReasoningOffSupport:   chatModel.Config.ReasoningOffSupport,
 		ReasoningDefaultOn:    chatModel.Config.ReasoningDefaultOn,
 		ThinkingBudgetMin:     chatModel.Config.ThinkingBudgetMin,
 		ThinkingBudgetMax:     chatModel.Config.ThinkingBudgetMax,
+		ContextWindow:         contextBudgetFromChatModel(chatModel),
 	})
 
 	var agentSkills []native.SkillEntry
@@ -1136,23 +1226,28 @@ func (s *Service) ResolveRunConfig(ctx context.Context, botID, sessionID, channe
 		return ResolveRunConfigResult{}, err
 	}
 
+	contextBudget := s.effectiveContextTokenBudget(chatModel)
+	cfg.ContextBudgetMaxTokens = contextBudget
 	cfg = s.prepareRunConfig(ctx, cfg)
 	return ResolveRunConfigResult{
-		RunConfig:   cfg,
-		ModelID:     chatModel.ID,
-		RuntimeType: runtimeType,
+		RunConfig:              cfg,
+		ModelID:                chatModel.ID,
+		RuntimeType:            runtimeType,
+		ContextBudgetMaxTokens: contextBudget,
 	}, nil
 }
 
 // prepareRunConfig generates the system prompt and appends the user message.
 func (s *Service) prepareRunConfig(ctx context.Context, cfg native.RunConfig) native.RunConfig {
-	beforePromptContext := s.runPromptHook(ctx, agentRunConfigView{
+	cfg.ContextHookText = ""
+	beforePromptResult := s.runPromptHook(ctx, agentRunConfigView{
 		BotID:        cfg.Identity.BotID,
 		SessionID:    cfg.Identity.SessionID,
 		ChatID:       cfg.Identity.ChatID,
 		SessionType:  cfg.SessionType,
 		MessageCount: len(cfg.Messages),
 	}, hooks.EventBeforePromptBuild)
+	beforePromptContext := beforePromptResult.AppendContext
 	var files []native.SystemFile
 	limits := native.DefaultLimits()
 	if s.agent != nil {
@@ -1193,22 +1288,24 @@ func (s *Service) prepareRunConfig(ctx context.Context, cfg native.RunConfig) na
 	var promptHookTexts []string
 	if beforePromptContext != "" {
 		text := formatServiceHookContext(hooks.EventBeforePromptBuild, beforePromptContext)
-		cfg.System += "\n\n" + text
 		promptHookTexts = append(promptHookTexts, text)
 	}
-	afterPromptContext := s.runPromptHook(ctx, agentRunConfigView{
+	beforePromptObservedTexts := append([]string(nil), promptHookTexts...)
+	beforePromptObservedTexts = append(beforePromptObservedTexts, hookSystemSectionTexts(beforePromptResult)...)
+	afterPromptResult := s.runPromptHook(ctx, agentRunConfigView{
 		BotID:        cfg.Identity.BotID,
 		SessionID:    cfg.Identity.SessionID,
 		ChatID:       cfg.Identity.ChatID,
 		SessionType:  cfg.SessionType,
 		MessageCount: len(cfg.Messages),
-		SystemBytes:  len(cfg.System),
+		SystemBytes:  afterPromptHookSystemBytes(cfg.System, beforePromptObservedTexts),
 	}, hooks.EventAfterPromptBuild)
+	afterPromptContext := afterPromptResult.AppendContext
 	if afterPromptContext != "" {
 		text := formatServiceHookContext(hooks.EventAfterPromptBuild, afterPromptContext)
-		cfg.System += "\n\n" + text
 		promptHookTexts = append(promptHookTexts, text)
 	}
+	cfg.ContextHookText = strings.Join(promptHookTexts, "\n\n")
 
 	if cfg.Query != "" {
 		var extra []sdk.MessagePart
@@ -1262,7 +1359,17 @@ func (s *Service) prepareRunConfig(ctx context.Context, cfg native.RunConfig) na
 		}
 	}
 
-	cfg.ContextSourceFrags = buildProviderSourceFrags(ctx, cfg, native.GenerateSystemSections(systemParams), promptHookTexts)
+	hookBuild := buildHookSystemSections([]promptHookOutput{
+		{Event: hooks.EventBeforePromptBuild, Result: beforePromptResult},
+		{Event: hooks.EventAfterPromptBuild, Result: afterPromptResult},
+	}, cfg.ContextScope)
+	cfg.ContextSourceFrags = buildProviderSourceFrags(
+		ctx,
+		cfg,
+		native.GenerateSystemSections(systemParams),
+		hookBuild.Frags,
+	)
+	cfg.ContextSourceWarnings = hookBuild.Warnings
 	return cfg.RefreshContextFrag()
 }
 
@@ -1292,6 +1399,20 @@ func prependContextMessages(prefix, messages []ModelMessage, trackedIndex *int) 
 		}
 	}
 	return append(prefix, messages...), trackedIndex
+}
+
+func normalizedContextPrefixLength(messages []ModelMessage, rawPrefixLength int) int {
+	if rawPrefixLength <= 0 || len(messages) == 0 {
+		return 0
+	}
+	rawPrefixLength = min(rawPrefixLength, len(messages))
+	stripTools := len(sanitizeMessages(messages)) > 10
+	prefix := sanitizeMessages(messages[:rawPrefixLength])
+	if stripTools {
+		prefix = stripToolMessages(prefix)
+	}
+	prefix = repairToolCallClosures(prefix, syntheticToolClosureError)
+	return len(prefix)
 }
 
 func remapContextMessageIndex(messages []ModelMessage, index *int, stripTools bool) *int {

@@ -13,8 +13,8 @@ import (
 	"github.com/labstack/echo/v4"
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/memohai/memoh/internal/apperror"
-	mcpgw "github.com/memohai/memoh/internal/mcp"
+	"github.com/felinics/memoh/internal/apperror"
+	mcpgw "github.com/felinics/memoh/internal/mcp"
 )
 
 func TestBuildToolCallPayloadFromRaw(t *testing.T) {
@@ -149,6 +149,12 @@ func TestHandleMCPToolsWithGatewayAcceptCompatibility(t *testing.T) {
 		t.Fatalf("decode list payload failed: %v", err)
 	}
 	result, _ := listPayload["result"].(map[string]any)
+	if cacheScope, _ := result["cacheScope"].(string); cacheScope != "private" {
+		t.Fatalf("tools/list cacheScope = %#v, want private", result["cacheScope"])
+	}
+	if ttlMs, ok := result["ttlMs"].(float64); !ok || ttlMs != 0 {
+		t.Fatalf("tools/list ttlMs = %#v, want 0", result["ttlMs"])
+	}
 	tools, _ := result["tools"].([]any)
 	if len(tools) != 1 {
 		t.Fatalf("expected one tool, got: %#v", result["tools"])

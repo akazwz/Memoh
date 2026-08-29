@@ -75,6 +75,7 @@ export function createACPSessions(deps: ACPSessionDeps) {
     const runtimeId = input.runtimeId?.trim() ?? ''
     const sessionMode = input.sessionMode === 'discuss' ? 'discuss' : 'chat'
     return createSession(id, {
+      botAgentId: input.botAgentId,
       title: input.title ?? '',
       type: sessionMode,
       sessionMode,
@@ -207,6 +208,7 @@ export function createACPSessions(deps: ACPSessionDeps) {
       || (current?.type === 'discuss' ? 'discuss' : 'chat')
     const generation = deps.userScopeGeneration()
     const updated = await updateSessionAgent(botId, targetSessionId, {
+      botAgentId: input.botAgentId,
       type: sessionMode === 'discuss' ? 'discuss' : 'acp_agent',
       sessionMode,
       runtimeType: 'acp_agent',
@@ -238,6 +240,7 @@ export function createACPSessions(deps: ACPSessionDeps) {
       || (current?.type === 'discuss' ? 'discuss' : 'chat')
     const generation = deps.userScopeGeneration()
     const updated = await updateSessionAgent(botId, targetSessionId, {
+      botAgentId: '',
       type: sessionMode === 'discuss' ? 'discuss' : 'chat',
       sessionMode,
       runtimeType: 'model',

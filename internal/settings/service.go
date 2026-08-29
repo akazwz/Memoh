@@ -12,15 +12,16 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
-	"github.com/memohai/memoh/internal/acl"
-	acpfeedback "github.com/memohai/memoh/internal/agent/decision/feedback"
-	acpprofile "github.com/memohai/memoh/internal/agent/runtime/acp/profile"
-	"github.com/memohai/memoh/internal/db"
-	"github.com/memohai/memoh/internal/db/postgres/sqlc"
-	dbstore "github.com/memohai/memoh/internal/db/store"
-	netctl "github.com/memohai/memoh/internal/network"
-	"github.com/memohai/memoh/internal/reasoning"
-	tzutil "github.com/memohai/memoh/internal/timezone"
+	"github.com/felinics/memoh/internal/acl"
+	acpfeedback "github.com/felinics/memoh/internal/agent/decision/feedback"
+	acpprofile "github.com/felinics/memoh/internal/agent/runtime/acp/profile"
+	"github.com/felinics/memoh/internal/botagents"
+	"github.com/felinics/memoh/internal/db"
+	"github.com/felinics/memoh/internal/db/postgres/sqlc"
+	dbstore "github.com/felinics/memoh/internal/db/store"
+	netctl "github.com/felinics/memoh/internal/network"
+	"github.com/felinics/memoh/internal/reasoning"
+	tzutil "github.com/felinics/memoh/internal/timezone"
 )
 
 type ReasoningOptionsResolver interface {
@@ -32,7 +33,13 @@ type Service struct {
 	acl               *acl.Service
 	network           *netctl.Service
 	reasoningResolver ReasoningOptionsResolver
+	botAgents         *botagents.Service
 	logger            *slog.Logger
+}
+
+type defaultAgentTransactionalQueries interface {
+	SupportsTransactions() bool
+	InTx(context.Context, func(dbstore.Queries) error) error
 }
 
 var (
@@ -61,6 +68,10 @@ func NewService(log *slog.Logger, queries dbstore.Queries, aclService *acl.Servi
 
 func (s *Service) SetReasoningOptionsResolver(resolver ReasoningOptionsResolver) {
 	s.reasoningResolver = resolver
+}
+
+func (s *Service) SetBotAgents(service *botagents.Service) {
+	s.botAgents = service
 }
 
 func (s *Service) GetBot(ctx context.Context, botID string) (Settings, error) {
@@ -125,7 +136,7 @@ func (s *Service) UpsertBot(ctx context.Context, botID string, req UpsertRequest
 	if err != nil {
 		return Settings{}, err
 	}
-	current := normalizeBotSetting(botRow.Language, "", aclDefaultEffect, botRow.ReasoningEffort, botRow.HeartbeatEnabled, botRow.HeartbeatInterval, botRow.CompactionEnabled, botRow.CompactionThreshold, botRow.CompactionTargetPercent)
+	current := normalizeBotSetting(botRow.Language, "", aclDefaultEffect, botRow.ReasoningEffort, botRow.CompactionEnabled, botRow.CompactionThreshold, botRow.CompactionTargetPercent)
 	// A read error here must abort: falling through would leave `current` at the
 	// model defaults and silently overwrite a saved chat_runtime=acp_agent (and
 	// its agent id) on the next save. ErrNoRows is impossible because the bot
@@ -138,6 +149,7 @@ func (s *Service) UpsertBot(ctx context.Context, botID string, req UpsertRequest
 	} else {
 		existingSettings := normalizeBotSettingsReadRow(settingsRow)
 		current.ChatModelID = existingSettings.ChatModelID
+		current.DefaultBotAgentID = existingSettings.DefaultBotAgentID
 		current.ChatRuntime = existingSettings.ChatRuntime
 		current.ChatACPAgentID = existingSettings.ChatACPAgentID
 		current.ChatACPProjectPath = existingSettings.ChatACPProjectPath
@@ -160,12 +172,6 @@ func (s *Service) UpsertBot(ctx context.Context, botID string, req UpsertRequest
 	}
 	if effect := strings.TrimSpace(req.AclDefaultEffect); effect != "" {
 		current.AclDefaultEffect = effect
-	}
-	if req.HeartbeatEnabled != nil {
-		current.HeartbeatEnabled = *req.HeartbeatEnabled
-	}
-	if req.HeartbeatInterval != nil && *req.HeartbeatInterval > 0 {
-		current.HeartbeatInterval = *req.HeartbeatInterval
 	}
 	if req.CompactionEnabled != nil {
 		current.CompactionEnabled = *req.CompactionEnabled
@@ -222,6 +228,48 @@ func (s *Service) UpsertBot(ctx context.Context, botID string, req UpsertRequest
 			)
 		}
 	}
+	defaultBotAgentIDSet := req.DefaultBotAgentID != nil
+	if req.DefaultBotAgentID != nil {
+		current.DefaultBotAgentID = strings.TrimSpace(*req.DefaultBotAgentID)
+	} else if req.ChatRuntime != nil && current.ChatRuntime == ChatRuntimeModel {
+		// Legacy Web/Desktop clients know only chat_runtime. An explicit switch
+		// to Native must therefore clear a migrated Agent binding even when the
+		// newer default_bot_agent_id field is absent from their request.
+		current.DefaultBotAgentID = ""
+		defaultBotAgentIDSet = true
+	}
+	// Availability and credential validation belong to an explicit default
+	// Agent assignment. Revalidating the already stored Agent on every partial
+	// settings write would make unrelated changes (language, display, model,
+	// etc.) impossible after that Agent's credentials become incomplete.
+	if req.DefaultBotAgentID != nil && current.DefaultBotAgentID != "" {
+		if s.botAgents == nil {
+			return Settings{}, errors.New("bot agent service not configured")
+		}
+		agent, err := s.botAgents.GetActive(ctx, botID, current.DefaultBotAgentID)
+		if err != nil {
+			return Settings{}, err
+		}
+		if err := botagents.ValidateConfiguration(agent, normalizeJSONObject(botRow.Metadata)); err != nil {
+			return Settings{}, err
+		}
+		descriptor, err := botagents.DescriptorFor(agent)
+		if err != nil {
+			return Settings{}, err
+		}
+		switch descriptor.Runtime {
+		case botagents.RuntimeACP:
+			current.ChatRuntime = ChatRuntimeACPAgent
+			current.ChatACPAgentID = descriptor.Provider
+		default:
+			return Settings{}, botagents.ErrInvalidRuntime
+		}
+	} else if defaultBotAgentIDSet {
+		// Native is the built-in singleton and is represented by a NULL foreign
+		// key rather than a synthetic bot_agents row.
+		current.ChatRuntime = ChatRuntimeModel
+		current.ChatACPAgentID = ""
+	}
 	timezoneValue := pgtype.Text{}
 	if req.Timezone != nil {
 		normalized, err := normalizeOptionalTimezone(*req.Timezone)
@@ -257,17 +305,6 @@ func (s *Service) UpsertBot(ctx context.Context, botID string, req UpsertRequest
 	}
 	if err := s.applyReasoningPolicy(ctx, &current, req); err != nil {
 		return Settings{}, err
-	}
-	heartbeatModelUUID := pgtype.UUID{}
-	heartbeatModelIDSet := req.HeartbeatModelID != nil
-	if req.HeartbeatModelID != nil {
-		if value := strings.TrimSpace(*req.HeartbeatModelID); value != "" {
-			modelID, err := s.resolveModelUUID(ctx, value)
-			if err != nil {
-				return Settings{}, err
-			}
-			heartbeatModelUUID = modelID
-		}
 	}
 	compactionModelUUID := pgtype.UUID{}
 	compactionModelIDSet := req.CompactionModelID != nil
@@ -393,27 +430,24 @@ func (s *Service) UpsertBot(ctx context.Context, botID string, req UpsertRequest
 	if err != nil {
 		return Settings{}, rollbackNetworkChange(fmt.Errorf("marshal network config: %w", err))
 	}
-	updated, err := s.queries.UpsertBotSettings(ctx, sqlc.UpsertBotSettingsParams{
+	upsertParams := sqlc.UpsertBotSettingsParams{
 		ID:                         pgID,
 		Timezone:                   timezoneValue,
 		Language:                   current.Language,
 		CommandUiLanguage:          current.CommandUILanguage,
 		ReasoningEffort:            current.ReasoningEffort,
-		HeartbeatEnabled:           current.HeartbeatEnabled,
-		HeartbeatInterval:          int32(current.HeartbeatInterval), //nolint:gosec // bounded by positive-only setter above
-		HeartbeatPrompt:            "",
 		CompactionEnabled:          current.CompactionEnabled,
 		CompactionThreshold:        int32(current.CompactionThreshold), //nolint:gosec // bounded by non-negative setter above
 		CompactionTargetPercentSet: compactionTargetPercentSet,
 		CompactionTargetPercent:    nullableCompactionTargetPercent(current.CompactionTargetPercent),
 		ChatModelID:                chatModelUUID,
 		ChatModelIDSet:             chatModelIDSet,
+		DefaultBotAgentID:          db.ParseUUIDOrEmpty(current.DefaultBotAgentID),
+		DefaultBotAgentIDSet:       defaultBotAgentIDSet,
 		ChatRuntime:                current.ChatRuntime,
 		ChatAcpAgentID:             nullableText(current.ChatACPAgentID),
 		ChatAcpProjectPath:         current.ChatACPProjectPath,
 		ChatAcpProjectMode:         current.ChatACPProjectMode,
-		HeartbeatModelID:           heartbeatModelUUID,
-		HeartbeatModelIDSet:        heartbeatModelIDSet,
 		CompactionModelIDSet:       compactionModelIDSet,
 		CompactionModelID:          compactionModelUUID,
 		ImageModelID:               imageModelUUID,
@@ -437,7 +471,8 @@ func (s *Service) UpsertBot(ctx context.Context, botID string, req UpsertRequest
 		OverlayProvider:            normalizedNetwork.OverlayProvider,
 		OverlayEnabled:             normalizedNetwork.OverlayEnabled,
 		OverlayConfig:              overlayConfigJSON,
-	})
+	}
+	updated, err := s.upsertBotSettings(ctx, upsertParams)
 	if err != nil {
 		return Settings{}, rollbackNetworkChange(err)
 	}
@@ -454,6 +489,47 @@ func (s *Service) UpsertBot(ctx context.Context, botID string, req UpsertRequest
 	return settings, nil
 }
 
+// upsertBotSettings serializes default-Agent changes with Agent availability
+// changes. The active recheck intentionally runs after the parent bot lock in
+// a separate statement, so READ COMMITTED observes a disable/delete that won
+// the lock before this assignment. Query-only test doubles retain the direct
+// path used by existing unit tests.
+func (s *Service) upsertBotSettings(ctx context.Context, params sqlc.UpsertBotSettingsParams) (sqlc.UpsertBotSettingsRow, error) {
+	if !params.DefaultBotAgentIDSet {
+		return s.queries.UpsertBotSettings(ctx, params)
+	}
+	txer, ok := s.queries.(defaultAgentTransactionalQueries)
+	if !ok || !txer.SupportsTransactions() {
+		return s.queries.UpsertBotSettings(ctx, params)
+	}
+
+	var updated sqlc.UpsertBotSettingsRow
+	err := txer.InTx(ctx, func(q dbstore.Queries) error {
+		if _, err := q.LockBotForAgentMutation(ctx, params.ID); err != nil {
+			return err
+		}
+		if params.DefaultBotAgentID.Valid {
+			agent, err := q.GetBotAgentByID(ctx, sqlc.GetBotAgentByIDParams{
+				BotID: params.ID,
+				ID:    params.DefaultBotAgentID,
+			})
+			if errors.Is(err, pgx.ErrNoRows) {
+				return botagents.ErrUnavailable
+			}
+			if err != nil {
+				return err
+			}
+			if !agent.Enabled || agent.DeletedAt.Valid {
+				return botagents.ErrUnavailable
+			}
+		}
+		var err error
+		updated, err = q.UpsertBotSettings(ctx, params)
+		return err
+	})
+	return updated, err
+}
+
 func (s *Service) Delete(ctx context.Context, botID string) error {
 	if s.queries == nil {
 		return errors.New("settings queries not configured")
@@ -468,14 +544,12 @@ func (s *Service) Delete(ctx context.Context, botID string) error {
 	return nil
 }
 
-func normalizeBotSetting(language string, commandUILanguage string, aclDefaultEffect string, reasoningEffort string, heartbeatEnabled bool, heartbeatInterval int32, compactionEnabled bool, compactionThreshold int32, compactionTargetPercent pgtype.Int4) Settings {
+func normalizeBotSetting(language string, commandUILanguage string, aclDefaultEffect string, reasoningEffort string, compactionEnabled bool, compactionThreshold int32, compactionTargetPercent pgtype.Int4) Settings {
 	settings := Settings{
 		Language:                strings.TrimSpace(language),
 		CommandUILanguage:       strings.TrimSpace(commandUILanguage),
 		AclDefaultEffect:        strings.TrimSpace(aclDefaultEffect),
 		ReasoningEffort:         strings.TrimSpace(reasoningEffort),
-		HeartbeatEnabled:        heartbeatEnabled,
-		HeartbeatInterval:       int(heartbeatInterval),
 		CompactionEnabled:       compactionEnabled,
 		CompactionThreshold:     int(compactionThreshold),
 		CompactionTargetPercent: normalizeCompactionTargetPercent(compactionTargetPercent),
@@ -495,9 +569,6 @@ func normalizeBotSetting(language string, commandUILanguage string, aclDefaultEf
 	}
 	if !hasReasoningEffortValue(settings.ReasoningEffort) {
 		settings.ReasoningEffort = DefaultReasoningEffort
-	}
-	if settings.HeartbeatInterval <= 0 {
-		settings.HeartbeatInterval = DefaultHeartbeatInterval
 	}
 	if settings.CompactionThreshold < 0 {
 		settings.CompactionThreshold = 0
@@ -609,18 +680,16 @@ func normalizeBotSettingsReadRow(row sqlc.GetSettingsByBotIDRow) Settings {
 		row.Language,
 		row.CommandUiLanguage,
 		row.ReasoningEffort,
-		row.HeartbeatEnabled,
-		row.HeartbeatInterval,
 		row.CompactionEnabled,
 		row.CompactionThreshold,
 		row.CompactionTargetPercent,
 		row.Timezone,
 		row.ChatModelID,
+		row.DefaultBotAgentID,
 		row.ChatRuntime,
 		row.ChatAcpAgentID,
 		row.ChatAcpProjectPath,
 		row.ChatAcpProjectMode,
-		row.HeartbeatModelID,
 		row.CompactionModelID,
 		row.ImageModelID,
 		row.SearchProviderID,
@@ -644,18 +713,16 @@ func normalizeBotSettingsWriteRow(row sqlc.UpsertBotSettingsRow) Settings {
 		row.Language,
 		row.CommandUiLanguage,
 		row.ReasoningEffort,
-		row.HeartbeatEnabled,
-		row.HeartbeatInterval,
 		row.CompactionEnabled,
 		row.CompactionThreshold,
 		row.CompactionTargetPercent,
 		row.Timezone,
 		row.ChatModelID,
+		row.DefaultBotAgentID,
 		row.ChatRuntime,
 		row.ChatAcpAgentID,
 		row.ChatAcpProjectPath,
 		row.ChatAcpProjectMode,
-		row.HeartbeatModelID,
 		row.CompactionModelID,
 		row.ImageModelID,
 		row.SearchProviderID,
@@ -678,18 +745,16 @@ func normalizeBotSettingsFields(
 	language string,
 	commandUILanguage string,
 	reasoningEffort string,
-	heartbeatEnabled bool,
-	heartbeatInterval int32,
 	compactionEnabled bool,
 	compactionThreshold int32,
 	compactionTargetPercent pgtype.Int4,
 	timezone pgtype.Text,
 	chatModelID pgtype.UUID,
+	defaultBotAgentID pgtype.UUID,
 	chatRuntime string,
 	chatACPAgentID pgtype.Text,
 	chatACPProjectPath string,
 	chatACPProjectMode string,
-	heartbeatModelID pgtype.UUID,
 	compactionModelID pgtype.UUID,
 	imageModelID pgtype.UUID,
 	searchProviderID pgtype.UUID,
@@ -706,12 +771,15 @@ func normalizeBotSettingsFields(
 	overlayEnabled bool,
 	overlayConfig []byte,
 ) Settings {
-	settings := normalizeBotSetting(language, commandUILanguage, "", reasoningEffort, heartbeatEnabled, heartbeatInterval, compactionEnabled, compactionThreshold, compactionTargetPercent)
+	settings := normalizeBotSetting(language, commandUILanguage, "", reasoningEffort, compactionEnabled, compactionThreshold, compactionTargetPercent)
 	if timezone.Valid {
 		settings.Timezone = timezone.String
 	}
 	if chatModelID.Valid {
 		settings.ChatModelID = uuid.UUID(chatModelID.Bytes).String()
+	}
+	if defaultBotAgentID.Valid {
+		settings.DefaultBotAgentID = uuid.UUID(defaultBotAgentID.Bytes).String()
 	}
 	settings.ChatRuntime = normalizeChatRuntimeValue(chatRuntime)
 	if settings.ChatRuntime == "" {
@@ -727,9 +795,6 @@ func normalizeBotSettingsFields(
 	settings.ChatACPProjectMode = normalizeACPProjectMode(chatACPProjectMode)
 	if settings.ChatACPProjectMode == "" {
 		settings.ChatACPProjectMode = DefaultACPProjectMode
-	}
-	if heartbeatModelID.Valid {
-		settings.HeartbeatModelID = uuid.UUID(heartbeatModelID.Bytes).String()
 	}
 	if compactionModelID.Valid {
 		settings.CompactionModelID = uuid.UUID(compactionModelID.Bytes).String()
@@ -840,6 +905,11 @@ func normalizeChatRuntimeFields(current Settings) Settings {
 
 func validateChatRuntimeSettings(botMetadata []byte, current Settings) error {
 	current = normalizeChatRuntimeFields(current)
+	if strings.TrimSpace(current.DefaultBotAgentID) != "" {
+		// The BotAgent path validates availability and shared provider config
+		// before this compatibility validator is reached.
+		return nil
+	}
 	if current.ChatRuntime != ChatRuntimeACPAgent {
 		return nil
 	}

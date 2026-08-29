@@ -534,6 +534,37 @@ export type AudioVoiceInfo = {
     name?: string;
 };
 
+export type BotagentsBotAgent = {
+    bot_id?: string;
+    created_at?: string;
+    deleted_at?: string;
+    enabled?: boolean;
+    id?: string;
+    metadata?: {
+        [key: string]: unknown;
+    };
+    name?: string;
+    runtime?: string;
+    updated_at?: string;
+};
+
+export type BotagentsCreateRequest = {
+    metadata?: {
+        [key: string]: unknown;
+    };
+    name?: string;
+    runtime?: string;
+};
+
+export type BotagentsListResponse = {
+    items?: Array<BotagentsBotAgent>;
+};
+
+export type BotagentsUpdateRequest = {
+    enabled?: boolean;
+    name?: string;
+};
+
 export type BotbackupExportRequest = {
     passphrase?: string;
     sections?: Array<BotbackupSection>;
@@ -1089,9 +1120,71 @@ export type ConnectorsListResponse = {
     items?: Array<ConnectorsConnector>;
 };
 
+export type ContextfragCacheClass = 'stable' | 'dynamic' | 'never';
+
+export type ContextfragCachePlan = {
+    mid_stable_message_count?: number;
+    stable_message_count?: number;
+    stable_prefix_hash?: string;
+    stable_prefix_token_estimate?: number;
+};
+
+export type ContextfragCacheUsageRecord = {
+    attempt?: number;
+    cache_read_tokens?: number;
+    cache_write_1h_tokens?: number;
+    cache_write_5m_tokens?: number;
+    cache_write_tokens?: number;
+    no_cache_tokens?: number;
+    step_index?: number;
+};
+
+export type ContextfragContentRange = {
+    end?: number;
+    start?: number;
+};
+
+export type ContextfragContextBudgetPlan = {
+    actual_system_cost?: number;
+    current_request_cost?: number;
+    estimator?: string;
+    estimator_safety_factor_percent?: number;
+    history_budget?: number;
+    output_reserve?: number;
+    output_reserve_resolution?: string;
+    system_budget?: number;
+    tool_defs_cost?: number;
+    window?: number;
+};
+
+export type ContextfragContextRef = {
+    content_hash?: string;
+    durability?: ContextfragRefDurability;
+    hash_algo?: string;
+    hash_scope?: string;
+    id?: string;
+    namespace?: string;
+    range?: ContextfragContentRange;
+    schema?: string;
+    version?: number;
+};
+
 export type ContextfragLifecycleSnapshot = {
     assistant_message_id?: string;
+    budget_plan?: ContextfragContextBudgetPlan;
+    cache_plan?: ContextfragCachePlan;
+    cache_read_tokens?: number;
+    cache_usage?: Array<ContextfragCacheUsageRecord>;
+    cache_write_tokens?: number;
+    client_type?: string;
     counts?: ContextfragManifestCounts;
+    final_input_hash?: string;
+    loop_selection_mode?: string;
+    model?: string;
+    mutations?: Array<ContextfragMutationRecord>;
+    selection?: ContextfragSelectionTrace;
+    selection_decisions?: Array<ContextfragSelectionDecision>;
+    steps?: Array<ContextfragStepSnapshot>;
     version?: number;
     view?: ContextfragManifestView;
 };
@@ -1105,6 +1198,57 @@ export type ContextfragManifestCounts = {
 };
 
 export type ContextfragManifestView = 'run_config_pre_provider';
+
+export type ContextfragMutationKind = 'before_model_call_hook' | 'background_summary' | 'mid_task_prune' | 'loop_step_reselection' | 'injected_message' | 'context_view_fallback' | 'context_budget_failure' | 'context_budget_disabled' | 'capability_gate' | 'read_media' | 'mid_stream_retry';
+
+export type ContextfragMutationRecord = {
+    detail?: string;
+    kind?: ContextfragMutationKind;
+};
+
+export type ContextfragRefDurability = 'durable' | 'synthetic' | 'debug';
+
+export type ContextfragRetentionTier = '' | 'required' | 'preferred' | 'optional';
+
+export type ContextfragSelectionDecision = {
+    cache_class?: ContextfragCacheClass;
+    decision?: ContextfragSelectionDecisionKind;
+    id?: string;
+    image_count?: number;
+    reason?: string;
+    ref?: ContextfragContextRef;
+    retention_tier?: ContextfragRetentionTier;
+    slot?: ContextfragSlot;
+    source?: string;
+    source_id?: string;
+    text_bytes?: number;
+    token_estimate?: number;
+};
+
+export type ContextfragSelectionDecisionKind = 'selected' | 'trimmed' | 'dropped';
+
+export type ContextfragSelectionTrace = {
+    drop_reasons?: {
+        [key: string]: number;
+    };
+    dropped?: number;
+    selected?: number;
+};
+
+export type ContextfragSlot = 'system' | 'before_history' | 'history' | 'after_history_before_current' | 'current_user' | 'after_current';
+
+export type ContextfragStepSnapshot = {
+    attempt?: number;
+    drop_reasons?: {
+        [key: string]: number;
+    };
+    dropped?: number;
+    post_prepare_input_hash?: string;
+    reselection_applied?: boolean;
+    reselection_outcome?: string;
+    step_index?: number;
+    truncated?: number;
+};
 
 export type ConversationSkillActivation = {
     prompt?: string;
@@ -1168,6 +1312,7 @@ export type ConversationUiMessage = {
     approval?: ConversationUiToolApproval;
     attachments?: Array<ConversationUiAttachment>;
     background_task?: ConversationUiBackgroundTask;
+    code?: string;
     content?: string;
     execution_location?: ConversationUiExecutionLocation;
     id?: number;
@@ -1175,13 +1320,18 @@ export type ConversationUiMessage = {
     name?: string;
     output?: unknown;
     progress?: Array<unknown>;
+    reasoning_timing?: ConversationUiReasoningTiming;
     running?: boolean;
     tool_call_id?: string;
     type?: ConversationUiMessageType;
     user_input?: ConversationUiUserInput;
 };
 
-export type ConversationUiMessageType = 'text' | 'reasoning' | 'tool' | 'attachments';
+export type ConversationUiMessageType = 'text' | 'reasoning' | 'tool' | 'attachments' | 'error';
+
+export type ConversationUiReasoningTiming = {
+    duration_ms?: number;
+};
 
 export type ConversationUiReplyRef = {
     attachments?: Array<ConversationUiAttachment>;
@@ -1407,7 +1557,7 @@ export type FetchprovidersUpdateRequest = {
     provider?: FetchprovidersProviderName;
 };
 
-export type GithubComMemohaiMemohInternalMcpConnection = {
+export type GithubComFelinicsMemohInternalMcpConnection = {
     auth_type?: string;
     bot_id?: string;
     config?: {
@@ -1417,18 +1567,12 @@ export type GithubComMemohaiMemohInternalMcpConnection = {
     id?: string;
     is_active?: boolean;
     last_probed_at?: string;
-    managed_by_plugin_installation_id?: string;
-    managed_resource_key?: string;
-    metadata?: {
-        [key: string]: unknown;
-    };
     name?: string;
     status?: string;
     status_message?: string;
     tools_cache?: Array<McpToolDescriptor>;
     type?: string;
     updated_at?: string;
-    visible?: boolean;
 };
 
 export type HandlersAcpClaudeCodeOAuthAuthorizeResponse = {
@@ -1833,15 +1977,32 @@ export type HandlersHooksEventsResponse = {
     events?: Array<HandlersHookEventInfo>;
 };
 
-export type HandlersInstallPluginRequest = {
-    plugin_id?: string;
-    variables?: {
-        [key: string]: string;
-    };
+export type HandlersInstallPackageRequest = {
+    package_id: string;
+    registry_id: string;
+    revision: string;
+    workspace_target_id?: string;
 };
 
-export type HandlersInstallSkillRequest = {
-    skill_id?: string;
+export type HandlersInstallRegistryPackageResponse = {
+    installation: SkillpackagesInstallation;
+    ok: boolean;
+    package_id: string;
+    registry_id: string;
+    revision: string;
+    skills: Array<HandlersInstallRegistrySkillResponse>;
+    workspace_target_id: string;
+};
+
+export type HandlersInstallRegistrySkillResponse = {
+    artifact_digest: string;
+    files_written: number;
+    install_id: string;
+    ok: boolean;
+    package_id: string;
+    registry_id: string;
+    skill_id: string;
+    workspace_target_id: string;
 };
 
 export type HandlersListSnapshotsResponse = {
@@ -1946,14 +2107,19 @@ export type HandlersSessionInfoResponse = {
 
 export type HandlersSkillItem = {
     content?: string;
+    deletable?: boolean;
     description?: string;
+    editable?: boolean;
     managed?: boolean;
     metadata?: {
         [key: string]: unknown;
     };
     name?: string;
+    package_id?: string;
     raw?: string;
+    registry_id?: string;
     shadowed_by?: string;
+    skill_id?: string;
     source_kind?: string;
     source_path?: string;
     source_root?: string;
@@ -1966,7 +2132,11 @@ export type HandlersSkillsActionRequest = {
 };
 
 export type HandlersSkillsDeleteRequest = {
-    names?: Array<string>;
+    /**
+     * SourcePaths are SKILL.md paths reported in the skill list. Deleting by name
+     * cannot address registry skills, which are nested by registry and package.
+     */
+    source_paths?: Array<string>;
 };
 
 export type HandlersSkillsResponse = {
@@ -1975,6 +2145,12 @@ export type HandlersSkillsResponse = {
 
 export type HandlersSkillsUpsertRequest = {
     skills?: Array<string>;
+    /**
+     * SourcePath is the existing SKILL.md being edited when saving a single skill.
+     * Empty means create (or overwrite by frontmatter name under
+     * /data/skills/user/personal/<name>/).
+     */
+    source_path?: string;
 };
 
 export type HandlersSnapshotInfo = {
@@ -1995,41 +2171,139 @@ export type HandlersSnapshotInfo = {
 };
 
 export type HandlersSupermarketAuthor = {
-    email?: string;
-    name?: string;
+    email: string;
+    name: string;
 };
 
-export type HandlersSupermarketPluginListResponse = {
-    data?: Array<PluginsManifest>;
-    limit?: number;
-    page?: number;
-    total?: number;
-};
-
-export type HandlersSupermarketSkillEntry = {
-    content?: string;
-    description?: string;
-    files?: Array<string>;
-    id?: string;
-    metadata?: HandlersSupermarketSkillMetadata;
-    name?: string;
-};
-
-export type HandlersSupermarketSkillListResponse = {
-    data?: Array<HandlersSupermarketSkillEntry>;
-    limit?: number;
-    page?: number;
-    total?: number;
-};
-
-export type HandlersSupermarketSkillMetadata = {
-    author?: HandlersSupermarketAuthor;
+export type HandlersSupermarketCatalogSkill = {
+    artifact: HandlersSupermarketSkillArtifact;
+    author: HandlersSupermarketAuthor;
+    category: string;
+    category_name: string;
+    description: string;
+    files: Array<string>;
     homepage?: string;
-    tags?: Array<string>;
+    icon?: HandlersSupermarketSkillIcon;
+    install_id: string;
+    name: string;
+    package_id: string;
+    registry_id: string;
+    schema_version: string;
+    skill_id: string;
+    source: HandlersSupermarketSkillSource;
+    source_category?: string;
+    tags: Array<string>;
 };
 
-export type HandlersSupermarketTagsResponse = {
-    tags?: Array<string>;
+export type HandlersSupermarketCatalogSkillListResponse = {
+    data: Array<HandlersSupermarketCatalogSkill>;
+    limit: number;
+    page: number;
+    total: number;
+};
+
+export type HandlersSupermarketRegistry = {
+    adapter: string;
+    category_count: number;
+    enabled: boolean;
+    id: string;
+    name: string;
+    package_count: number;
+    priority: number;
+    published_at?: string;
+    revision?: string;
+    skill_count: number;
+    skipped_package_count: number;
+};
+
+export type HandlersSupermarketRegistryListResponse = {
+    data: Array<HandlersSupermarketRegistry>;
+};
+
+export type HandlersSupermarketSkillArtifact = {
+    archive_size: number;
+    content_type: string;
+    digest: string;
+    download_url: string;
+    file_count: number;
+    format: string;
+    size: number;
+    uncompressed_size: number;
+};
+
+export type HandlersSupermarketSkillCategory = {
+    count: number;
+    id: string;
+    name: string;
+    registries: Array<HandlersSupermarketSkillCategoryRegistry>;
+};
+
+export type HandlersSupermarketSkillCategoryListResponse = {
+    data: Array<HandlersSupermarketSkillCategory>;
+};
+
+export type HandlersSupermarketSkillCategoryRegistry = {
+    count: number;
+    id: string;
+};
+
+export type HandlersSupermarketSkillIcon = {
+    brand_color?: string;
+    card?: HandlersSupermarketSkillIconAsset;
+    dark?: HandlersSupermarketSkillIconAsset;
+    detail?: HandlersSupermarketSkillIconAsset;
+};
+
+export type HandlersSupermarketSkillIconAsset = {
+    content_type: string;
+    digest: string;
+    size: number;
+};
+
+export type HandlersSupermarketSkillPackageCategory = {
+    id: string;
+    name: string;
+    skill_count: number;
+};
+
+export type HandlersSupermarketSkillPackageDescriptor = {
+    categories: Array<HandlersSupermarketSkillPackageCategory>;
+    description: string;
+    icon?: HandlersSupermarketSkillIcon;
+    name: string;
+    package_id: string;
+    registry_id: string;
+    revision: string;
+    schema_version: string;
+    skill_count: number;
+    skills: Array<HandlersSupermarketCatalogSkill>;
+    tags: Array<string>;
+};
+
+export type HandlersSupermarketSkillPackageListResponse = {
+    data: Array<HandlersSupermarketSkillPackageSummary>;
+    limit: number;
+    page: number;
+    total: number;
+};
+
+export type HandlersSupermarketSkillPackageSummary = {
+    categories: Array<HandlersSupermarketSkillPackageCategory>;
+    description: string;
+    icon?: HandlersSupermarketSkillIcon;
+    name: string;
+    package_id: string;
+    registry_id: string;
+    schema_version: string;
+    skill_count: number;
+    tags: Array<string>;
+};
+
+export type HandlersSupermarketSkillSource = {
+    path: string;
+    repository?: string;
+    revision: string;
+    type: string;
 };
 
 export type HandlersTokenUsageRecord = {
@@ -2057,7 +2331,6 @@ export type HandlersTokenUsageResponse = {
     by_model?: Array<HandlersModelTokenUsage>;
     chat?: Array<HandlersDailyTokenUsage>;
     discuss?: Array<HandlersDailyTokenUsage>;
-    heartbeat?: Array<HandlersDailyTokenUsage>;
     schedule?: Array<HandlersDailyTokenUsage>;
 };
 
@@ -2141,6 +2414,7 @@ export type HandlersCreateSessionRequest = {
      * transient in-memory handle reference, never persisted in metadata.
      */
     acp_runtime_id?: string;
+    bot_agent_id?: string;
     channel_type?: string;
     metadata?: {
         [key: string]: unknown;
@@ -2203,8 +2477,15 @@ export type HandlersEmailOAuthStatusResponse = {
 };
 
 export type HandlersForkSessionRequest = {
-    message_id: string;
+    /**
+     * MessageID is the pre-turn spelling of TurnID, resolved server-side to the
+     * round that contains it. Deprecated: send turn_id. A client holds a turn id
+     * from admission onward, while a stored message id exists only once the
+     * round has been persisted.
+     */
+    message_id?: string;
     title?: string;
+    turn_id?: string;
 };
 
 export type HandlersFsOpResponse = {
@@ -2320,6 +2601,7 @@ export type HandlersTerminalInfoResponse = {
 };
 
 export type HandlersUpdateSessionRequest = {
+    bot_agent_id?: string;
     metadata?: {
         [key: string]: unknown;
     };
@@ -2332,25 +2614,9 @@ export type HandlersUpdateSessionRequest = {
     type?: string;
 };
 
-export type HeartbeatListLogsResponse = {
-    items?: Array<HeartbeatLog>;
-    total_count?: number;
-};
-
-export type HeartbeatLog = {
-    bot_id?: string;
-    completed_at?: string;
-    error_message?: string;
-    id?: string;
-    result_text?: string;
-    session_id?: string;
-    started_at?: string;
-    status?: string;
-    usage?: unknown;
-};
-
 export type HooksActionResult = {
     action_type?: string;
+    append_system_sections?: Array<HooksSystemSectionOutput>;
     decision?: string;
     error?: string;
     exit_code?: number;
@@ -2362,12 +2628,21 @@ export type HooksActionResult = {
     result?: unknown;
     stderr?: string;
     stdout?: string;
+    warnings?: Array<HooksOutputWarning>;
+};
+
+export type HooksOutputWarning = {
+    code?: string;
+    hook_name?: string;
+    message?: string;
+    section_id?: string;
 };
 
 export type HooksResult = {
     action_results?: Array<HooksActionResult>;
     actions_run?: number;
     append_context?: string;
+    append_system_sections?: Array<HooksSystemSectionOutput>;
     decision?: string;
     hooks_matched?: number;
     metadata?: {
@@ -2375,7 +2650,20 @@ export type HooksResult = {
     };
     reason?: string;
     runtime_supported?: boolean;
+    warnings?: Array<HooksOutputWarning>;
 };
+
+export type HooksSystemSectionCache = 'dynamic' | 'stable';
+
+export type HooksSystemSectionOutput = {
+    cache?: HooksSystemSectionCache;
+    hook_name?: string;
+    id?: string;
+    retention?: HooksSystemSectionRetention;
+    text?: string;
+};
+
+export type HooksSystemSectionRetention = 'optional' | 'preferred';
 
 export type HooksToolPayload = {
     call_id?: string;
@@ -2412,7 +2700,7 @@ export type McpImportRequest = {
 };
 
 export type McpListResponse = {
-    items?: Array<GithubComMemohaiMemohInternalMcpConnection>;
+    items?: Array<GithubComFelinicsMemohInternalMcpConnection>;
 };
 
 export type McpMcpServerEntry = {
@@ -2518,8 +2806,9 @@ export type ModelsModelConfig = {
      * which cannot be inferred from the tiers it advertises: Gemini 2.5 takes a
      * token budget while 3.x takes a named level, and the two are mutually
      * exclusive on the same request. Declared per model because the alternative is
-     * sniffing the model id, and an id is not a capability. Empty means the
-     * provider's modern default.
+     * sniffing the model id, and an id is not a capability. Empty leaves provider
+     * policy in charge; Google's adaptor deliberately sends no thinking control so
+     * pre-dialect rows retain their safe pre-upgrade request shape.
      */
     reasoning_dialect?: string;
     reasoning_efforts?: Array<string>;
@@ -2558,127 +2847,6 @@ export type ModelsUpdateRequest = {
     name?: string;
     provider_id?: string;
     type?: ModelsModelType;
-};
-
-export type PluginsAuthRequirement = {
-    client_ref?: string;
-    key?: string;
-    scopes?: Array<string>;
-    type?: string;
-    variables?: Array<string>;
-};
-
-export type PluginsAuthor = {
-    email?: string;
-    name?: string;
-};
-
-export type PluginsConfigVar = {
-    defaultValue?: string;
-    description?: string;
-    key?: string;
-    required?: boolean;
-    secret?: boolean;
-};
-
-export type PluginsIcon = {
-    kind?: string;
-    name?: string;
-    url?: string;
-};
-
-export type PluginsInstallation = {
-    bot_id?: string;
-    config?: {
-        [key: string]: unknown;
-    };
-    enabled?: boolean;
-    id?: string;
-    installed_at?: string;
-    manifest?: PluginsManifest;
-    metadata?: {
-        [key: string]: unknown;
-    };
-    plugin_id?: string;
-    plugin_name?: string;
-    resources?: Array<PluginsResource>;
-    status?: string;
-    updated_at?: string;
-    version?: string;
-};
-
-export type PluginsListResponse = {
-    items?: Array<PluginsInstallation>;
-};
-
-export type PluginsMcpResource = {
-    args?: Array<string>;
-    auth_ref?: string;
-    capabilities?: Array<string>;
-    command?: string;
-    cwd?: string;
-    description?: string;
-    display_name?: string;
-    env?: Array<PluginsConfigVar>;
-    headers?: Array<PluginsConfigVar>;
-    key?: string;
-    name?: string;
-    transport?: string;
-    url?: string;
-    visibility?: string;
-};
-
-export type PluginsManifest = {
-    auth_requirements?: Array<PluginsAuthRequirement>;
-    author?: PluginsAuthor;
-    bundled_skills?: Array<PluginsSkillEntry>;
-    capabilities?: Array<string>;
-    description?: string;
-    homepage?: string;
-    icon?: PluginsIcon;
-    id?: string;
-    install?: Array<string>;
-    mcps?: Array<PluginsMcpResource>;
-    name?: string;
-    schema_version?: string;
-    skills?: Array<PluginsSkillResource>;
-    tags?: Array<string>;
-    variables?: Array<PluginsConfigVar>;
-    version?: string;
-};
-
-export type PluginsOAuthAuthorizeRequest = {
-    callback_url?: string;
-};
-
-export type PluginsResource = {
-    created_at?: string;
-    id?: string;
-    metadata?: {
-        [key: string]: unknown;
-    };
-    resource_id?: string;
-    resource_key?: string;
-    resource_type?: string;
-    status?: string;
-    updated_at?: string;
-};
-
-export type PluginsSkillEntry = {
-    content?: string;
-    description?: string;
-    files?: Array<string>;
-    id?: string;
-    metadata?: {
-        [key: string]: unknown;
-    };
-    name?: string;
-};
-
-export type PluginsSkillResource = {
-    key?: string;
-    name?: string;
-    path?: string;
 };
 
 export type ProvidersCountResponse = {
@@ -2778,7 +2946,7 @@ export type ProvidersTestResponse = {
     status?: ProvidersTestStatus;
 };
 
-export type ProvidersTestStatus = 'ok' | 'auth_error' | 'error';
+export type ProvidersTestStatus = 'ok' | 'auth_error' | 'error' | 'unverified';
 
 export type ProvidersUpdateRequest = {
     client_type?: string;
@@ -2869,6 +3037,11 @@ export type ScheduleCreateRequest = {
      * runs (e.g. a Codex model id). Mutually exclusive with ModelID.
      */
     acp_model_id?: string;
+    /**
+     * BotAgentID selects one persisted BotAgent for a new session. Empty means
+     * the built-in Native runtime (or the legacy ACP fields below).
+     */
+    bot_agent_id?: string;
     command?: string;
     description?: string;
     enabled?: boolean;
@@ -2914,6 +3087,11 @@ export type ScheduleExecutionConfig = {
      * runs (e.g. a Codex model id). Mutually exclusive with ModelID.
      */
     acp_model_id?: string;
+    /**
+     * BotAgentID selects one persisted BotAgent for a new session. Empty means
+     * the built-in Native runtime (or the legacy ACP fields below).
+     */
+    bot_agent_id?: string;
     /**
      * ModelID is a native model UUID override (models.id).
      */
@@ -2980,6 +3158,11 @@ export type ScheduleSchedule = {
      * runs (e.g. a Codex model id). Mutually exclusive with ModelID.
      */
     acp_model_id?: string;
+    /**
+     * BotAgentID selects one persisted BotAgent for a new session. Empty means
+     * the built-in Native runtime (or the legacy ACP fields below).
+     */
+    bot_agent_id?: string;
     bot_id?: string;
     command?: string;
     created_at?: string;
@@ -3090,6 +3273,7 @@ export type SearchprovidersUpdateRequest = {
 };
 
 export type SessionSession = {
+    bot_agent_id?: string;
     bot_id?: string;
     channel_type?: string;
     created_at?: string;
@@ -3127,12 +3311,10 @@ export type SettingsSettings = {
     compaction_model_id?: string;
     compaction_target_percent?: number | null;
     compaction_threshold?: number;
+    default_bot_agent_id?: string;
     discuss_probe_model_id?: string;
     display_enabled?: boolean;
     fetch_provider_id?: string;
-    heartbeat_enabled?: boolean;
-    heartbeat_interval?: number;
-    heartbeat_model_id?: string;
     image_model_id?: string;
     language?: string;
     memory_provider_id?: string;
@@ -3198,16 +3380,10 @@ export type SettingsUpsertRequest = {
     compaction_model_id?: string;
     compaction_target_percent?: number;
     compaction_threshold?: number;
+    default_bot_agent_id?: string;
     discuss_probe_model_id?: string;
     display_enabled?: boolean;
     fetch_provider_id?: string;
-    heartbeat_enabled?: boolean;
-    heartbeat_interval?: number;
-    /**
-     * HeartbeatModelID joins the pointer group above (nil/""/value) so the
-     * heartbeat tab's autosave can clear a model override.
-     */
-    heartbeat_model_id?: string;
     image_model_id?: string;
     /**
      * Language follows the same pointer rule; "" normalizes to DefaultLanguage
@@ -3231,12 +3407,28 @@ export type SettingsUpsertRequest = {
     video_model_id?: string;
 };
 
+export type SkillpackagesInstallation = {
+    bot_id: string;
+    id: string;
+    installed_at: string;
+    package_id: string;
+    registry_id: string;
+    revision: string;
+    updated_at: string;
+    workspace_target_id: string;
+};
+
 export type SkillsSafeCatalogItem = {
     description?: string;
     display_name?: string;
     name?: string;
     source_kind?: string;
     state?: string;
+};
+
+export type SupermarketUninstallPackageResponse = {
+    installation: SkillpackagesInstallation;
+    ok: boolean;
 };
 
 export type UserinputUiAnswer = {
@@ -4736,6 +4928,204 @@ export type GetBotsByBotIdAcpCodexOauthStatusResponses = {
 };
 
 export type GetBotsByBotIdAcpCodexOauthStatusResponse = GetBotsByBotIdAcpCodexOauthStatusResponses[keyof GetBotsByBotIdAcpCodexOauthStatusResponses];
+
+export type GetBotsByBotIdAgentsData = {
+    body?: never;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+    };
+    query?: never;
+    url: '/bots/{bot_id}/agents';
+};
+
+export type GetBotsByBotIdAgentsErrors = {
+    /**
+     * Forbidden
+     */
+    403: HandlersErrorResponse;
+};
+
+export type GetBotsByBotIdAgentsError = GetBotsByBotIdAgentsErrors[keyof GetBotsByBotIdAgentsErrors];
+
+export type GetBotsByBotIdAgentsResponses = {
+    /**
+     * OK
+     */
+    200: BotagentsListResponse;
+};
+
+export type GetBotsByBotIdAgentsResponse = GetBotsByBotIdAgentsResponses[keyof GetBotsByBotIdAgentsResponses];
+
+export type PostBotsByBotIdAgentsData = {
+    /**
+     * Agent payload
+     */
+    body: BotagentsCreateRequest;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+    };
+    query?: never;
+    url: '/bots/{bot_id}/agents';
+};
+
+export type PostBotsByBotIdAgentsErrors = {
+    /**
+     * Bad Request
+     */
+    400: ApperrorProblem;
+    /**
+     * Forbidden
+     */
+    403: HandlersErrorResponse;
+    /**
+     * Conflict
+     */
+    409: ApperrorProblem;
+};
+
+export type PostBotsByBotIdAgentsError = PostBotsByBotIdAgentsErrors[keyof PostBotsByBotIdAgentsErrors];
+
+export type PostBotsByBotIdAgentsResponses = {
+    /**
+     * Created
+     */
+    201: BotagentsBotAgent;
+};
+
+export type PostBotsByBotIdAgentsResponse = PostBotsByBotIdAgentsResponses[keyof PostBotsByBotIdAgentsResponses];
+
+export type DeleteBotsByBotIdAgentsByIdData = {
+    body?: never;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+        /**
+         * Agent ID
+         */
+        id: string;
+    };
+    query?: never;
+    url: '/bots/{bot_id}/agents/{id}';
+};
+
+export type DeleteBotsByBotIdAgentsByIdErrors = {
+    /**
+     * Forbidden
+     */
+    403: HandlersErrorResponse;
+    /**
+     * Not Found
+     */
+    404: ApperrorProblem;
+    /**
+     * Conflict
+     */
+    409: ApperrorProblem;
+};
+
+export type DeleteBotsByBotIdAgentsByIdError = DeleteBotsByBotIdAgentsByIdErrors[keyof DeleteBotsByBotIdAgentsByIdErrors];
+
+export type DeleteBotsByBotIdAgentsByIdResponses = {
+    /**
+     * No Content
+     */
+    204: unknown;
+};
+
+export type GetBotsByBotIdAgentsByIdData = {
+    body?: never;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+        /**
+         * Agent ID
+         */
+        id: string;
+    };
+    query?: never;
+    url: '/bots/{bot_id}/agents/{id}';
+};
+
+export type GetBotsByBotIdAgentsByIdErrors = {
+    /**
+     * Forbidden
+     */
+    403: HandlersErrorResponse;
+    /**
+     * Not Found
+     */
+    404: ApperrorProblem;
+};
+
+export type GetBotsByBotIdAgentsByIdError = GetBotsByBotIdAgentsByIdErrors[keyof GetBotsByBotIdAgentsByIdErrors];
+
+export type GetBotsByBotIdAgentsByIdResponses = {
+    /**
+     * OK
+     */
+    200: BotagentsBotAgent;
+};
+
+export type GetBotsByBotIdAgentsByIdResponse = GetBotsByBotIdAgentsByIdResponses[keyof GetBotsByBotIdAgentsByIdResponses];
+
+export type PatchBotsByBotIdAgentsByIdData = {
+    /**
+     * Agent changes
+     */
+    body: BotagentsUpdateRequest;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+        /**
+         * Agent ID
+         */
+        id: string;
+    };
+    query?: never;
+    url: '/bots/{bot_id}/agents/{id}';
+};
+
+export type PatchBotsByBotIdAgentsByIdErrors = {
+    /**
+     * Bad Request
+     */
+    400: ApperrorProblem;
+    /**
+     * Forbidden
+     */
+    403: HandlersErrorResponse;
+    /**
+     * Not Found
+     */
+    404: ApperrorProblem;
+    /**
+     * Conflict
+     */
+    409: ApperrorProblem;
+};
+
+export type PatchBotsByBotIdAgentsByIdError = PatchBotsByBotIdAgentsByIdErrors[keyof PatchBotsByBotIdAgentsByIdErrors];
+
+export type PatchBotsByBotIdAgentsByIdResponses = {
+    /**
+     * OK
+     */
+    200: BotagentsBotAgent;
+};
+
+export type PatchBotsByBotIdAgentsByIdResponse = PatchBotsByBotIdAgentsByIdResponses[keyof PatchBotsByBotIdAgentsByIdResponses];
 
 export type PostBotsByBotIdBackupExportData = {
     /**
@@ -6432,6 +6822,10 @@ export type DeleteBotsByBotIdContainerSkillsErrors = {
      */
     404: HandlersErrorResponse;
     /**
+     * Conflict
+     */
+    409: ApperrorProblem;
+    /**
      * Internal Server Error
      */
     500: HandlersErrorResponse;
@@ -6460,7 +6854,12 @@ export type GetBotsByBotIdContainerSkillsData = {
          */
         bot_id: string;
     };
-    query?: never;
+    query?: {
+        /**
+         * Workspace target ID
+         */
+        workspace_target_id?: string;
+    };
     url: '/bots/{bot_id}/container/skills';
 };
 
@@ -6519,9 +6918,13 @@ export type PostBotsByBotIdContainerSkillsErrors = {
      */
     404: HandlersErrorResponse;
     /**
+     * Conflict
+     */
+    409: ApperrorProblem;
+    /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ApperrorProblem;
     /**
      * Service Unavailable
      */
@@ -6563,6 +6966,10 @@ export type PostBotsByBotIdContainerSkillsActionsErrors = {
      * Not Found
      */
     404: HandlersErrorResponse;
+    /**
+     * Conflict
+     */
+    409: ApperrorProblem;
     /**
      * Internal Server Error
      */
@@ -7054,81 +7461,6 @@ export type GetBotsByBotIdEmailOutboxByIdResponses = {
 
 export type GetBotsByBotIdEmailOutboxByIdResponse = GetBotsByBotIdEmailOutboxByIdResponses[keyof GetBotsByBotIdEmailOutboxByIdResponses];
 
-export type DeleteBotsByBotIdHeartbeatLogsData = {
-    body?: never;
-    path: {
-        /**
-         * Bot ID
-         */
-        bot_id: string;
-    };
-    query?: never;
-    url: '/bots/{bot_id}/heartbeat/logs';
-};
-
-export type DeleteBotsByBotIdHeartbeatLogsErrors = {
-    /**
-     * Bad Request
-     */
-    400: HandlersErrorResponse;
-    /**
-     * Internal Server Error
-     */
-    500: HandlersErrorResponse;
-};
-
-export type DeleteBotsByBotIdHeartbeatLogsError = DeleteBotsByBotIdHeartbeatLogsErrors[keyof DeleteBotsByBotIdHeartbeatLogsErrors];
-
-export type DeleteBotsByBotIdHeartbeatLogsResponses = {
-    /**
-     * No Content
-     */
-    204: unknown;
-};
-
-export type GetBotsByBotIdHeartbeatLogsData = {
-    body?: never;
-    path: {
-        /**
-         * Bot ID
-         */
-        bot_id: string;
-    };
-    query?: {
-        /**
-         * Limit
-         */
-        limit?: number;
-        /**
-         * Offset
-         */
-        offset?: number;
-    };
-    url: '/bots/{bot_id}/heartbeat/logs';
-};
-
-export type GetBotsByBotIdHeartbeatLogsErrors = {
-    /**
-     * Bad Request
-     */
-    400: HandlersErrorResponse;
-    /**
-     * Internal Server Error
-     */
-    500: HandlersErrorResponse;
-};
-
-export type GetBotsByBotIdHeartbeatLogsError = GetBotsByBotIdHeartbeatLogsErrors[keyof GetBotsByBotIdHeartbeatLogsErrors];
-
-export type GetBotsByBotIdHeartbeatLogsResponses = {
-    /**
-     * OK
-     */
-    200: HeartbeatListLogsResponse;
-};
-
-export type GetBotsByBotIdHeartbeatLogsResponse = GetBotsByBotIdHeartbeatLogsResponses[keyof GetBotsByBotIdHeartbeatLogsResponses];
-
 export type GetBotsByBotIdHooksEventsData = {
     body?: never;
     path: {
@@ -7211,12 +7543,7 @@ export type PostBotsByBotIdHooksTestResponse = PostBotsByBotIdHooksTestResponses
 export type GetBotsByBotIdMcpData = {
     body?: never;
     path?: never;
-    query?: {
-        /**
-         * Include plugin-managed hidden MCP connections
-         */
-        include_managed?: boolean;
-    };
+    query?: never;
     url: '/bots/{bot_id}/mcp';
 };
 
@@ -7285,7 +7612,7 @@ export type PostBotsByBotIdMcpResponses = {
     /**
      * Created
      */
-    201: GithubComMemohaiMemohInternalMcpConnection;
+    201: GithubComFelinicsMemohInternalMcpConnection;
 };
 
 export type PostBotsByBotIdMcpResponse = PostBotsByBotIdMcpResponses[keyof PostBotsByBotIdMcpResponses];
@@ -7323,6 +7650,75 @@ export type PostBotsByBotIdMcpOpsBatchDeleteResponses = {
      */
     204: unknown;
 };
+
+export type GetBotsByBotIdMcpOpsExportData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/bots/{bot_id}/mcp-ops/export';
+};
+
+export type GetBotsByBotIdMcpOpsExportErrors = {
+    /**
+     * Bad Request
+     */
+    400: HandlersErrorResponse;
+    /**
+     * Forbidden
+     */
+    403: HandlersErrorResponse;
+    /**
+     * Internal Server Error
+     */
+    500: HandlersErrorResponse;
+};
+
+export type GetBotsByBotIdMcpOpsExportError = GetBotsByBotIdMcpOpsExportErrors[keyof GetBotsByBotIdMcpOpsExportErrors];
+
+export type GetBotsByBotIdMcpOpsExportResponses = {
+    /**
+     * OK
+     */
+    200: McpExportResponse;
+};
+
+export type GetBotsByBotIdMcpOpsExportResponse = GetBotsByBotIdMcpOpsExportResponses[keyof GetBotsByBotIdMcpOpsExportResponses];
+
+export type PutBotsByBotIdMcpOpsImportData = {
+    /**
+     * mcpServers dict
+     */
+    body: McpImportRequest;
+    path?: never;
+    query?: never;
+    url: '/bots/{bot_id}/mcp-ops/import';
+};
+
+export type PutBotsByBotIdMcpOpsImportErrors = {
+    /**
+     * Bad Request
+     */
+    400: HandlersErrorResponse;
+    /**
+     * Forbidden
+     */
+    403: HandlersErrorResponse;
+    /**
+     * Internal Server Error
+     */
+    500: HandlersErrorResponse;
+};
+
+export type PutBotsByBotIdMcpOpsImportError = PutBotsByBotIdMcpOpsImportErrors[keyof PutBotsByBotIdMcpOpsImportErrors];
+
+export type PutBotsByBotIdMcpOpsImportResponses = {
+    /**
+     * OK
+     */
+    200: McpListResponse;
+};
+
+export type PutBotsByBotIdMcpOpsImportResponse = PutBotsByBotIdMcpOpsImportResponses[keyof PutBotsByBotIdMcpOpsImportResponses];
 
 export type PostBotsByBotIdMcpStdioData = {
     /**
@@ -7414,75 +7810,6 @@ export type PostBotsByBotIdMcpStdioByConnectionIdResponses = {
 
 export type PostBotsByBotIdMcpStdioByConnectionIdResponse = PostBotsByBotIdMcpStdioByConnectionIdResponses[keyof PostBotsByBotIdMcpStdioByConnectionIdResponses];
 
-export type GetBotsByBotIdMcpExportData = {
-    body?: never;
-    path?: never;
-    query?: never;
-    url: '/bots/{bot_id}/mcp/export';
-};
-
-export type GetBotsByBotIdMcpExportErrors = {
-    /**
-     * Bad Request
-     */
-    400: HandlersErrorResponse;
-    /**
-     * Forbidden
-     */
-    403: HandlersErrorResponse;
-    /**
-     * Internal Server Error
-     */
-    500: HandlersErrorResponse;
-};
-
-export type GetBotsByBotIdMcpExportError = GetBotsByBotIdMcpExportErrors[keyof GetBotsByBotIdMcpExportErrors];
-
-export type GetBotsByBotIdMcpExportResponses = {
-    /**
-     * OK
-     */
-    200: McpExportResponse;
-};
-
-export type GetBotsByBotIdMcpExportResponse = GetBotsByBotIdMcpExportResponses[keyof GetBotsByBotIdMcpExportResponses];
-
-export type PutBotsByBotIdMcpImportData = {
-    /**
-     * mcpServers dict
-     */
-    body: McpImportRequest;
-    path?: never;
-    query?: never;
-    url: '/bots/{bot_id}/mcp/import';
-};
-
-export type PutBotsByBotIdMcpImportErrors = {
-    /**
-     * Bad Request
-     */
-    400: HandlersErrorResponse;
-    /**
-     * Forbidden
-     */
-    403: HandlersErrorResponse;
-    /**
-     * Internal Server Error
-     */
-    500: HandlersErrorResponse;
-};
-
-export type PutBotsByBotIdMcpImportError = PutBotsByBotIdMcpImportErrors[keyof PutBotsByBotIdMcpImportErrors];
-
-export type PutBotsByBotIdMcpImportResponses = {
-    /**
-     * OK
-     */
-    200: McpListResponse;
-};
-
-export type PutBotsByBotIdMcpImportResponse = PutBotsByBotIdMcpImportResponses[keyof PutBotsByBotIdMcpImportResponses];
-
 export type DeleteBotsByBotIdMcpByIdData = {
     body?: never;
     path: {
@@ -7560,7 +7887,7 @@ export type GetBotsByBotIdMcpByIdResponses = {
     /**
      * OK
      */
-    200: GithubComMemohaiMemohInternalMcpConnection;
+    200: GithubComFelinicsMemohInternalMcpConnection;
 };
 
 export type GetBotsByBotIdMcpByIdResponse = GetBotsByBotIdMcpByIdResponses[keyof GetBotsByBotIdMcpByIdResponses];
@@ -7605,7 +7932,7 @@ export type PutBotsByBotIdMcpByIdResponses = {
     /**
      * OK
      */
-    200: GithubComMemohaiMemohInternalMcpConnection;
+    200: GithubComFelinicsMemohInternalMcpConnection;
 };
 
 export type PutBotsByBotIdMcpByIdResponse = PutBotsByBotIdMcpByIdResponses[keyof PutBotsByBotIdMcpByIdResponses];
@@ -8520,343 +8847,6 @@ export type GetBotsByBotIdMessagesLocateResponses = {
 
 export type GetBotsByBotIdMessagesLocateResponse = GetBotsByBotIdMessagesLocateResponses[keyof GetBotsByBotIdMessagesLocateResponses];
 
-export type GetBotsByBotIdPluginsData = {
-    body?: never;
-    path: {
-        /**
-         * Bot ID
-         */
-        bot_id: string;
-    };
-    query?: never;
-    url: '/bots/{bot_id}/plugins';
-};
-
-export type GetBotsByBotIdPluginsErrors = {
-    /**
-     * Bad Request
-     */
-    400: HandlersErrorResponse;
-    /**
-     * Forbidden
-     */
-    403: HandlersErrorResponse;
-    /**
-     * Internal Server Error
-     */
-    500: HandlersErrorResponse;
-};
-
-export type GetBotsByBotIdPluginsError = GetBotsByBotIdPluginsErrors[keyof GetBotsByBotIdPluginsErrors];
-
-export type GetBotsByBotIdPluginsResponses = {
-    /**
-     * OK
-     */
-    200: PluginsListResponse;
-};
-
-export type GetBotsByBotIdPluginsResponse = GetBotsByBotIdPluginsResponses[keyof GetBotsByBotIdPluginsResponses];
-
-export type DeleteBotsByBotIdPluginsByIdData = {
-    body?: never;
-    path: {
-        /**
-         * Bot ID
-         */
-        bot_id: string;
-        /**
-         * Plugin installation ID
-         */
-        id: string;
-    };
-    query?: never;
-    url: '/bots/{bot_id}/plugins/{id}';
-};
-
-export type DeleteBotsByBotIdPluginsByIdErrors = {
-    /**
-     * Bad Request
-     */
-    400: HandlersErrorResponse;
-    /**
-     * Forbidden
-     */
-    403: HandlersErrorResponse;
-    /**
-     * Not Found
-     */
-    404: HandlersErrorResponse;
-};
-
-export type DeleteBotsByBotIdPluginsByIdError = DeleteBotsByBotIdPluginsByIdErrors[keyof DeleteBotsByBotIdPluginsByIdErrors];
-
-export type DeleteBotsByBotIdPluginsByIdResponses = {
-    /**
-     * No Content
-     */
-    204: unknown;
-};
-
-export type GetBotsByBotIdPluginsByIdData = {
-    body?: never;
-    path: {
-        /**
-         * Bot ID
-         */
-        bot_id: string;
-        /**
-         * Plugin installation ID
-         */
-        id: string;
-    };
-    query?: never;
-    url: '/bots/{bot_id}/plugins/{id}';
-};
-
-export type GetBotsByBotIdPluginsByIdErrors = {
-    /**
-     * Bad Request
-     */
-    400: HandlersErrorResponse;
-    /**
-     * Forbidden
-     */
-    403: HandlersErrorResponse;
-    /**
-     * Not Found
-     */
-    404: HandlersErrorResponse;
-    /**
-     * Internal Server Error
-     */
-    500: HandlersErrorResponse;
-};
-
-export type GetBotsByBotIdPluginsByIdError = GetBotsByBotIdPluginsByIdErrors[keyof GetBotsByBotIdPluginsByIdErrors];
-
-export type GetBotsByBotIdPluginsByIdResponses = {
-    /**
-     * OK
-     */
-    200: PluginsInstallation;
-};
-
-export type GetBotsByBotIdPluginsByIdResponse = GetBotsByBotIdPluginsByIdResponses[keyof GetBotsByBotIdPluginsByIdResponses];
-
-export type PostBotsByBotIdPluginsByIdDisableData = {
-    body?: never;
-    path: {
-        /**
-         * Bot ID
-         */
-        bot_id: string;
-        /**
-         * Plugin installation ID
-         */
-        id: string;
-    };
-    query?: never;
-    url: '/bots/{bot_id}/plugins/{id}/disable';
-};
-
-export type PostBotsByBotIdPluginsByIdDisableErrors = {
-    /**
-     * Bad Request
-     */
-    400: HandlersErrorResponse;
-    /**
-     * Forbidden
-     */
-    403: HandlersErrorResponse;
-    /**
-     * Not Found
-     */
-    404: HandlersErrorResponse;
-};
-
-export type PostBotsByBotIdPluginsByIdDisableError = PostBotsByBotIdPluginsByIdDisableErrors[keyof PostBotsByBotIdPluginsByIdDisableErrors];
-
-export type PostBotsByBotIdPluginsByIdDisableResponses = {
-    /**
-     * OK
-     */
-    200: PluginsInstallation;
-};
-
-export type PostBotsByBotIdPluginsByIdDisableResponse = PostBotsByBotIdPluginsByIdDisableResponses[keyof PostBotsByBotIdPluginsByIdDisableResponses];
-
-export type PostBotsByBotIdPluginsByIdEnableData = {
-    body?: never;
-    path: {
-        /**
-         * Bot ID
-         */
-        bot_id: string;
-        /**
-         * Plugin installation ID
-         */
-        id: string;
-    };
-    query?: never;
-    url: '/bots/{bot_id}/plugins/{id}/enable';
-};
-
-export type PostBotsByBotIdPluginsByIdEnableErrors = {
-    /**
-     * Bad Request
-     */
-    400: HandlersErrorResponse;
-    /**
-     * Forbidden
-     */
-    403: HandlersErrorResponse;
-    /**
-     * Not Found
-     */
-    404: HandlersErrorResponse;
-};
-
-export type PostBotsByBotIdPluginsByIdEnableError = PostBotsByBotIdPluginsByIdEnableErrors[keyof PostBotsByBotIdPluginsByIdEnableErrors];
-
-export type PostBotsByBotIdPluginsByIdEnableResponses = {
-    /**
-     * OK
-     */
-    200: PluginsInstallation;
-};
-
-export type PostBotsByBotIdPluginsByIdEnableResponse = PostBotsByBotIdPluginsByIdEnableResponses[keyof PostBotsByBotIdPluginsByIdEnableResponses];
-
-export type PostBotsByBotIdPluginsByIdOauthAuthorizeData = {
-    /**
-     * OAuth authorize request
-     */
-    body?: PluginsOAuthAuthorizeRequest;
-    path: {
-        /**
-         * Bot ID
-         */
-        bot_id: string;
-        /**
-         * Plugin installation ID
-         */
-        id: string;
-    };
-    query?: never;
-    url: '/bots/{bot_id}/plugins/{id}/oauth/authorize';
-};
-
-export type PostBotsByBotIdPluginsByIdOauthAuthorizeErrors = {
-    /**
-     * Bad Request
-     */
-    400: HandlersErrorResponse;
-    /**
-     * Forbidden
-     */
-    403: HandlersErrorResponse;
-    /**
-     * Not Found
-     */
-    404: HandlersErrorResponse;
-};
-
-export type PostBotsByBotIdPluginsByIdOauthAuthorizeError = PostBotsByBotIdPluginsByIdOauthAuthorizeErrors[keyof PostBotsByBotIdPluginsByIdOauthAuthorizeErrors];
-
-export type PostBotsByBotIdPluginsByIdOauthAuthorizeResponses = {
-    /**
-     * OK
-     */
-    200: McpAuthorizeResult;
-};
-
-export type PostBotsByBotIdPluginsByIdOauthAuthorizeResponse = PostBotsByBotIdPluginsByIdOauthAuthorizeResponses[keyof PostBotsByBotIdPluginsByIdOauthAuthorizeResponses];
-
-export type GetBotsByBotIdPluginsByIdOauthStatusData = {
-    body?: never;
-    path: {
-        /**
-         * Bot ID
-         */
-        bot_id: string;
-        /**
-         * Plugin installation ID
-         */
-        id: string;
-    };
-    query?: never;
-    url: '/bots/{bot_id}/plugins/{id}/oauth/status';
-};
-
-export type GetBotsByBotIdPluginsByIdOauthStatusErrors = {
-    /**
-     * Bad Request
-     */
-    400: HandlersErrorResponse;
-    /**
-     * Forbidden
-     */
-    403: HandlersErrorResponse;
-    /**
-     * Not Found
-     */
-    404: HandlersErrorResponse;
-};
-
-export type GetBotsByBotIdPluginsByIdOauthStatusError = GetBotsByBotIdPluginsByIdOauthStatusErrors[keyof GetBotsByBotIdPluginsByIdOauthStatusErrors];
-
-export type GetBotsByBotIdPluginsByIdOauthStatusResponses = {
-    /**
-     * OK
-     */
-    200: PluginsInstallation;
-};
-
-export type GetBotsByBotIdPluginsByIdOauthStatusResponse = GetBotsByBotIdPluginsByIdOauthStatusResponses[keyof GetBotsByBotIdPluginsByIdOauthStatusResponses];
-
-export type PostBotsByBotIdPluginsByIdUninstallData = {
-    body?: never;
-    path: {
-        /**
-         * Bot ID
-         */
-        bot_id: string;
-        /**
-         * Plugin installation ID
-         */
-        id: string;
-    };
-    query?: never;
-    url: '/bots/{bot_id}/plugins/{id}/uninstall';
-};
-
-export type PostBotsByBotIdPluginsByIdUninstallErrors = {
-    /**
-     * Bad Request
-     */
-    400: HandlersErrorResponse;
-    /**
-     * Forbidden
-     */
-    403: HandlersErrorResponse;
-    /**
-     * Not Found
-     */
-    404: HandlersErrorResponse;
-};
-
-export type PostBotsByBotIdPluginsByIdUninstallError = PostBotsByBotIdPluginsByIdUninstallErrors[keyof PostBotsByBotIdPluginsByIdUninstallErrors];
-
-export type PostBotsByBotIdPluginsByIdUninstallResponses = {
-    /**
-     * OK
-     */
-    200: PluginsInstallation;
-};
-
-export type PostBotsByBotIdPluginsByIdUninstallResponse = PostBotsByBotIdPluginsByIdUninstallResponses[keyof PostBotsByBotIdPluginsByIdUninstallResponses];
-
 export type PostBotsByBotIdQuickActionsExecuteData = {
     /**
      * Quick action payload
@@ -8900,7 +8890,12 @@ export type PostBotsByBotIdQuickActionsExecuteResponse = PostBotsByBotIdQuickAct
 
 export type GetBotsByBotIdScheduleData = {
     body?: never;
-    path?: never;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+    };
     query?: never;
     url: '/bots/{bot_id}/schedule';
 };
@@ -8932,7 +8927,12 @@ export type PostBotsByBotIdScheduleData = {
      * Schedule payload
      */
     body: ScheduleCreateRequest;
-    path?: never;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+    };
     query?: never;
     url: '/bots/{bot_id}/schedule';
 };
@@ -9038,6 +9038,10 @@ export type DeleteBotsByBotIdScheduleByIdData = {
     body?: never;
     path: {
         /**
+         * Bot ID
+         */
+        bot_id: string;
+        /**
          * Schedule ID
          */
         id: string;
@@ -9069,6 +9073,10 @@ export type DeleteBotsByBotIdScheduleByIdResponses = {
 export type GetBotsByBotIdScheduleByIdData = {
     body?: never;
     path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
         /**
          * Schedule ID
          */
@@ -9110,6 +9118,10 @@ export type PutBotsByBotIdScheduleByIdData = {
      */
     body: ScheduleUpdateRequest;
     path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
         /**
          * Schedule ID
          */
@@ -9811,7 +9823,7 @@ export type GetBotsByBotIdSessionsBySessionIdContextLifecycleResponse = GetBotsB
 
 export type PostBotsByBotIdSessionsBySessionIdForkData = {
     /**
-     * Fork source message
+     * Fork source turn
      */
     body: HandlersForkSessionRequest;
     path: {
@@ -10095,11 +10107,11 @@ export type GetBotsByBotIdSkillsCatalogResponses = {
 
 export type GetBotsByBotIdSkillsCatalogResponse = GetBotsByBotIdSkillsCatalogResponses[keyof GetBotsByBotIdSkillsCatalogResponses];
 
-export type PostBotsByBotIdSupermarketInstallPluginData = {
+export type PostBotsByBotIdSupermarketInstallPackageData = {
     /**
-     * Install plugin request
+     * Install Package request
      */
-    body: HandlersInstallPluginRequest;
+    body: HandlersInstallPackageRequest;
     path: {
         /**
          * Bot ID
@@ -10107,10 +10119,10 @@ export type PostBotsByBotIdSupermarketInstallPluginData = {
         bot_id: string;
     };
     query?: never;
-    url: '/bots/{bot_id}/supermarket/install-plugin';
+    url: '/bots/{bot_id}/supermarket/install-package';
 };
 
-export type PostBotsByBotIdSupermarketInstallPluginErrors = {
+export type PostBotsByBotIdSupermarketInstallPackageErrors = {
     /**
      * Bad Request
      */
@@ -10118,66 +10130,100 @@ export type PostBotsByBotIdSupermarketInstallPluginErrors = {
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ApperrorProblem;
+    /**
+     * Conflict
+     */
+    409: ApperrorProblem;
+    /**
+     * Internal Server Error
+     */
+    500: ApperrorProblem;
     /**
      * Bad Gateway
      */
-    502: HandlersErrorResponse;
+    502: ApperrorProblem;
 };
 
-export type PostBotsByBotIdSupermarketInstallPluginError = PostBotsByBotIdSupermarketInstallPluginErrors[keyof PostBotsByBotIdSupermarketInstallPluginErrors];
+export type PostBotsByBotIdSupermarketInstallPackageError = PostBotsByBotIdSupermarketInstallPackageErrors[keyof PostBotsByBotIdSupermarketInstallPackageErrors];
 
-export type PostBotsByBotIdSupermarketInstallPluginResponses = {
+export type PostBotsByBotIdSupermarketInstallPackageResponses = {
     /**
      * OK
      */
-    200: PluginsInstallation;
+    200: HandlersInstallRegistryPackageResponse;
 };
 
-export type PostBotsByBotIdSupermarketInstallPluginResponse = PostBotsByBotIdSupermarketInstallPluginResponses[keyof PostBotsByBotIdSupermarketInstallPluginResponses];
+export type PostBotsByBotIdSupermarketInstallPackageResponse = PostBotsByBotIdSupermarketInstallPackageResponses[keyof PostBotsByBotIdSupermarketInstallPackageResponses];
 
-export type PostBotsByBotIdSupermarketInstallSkillData = {
-    /**
-     * Install skill request
-     */
-    body: HandlersInstallSkillRequest;
+export type GetBotsByBotIdSupermarketPackagesData = {
+    body?: never;
     path: {
         /**
          * Bot ID
          */
         bot_id: string;
     };
-    query?: never;
-    url: '/bots/{bot_id}/supermarket/install-skill';
+    query?: {
+        /**
+         * Workspace target ID
+         */
+        workspace_target_id?: string;
+    };
+    url: '/bots/{bot_id}/supermarket/packages';
 };
 
-export type PostBotsByBotIdSupermarketInstallSkillErrors = {
+export type GetBotsByBotIdSupermarketPackagesErrors = {
     /**
-     * Bad Request
+     * Internal Server Error
      */
-    400: HandlersErrorResponse;
+    500: HandlersErrorResponse;
+};
+
+export type GetBotsByBotIdSupermarketPackagesError = GetBotsByBotIdSupermarketPackagesErrors[keyof GetBotsByBotIdSupermarketPackagesErrors];
+
+export type GetBotsByBotIdSupermarketPackagesResponses = {
+    /**
+     * OK
+     */
+    200: Array<SkillpackagesInstallation>;
+};
+
+export type GetBotsByBotIdSupermarketPackagesResponse = GetBotsByBotIdSupermarketPackagesResponses[keyof GetBotsByBotIdSupermarketPackagesResponses];
+
+export type DeleteBotsByBotIdSupermarketPackagesByInstallationIdData = {
+    body?: never;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+        /**
+         * Package installation ID
+         */
+        installation_id: string;
+    };
+    query?: never;
+    url: '/bots/{bot_id}/supermarket/packages/{installation_id}';
+};
+
+export type DeleteBotsByBotIdSupermarketPackagesByInstallationIdErrors = {
     /**
      * Not Found
      */
     404: HandlersErrorResponse;
-    /**
-     * Bad Gateway
-     */
-    502: HandlersErrorResponse;
 };
 
-export type PostBotsByBotIdSupermarketInstallSkillError = PostBotsByBotIdSupermarketInstallSkillErrors[keyof PostBotsByBotIdSupermarketInstallSkillErrors];
+export type DeleteBotsByBotIdSupermarketPackagesByInstallationIdError = DeleteBotsByBotIdSupermarketPackagesByInstallationIdErrors[keyof DeleteBotsByBotIdSupermarketPackagesByInstallationIdErrors];
 
-export type PostBotsByBotIdSupermarketInstallSkillResponses = {
+export type DeleteBotsByBotIdSupermarketPackagesByInstallationIdResponses = {
     /**
      * OK
      */
-    200: {
-        [key: string]: boolean;
-    };
+    200: SupermarketUninstallPackageResponse;
 };
 
-export type PostBotsByBotIdSupermarketInstallSkillResponse = PostBotsByBotIdSupermarketInstallSkillResponses[keyof PostBotsByBotIdSupermarketInstallSkillResponses];
+export type DeleteBotsByBotIdSupermarketPackagesByInstallationIdResponse = DeleteBotsByBotIdSupermarketPackagesByInstallationIdResponses[keyof DeleteBotsByBotIdSupermarketPackagesByInstallationIdResponses];
 
 export type GetBotsByBotIdTokenUsageData = {
     body?: never;
@@ -10201,7 +10247,7 @@ export type GetBotsByBotIdTokenUsageData = {
          */
         model_id?: string;
         /**
-         * Optional session type: chat, discuss, heartbeat, schedule, or acp_agent. acp_agent filters by runtime.
+         * Optional session type: chat, discuss, schedule, or acp_agent. acp_agent filters by runtime.
          */
         session_type?: string;
     };
@@ -10256,7 +10302,7 @@ export type GetBotsByBotIdTokenUsageRecordsData = {
          */
         model_id?: string;
         /**
-         * Optional session type: chat, discuss, heartbeat, schedule, or acp_agent. acp_agent filters by runtime.
+         * Optional session type: chat, discuss, schedule, or acp_agent. acp_agent filters by runtime.
          */
         session_type?: string;
         /**
@@ -14168,61 +14214,23 @@ export type GetSpeechProvidersByIdModelsResponses = {
 
 export type GetSpeechProvidersByIdModelsResponse = GetSpeechProvidersByIdModelsResponses[keyof GetSpeechProvidersByIdModelsResponses];
 
-export type GetSupermarketPluginsData = {
-    body?: never;
-    path?: never;
-    query?: {
-        /**
-         * Search query
-         */
-        q?: string;
-        /**
-         * Filter by tag
-         */
-        tag?: string;
-        /**
-         * Page number
-         */
-        page?: number;
-        /**
-         * Items per page
-         */
-        limit?: number;
-    };
-    url: '/supermarket/plugins';
-};
-
-export type GetSupermarketPluginsErrors = {
-    /**
-     * Bad Gateway
-     */
-    502: HandlersErrorResponse;
-};
-
-export type GetSupermarketPluginsError = GetSupermarketPluginsErrors[keyof GetSupermarketPluginsErrors];
-
-export type GetSupermarketPluginsResponses = {
-    /**
-     * OK
-     */
-    200: HandlersSupermarketPluginListResponse;
-};
-
-export type GetSupermarketPluginsResponse = GetSupermarketPluginsResponses[keyof GetSupermarketPluginsResponses];
-
-export type GetSupermarketPluginsByIdData = {
+export type GetSupermarketArtifactsIconByDigestData = {
     body?: never;
     path: {
         /**
-         * Plugin ID
+         * SHA-256 digest
          */
-        id: string;
+        digest: string;
     };
     query?: never;
-    url: '/supermarket/plugins/{id}';
+    url: '/supermarket/artifacts/icon/{digest}';
 };
 
-export type GetSupermarketPluginsByIdErrors = {
+export type GetSupermarketArtifactsIconByDigestErrors = {
+    /**
+     * Bad Request
+     */
+    400: HandlersErrorResponse;
     /**
      * Not Found
      */
@@ -14233,18 +14241,16 @@ export type GetSupermarketPluginsByIdErrors = {
     502: HandlersErrorResponse;
 };
 
-export type GetSupermarketPluginsByIdError = GetSupermarketPluginsByIdErrors[keyof GetSupermarketPluginsByIdErrors];
+export type GetSupermarketArtifactsIconByDigestError = GetSupermarketArtifactsIconByDigestErrors[keyof GetSupermarketArtifactsIconByDigestErrors];
 
-export type GetSupermarketPluginsByIdResponses = {
+export type GetSupermarketArtifactsIconByDigestResponses = {
     /**
      * OK
      */
-    200: PluginsManifest;
+    200: unknown;
 };
 
-export type GetSupermarketPluginsByIdResponse = GetSupermarketPluginsByIdResponses[keyof GetSupermarketPluginsByIdResponses];
-
-export type GetSupermarketSkillsData = {
+export type GetSupermarketPackagesData = {
     body?: never;
     path?: never;
     query?: {
@@ -14253,7 +14259,15 @@ export type GetSupermarketSkillsData = {
          */
         q?: string;
         /**
-         * Filter by tag
+         * Registry ID
+         */
+        registry?: string;
+        /**
+         * Category ID
+         */
+        category?: string;
+        /**
+         * Exact tag
          */
         tag?: string;
         /**
@@ -14264,11 +14278,341 @@ export type GetSupermarketSkillsData = {
          * Items per page
          */
         limit?: number;
+        /**
+         * Sort order
+         */
+        sort?: string;
+    };
+    url: '/supermarket/packages';
+};
+
+export type GetSupermarketPackagesErrors = {
+    /**
+     * Bad Request
+     */
+    400: HandlersErrorResponse;
+    /**
+     * Bad Gateway
+     */
+    502: HandlersErrorResponse;
+};
+
+export type GetSupermarketPackagesError = GetSupermarketPackagesErrors[keyof GetSupermarketPackagesErrors];
+
+export type GetSupermarketPackagesResponses = {
+    /**
+     * OK
+     */
+    200: HandlersSupermarketSkillPackageListResponse;
+};
+
+export type GetSupermarketPackagesResponse = GetSupermarketPackagesResponses[keyof GetSupermarketPackagesResponses];
+
+export type GetSupermarketRegistriesData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/supermarket/registries';
+};
+
+export type GetSupermarketRegistriesErrors = {
+    /**
+     * Bad Gateway
+     */
+    502: HandlersErrorResponse;
+};
+
+export type GetSupermarketRegistriesError = GetSupermarketRegistriesErrors[keyof GetSupermarketRegistriesErrors];
+
+export type GetSupermarketRegistriesResponses = {
+    /**
+     * OK
+     */
+    200: HandlersSupermarketRegistryListResponse;
+};
+
+export type GetSupermarketRegistriesResponse = GetSupermarketRegistriesResponses[keyof GetSupermarketRegistriesResponses];
+
+export type GetSupermarketRegistriesByRegistryIdCategoriesData = {
+    body?: never;
+    path: {
+        /**
+         * Registry ID
+         */
+        registry_id: string;
+    };
+    query?: never;
+    url: '/supermarket/registries/{registry_id}/categories';
+};
+
+export type GetSupermarketRegistriesByRegistryIdCategoriesErrors = {
+    /**
+     * Bad Request
+     */
+    400: HandlersErrorResponse;
+    /**
+     * Not Found
+     */
+    404: HandlersErrorResponse;
+    /**
+     * Bad Gateway
+     */
+    502: HandlersErrorResponse;
+};
+
+export type GetSupermarketRegistriesByRegistryIdCategoriesError = GetSupermarketRegistriesByRegistryIdCategoriesErrors[keyof GetSupermarketRegistriesByRegistryIdCategoriesErrors];
+
+export type GetSupermarketRegistriesByRegistryIdCategoriesResponses = {
+    /**
+     * OK
+     */
+    200: HandlersSupermarketSkillCategoryListResponse;
+};
+
+export type GetSupermarketRegistriesByRegistryIdCategoriesResponse = GetSupermarketRegistriesByRegistryIdCategoriesResponses[keyof GetSupermarketRegistriesByRegistryIdCategoriesResponses];
+
+export type GetSupermarketRegistriesByRegistryIdPackagesData = {
+    body?: never;
+    path: {
+        /**
+         * Registry ID
+         */
+        registry_id: string;
+    };
+    query?: {
+        /**
+         * Search query
+         */
+        q?: string;
+        /**
+         * Category ID
+         */
+        category?: string;
+        /**
+         * Exact tag
+         */
+        tag?: string;
+        /**
+         * Page number
+         */
+        page?: number;
+        /**
+         * Items per page
+         */
+        limit?: number;
+        /**
+         * Sort order
+         */
+        sort?: string;
+    };
+    url: '/supermarket/registries/{registry_id}/packages';
+};
+
+export type GetSupermarketRegistriesByRegistryIdPackagesErrors = {
+    /**
+     * Bad Request
+     */
+    400: HandlersErrorResponse;
+    /**
+     * Not Found
+     */
+    404: HandlersErrorResponse;
+    /**
+     * Bad Gateway
+     */
+    502: HandlersErrorResponse;
+};
+
+export type GetSupermarketRegistriesByRegistryIdPackagesError = GetSupermarketRegistriesByRegistryIdPackagesErrors[keyof GetSupermarketRegistriesByRegistryIdPackagesErrors];
+
+export type GetSupermarketRegistriesByRegistryIdPackagesResponses = {
+    /**
+     * OK
+     */
+    200: HandlersSupermarketSkillPackageListResponse;
+};
+
+export type GetSupermarketRegistriesByRegistryIdPackagesResponse = GetSupermarketRegistriesByRegistryIdPackagesResponses[keyof GetSupermarketRegistriesByRegistryIdPackagesResponses];
+
+export type GetSupermarketRegistriesByRegistryIdPackagesByPackageIdData = {
+    body?: never;
+    path: {
+        /**
+         * Registry ID
+         */
+        registry_id: string;
+        /**
+         * Package ID
+         */
+        package_id: string;
+    };
+    query?: never;
+    url: '/supermarket/registries/{registry_id}/packages/{package_id}';
+};
+
+export type GetSupermarketRegistriesByRegistryIdPackagesByPackageIdErrors = {
+    /**
+     * Bad Request
+     */
+    400: HandlersErrorResponse;
+    /**
+     * Not Found
+     */
+    404: HandlersErrorResponse;
+    /**
+     * Bad Gateway
+     */
+    502: HandlersErrorResponse;
+};
+
+export type GetSupermarketRegistriesByRegistryIdPackagesByPackageIdError = GetSupermarketRegistriesByRegistryIdPackagesByPackageIdErrors[keyof GetSupermarketRegistriesByRegistryIdPackagesByPackageIdErrors];
+
+export type GetSupermarketRegistriesByRegistryIdPackagesByPackageIdResponses = {
+    /**
+     * OK
+     */
+    200: HandlersSupermarketSkillPackageDescriptor;
+};
+
+export type GetSupermarketRegistriesByRegistryIdPackagesByPackageIdResponse = GetSupermarketRegistriesByRegistryIdPackagesByPackageIdResponses[keyof GetSupermarketRegistriesByRegistryIdPackagesByPackageIdResponses];
+
+export type GetSupermarketRegistriesByRegistryIdPackagesByPackageIdReleasesByRevisionData = {
+    body?: never;
+    path: {
+        /**
+         * Registry ID
+         */
+        registry_id: string;
+        /**
+         * Package ID
+         */
+        package_id: string;
+        /**
+         * Package revision
+         */
+        revision: string;
+    };
+    query?: never;
+    url: '/supermarket/registries/{registry_id}/packages/{package_id}/releases/{revision}';
+};
+
+export type GetSupermarketRegistriesByRegistryIdPackagesByPackageIdReleasesByRevisionErrors = {
+    /**
+     * Bad Request
+     */
+    400: HandlersErrorResponse;
+    /**
+     * Not Found
+     */
+    404: HandlersErrorResponse;
+    /**
+     * Bad Gateway
+     */
+    502: HandlersErrorResponse;
+};
+
+export type GetSupermarketRegistriesByRegistryIdPackagesByPackageIdReleasesByRevisionError = GetSupermarketRegistriesByRegistryIdPackagesByPackageIdReleasesByRevisionErrors[keyof GetSupermarketRegistriesByRegistryIdPackagesByPackageIdReleasesByRevisionErrors];
+
+export type GetSupermarketRegistriesByRegistryIdPackagesByPackageIdReleasesByRevisionResponses = {
+    /**
+     * OK
+     */
+    200: HandlersSupermarketSkillPackageDescriptor;
+};
+
+export type GetSupermarketRegistriesByRegistryIdPackagesByPackageIdReleasesByRevisionResponse = GetSupermarketRegistriesByRegistryIdPackagesByPackageIdReleasesByRevisionResponses[keyof GetSupermarketRegistriesByRegistryIdPackagesByPackageIdReleasesByRevisionResponses];
+
+export type GetSupermarketRegistriesByRegistryIdPackagesByPackageIdSkillsBySkillIdData = {
+    body?: never;
+    path: {
+        /**
+         * Registry ID
+         */
+        registry_id: string;
+        /**
+         * Package ID
+         */
+        package_id: string;
+        /**
+         * Skill ID
+         */
+        skill_id: string;
+    };
+    query?: never;
+    url: '/supermarket/registries/{registry_id}/packages/{package_id}/skills/{skill_id}';
+};
+
+export type GetSupermarketRegistriesByRegistryIdPackagesByPackageIdSkillsBySkillIdErrors = {
+    /**
+     * Bad Request
+     */
+    400: HandlersErrorResponse;
+    /**
+     * Not Found
+     */
+    404: HandlersErrorResponse;
+    /**
+     * Bad Gateway
+     */
+    502: HandlersErrorResponse;
+};
+
+export type GetSupermarketRegistriesByRegistryIdPackagesByPackageIdSkillsBySkillIdError = GetSupermarketRegistriesByRegistryIdPackagesByPackageIdSkillsBySkillIdErrors[keyof GetSupermarketRegistriesByRegistryIdPackagesByPackageIdSkillsBySkillIdErrors];
+
+export type GetSupermarketRegistriesByRegistryIdPackagesByPackageIdSkillsBySkillIdResponses = {
+    /**
+     * OK
+     */
+    200: HandlersSupermarketCatalogSkill;
+};
+
+export type GetSupermarketRegistriesByRegistryIdPackagesByPackageIdSkillsBySkillIdResponse = GetSupermarketRegistriesByRegistryIdPackagesByPackageIdSkillsBySkillIdResponses[keyof GetSupermarketRegistriesByRegistryIdPackagesByPackageIdSkillsBySkillIdResponses];
+
+export type GetSupermarketSkillsData = {
+    body?: never;
+    path?: never;
+    query?: {
+        /**
+         * Search query
+         */
+        q?: string;
+        /**
+         * Registry ID
+         */
+        registry?: string;
+        /**
+         * Package ID
+         */
+        package?: string;
+        /**
+         * Category ID
+         */
+        category?: string;
+        /**
+         * Exact tag
+         */
+        tag?: string;
+        /**
+         * Page number
+         */
+        page?: number;
+        /**
+         * Items per page
+         */
+        limit?: number;
+        /**
+         * Sort order
+         */
+        sort?: string;
     };
     url: '/supermarket/skills';
 };
 
 export type GetSupermarketSkillsErrors = {
+    /**
+     * Bad Request
+     */
+    400: HandlersErrorResponse;
     /**
      * Bad Gateway
      */
@@ -14281,69 +14625,10 @@ export type GetSupermarketSkillsResponses = {
     /**
      * OK
      */
-    200: HandlersSupermarketSkillListResponse;
+    200: HandlersSupermarketCatalogSkillListResponse;
 };
 
 export type GetSupermarketSkillsResponse = GetSupermarketSkillsResponses[keyof GetSupermarketSkillsResponses];
-
-export type GetSupermarketSkillsByIdData = {
-    body?: never;
-    path: {
-        /**
-         * Skill ID
-         */
-        id: string;
-    };
-    query?: never;
-    url: '/supermarket/skills/{id}';
-};
-
-export type GetSupermarketSkillsByIdErrors = {
-    /**
-     * Not Found
-     */
-    404: HandlersErrorResponse;
-    /**
-     * Bad Gateway
-     */
-    502: HandlersErrorResponse;
-};
-
-export type GetSupermarketSkillsByIdError = GetSupermarketSkillsByIdErrors[keyof GetSupermarketSkillsByIdErrors];
-
-export type GetSupermarketSkillsByIdResponses = {
-    /**
-     * OK
-     */
-    200: HandlersSupermarketSkillEntry;
-};
-
-export type GetSupermarketSkillsByIdResponse = GetSupermarketSkillsByIdResponses[keyof GetSupermarketSkillsByIdResponses];
-
-export type GetSupermarketTagsData = {
-    body?: never;
-    path?: never;
-    query?: never;
-    url: '/supermarket/tags';
-};
-
-export type GetSupermarketTagsErrors = {
-    /**
-     * Bad Gateway
-     */
-    502: HandlersErrorResponse;
-};
-
-export type GetSupermarketTagsError = GetSupermarketTagsErrors[keyof GetSupermarketTagsErrors];
-
-export type GetSupermarketTagsResponses = {
-    /**
-     * OK
-     */
-    200: HandlersSupermarketTagsResponse;
-};
-
-export type GetSupermarketTagsResponse = GetSupermarketTagsResponses[keyof GetSupermarketTagsResponses];
 
 export type GetTranscriptionModelsData = {
     body?: never;

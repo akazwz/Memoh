@@ -7,7 +7,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgconn"
 
-	"github.com/memohai/memoh/internal/db"
+	"github.com/felinics/memoh/internal/db"
 )
 
 func TestMapDeleteRemoteMountErrRecognizesOnlyWorkdirRestrictViolation(t *testing.T) {

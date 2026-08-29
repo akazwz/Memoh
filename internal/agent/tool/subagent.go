@@ -15,19 +15,20 @@ import (
 	"sync/atomic"
 	"time"
 
-	sdk "github.com/memohai/twilight-ai/sdk"
+	sdk "github.com/felinics/twilight/sdk"
 
-	"github.com/memohai/memoh/internal/agent/background"
-	contextfrag "github.com/memohai/memoh/internal/agent/context/fragment"
-	messagepkg "github.com/memohai/memoh/internal/chat/message"
-	sessionpkg "github.com/memohai/memoh/internal/chat/thread"
-	dbstore "github.com/memohai/memoh/internal/db/store"
-	"github.com/memohai/memoh/internal/hooks"
-	"github.com/memohai/memoh/internal/models"
-	"github.com/memohai/memoh/internal/oauthctx"
-	"github.com/memohai/memoh/internal/providers"
-	"github.com/memohai/memoh/internal/reasoning"
-	"github.com/memohai/memoh/internal/settings"
+	"github.com/felinics/memoh/internal/agent/background"
+	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
+	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
+	messagepkg "github.com/felinics/memoh/internal/chat/message"
+	sessionpkg "github.com/felinics/memoh/internal/chat/thread"
+	dbstore "github.com/felinics/memoh/internal/db/store"
+	"github.com/felinics/memoh/internal/hooks"
+	"github.com/felinics/memoh/internal/models"
+	"github.com/felinics/memoh/internal/oauthctx"
+	"github.com/felinics/memoh/internal/providers"
+	"github.com/felinics/memoh/internal/reasoning"
+	"github.com/felinics/memoh/internal/settings"
 )
 
 // SpawnAgent is the interface the subagent control tools use to run tasks.
@@ -68,15 +69,17 @@ type SpawnRunConfig struct {
 	ReasoningConfig *models.ReasoningConfig
 	// Keep the unresolved parent-turn inputs as well, so a nested subagent can
 	// resolve the same override against its own selected model.
-	ReasoningStoredEffort    string
-	ReasoningRequestedEffort string
-	PromptCacheTTL           string
-	ChatCompletionsCompat    string
-	SupportsImageInput       bool
-	SupportsFileInput        bool
-	SupportsToolCall         bool
-	Skills                   map[string]SkillDetail
-	BackgroundManager        *background.Manager
+	ReasoningStoredEffort     string
+	ReasoningRequestedEffort  string
+	PromptCacheTTL            string
+	ChatCompletionsCompat     string
+	SupportsImageInput        bool
+	SupportsFileInput         bool
+	SupportsToolCall          bool
+	Skills                    map[string]SkillDetail
+	BackgroundManager         *background.Manager
+	ContextBudgetMaxTokens    int
+	ContextToolExchangePolicy *contextfrag.ToolExchangePolicy
 	// TurnRequestMessageID is the persisted task user message this run's
 	// assistant and tool rows bind to, so incremental step persistence files
 	// them into the same history turn the runtime view names.
@@ -140,8 +143,8 @@ type SpawnResult struct {
 const (
 	// subagentTimeout caps total execution time as a safety net per attempt.
 	subagentTimeout = 10 * time.Minute
-	// spawnHeartbeatInterval keeps the parent stream active during foreground waits.
-	spawnHeartbeatInterval  = 30 * time.Second
+	// spawnProgressInterval keeps the parent stream active during foreground waits.
+	spawnProgressInterval   = 30 * time.Second
 	subagentMaxRetries      = 3
 	subagentRetryBaseDelay  = 2 * time.Second
 	subagentWatchdogTimeout = 3 * time.Minute
@@ -237,12 +240,13 @@ type resolvedSubagentModel struct {
 	// parent: a subagent may run a different model, whose advertised tiers and
 	// off-ability differ. Before #983 it was neither inherited nor resolved, so
 	// subagents ran with no thinking configuration at all.
-	ReasoningConfig       *models.ReasoningConfig
-	PromptCacheTTL        string
-	ChatCompletionsCompat string
-	SupportsImageInput    bool
-	SupportsFileInput     bool
-	SupportsToolCall      bool
+	ReasoningConfig        *models.ReasoningConfig
+	PromptCacheTTL         string
+	ChatCompletionsCompat  string
+	SupportsImageInput     bool
+	SupportsFileInput      bool
+	SupportsToolCall       bool
+	ContextBudgetMaxTokens int
 }
 
 type subagentModelCatalogItem struct {
@@ -799,9 +803,9 @@ func (p *SpawnProvider) submitAgentTask(ctx context.Context, session SessionCont
 		}, nil
 	}
 
-	heartbeatCtx, heartbeatCancel := context.WithCancel(context.WithoutCancel(ctx))
-	defer heartbeatCancel()
-	p.startSpawnHeartbeat(heartbeatCtx, session, 1)
+	progressCtx, progressCancel := context.WithCancel(ctx)
+	defer progressCancel()
+	p.startSpawnProgress(progressCtx, session)
 	result := p.runAgentRequest(taskCtx, key, req)
 	return agentResultMap(result), nil
 }
@@ -998,27 +1002,33 @@ func (p *SpawnProvider) runSubagentTask(ctx context.Context, req *agentRequest) 
 		combined = append(combined, history...)
 		history = combined
 	}
+	contextBudgetMaxTokens := req.runtime.ContextBudgetMaxTokens
+	if contextBudgetMaxTokens <= 0 {
+		contextBudgetMaxTokens = req.parentSession.ContextBudgetMaxTokens
+	}
 	cfg := SpawnRunConfig{
-		RunID:                    strings.TrimSpace(req.admission.RunID),
-		Model:                    req.runtime.Model,
-		ModelUUID:                req.runtime.UUID,
-		ModelID:                  req.runtime.ModelID,
-		ModelProvider:            req.runtime.ProviderName,
-		ReasoningConfig:          req.runtime.ReasoningConfig,
-		ReasoningStoredEffort:    req.parentSession.ReasoningStoredEffort,
-		ReasoningRequestedEffort: req.parentSession.ReasoningRequestedEffort,
-		System:                   req.systemPrompt,
-		Query:                    req.message,
-		SessionType:              sessionpkg.TypeSubagent,
-		PromptCacheTTL:           req.runtime.PromptCacheTTL,
-		ChatCompletionsCompat:    req.runtime.ChatCompletionsCompat,
-		SupportsImageInput:       req.runtime.SupportsImageInput,
-		SupportsFileInput:        req.runtime.SupportsFileInput,
-		SupportsToolCall:         req.runtime.SupportsToolCall,
-		Messages:                 history,
-		Skills:                   req.parentSession.Skills,
-		BackgroundManager:        p.bgManager,
-		TurnRequestMessageID:     req.requestMessageID,
+		RunID:                     strings.TrimSpace(req.admission.RunID),
+		Model:                     req.runtime.Model,
+		ModelUUID:                 req.runtime.UUID,
+		ModelID:                   req.runtime.ModelID,
+		ModelProvider:             req.runtime.ProviderName,
+		ReasoningConfig:           req.runtime.ReasoningConfig,
+		ReasoningStoredEffort:     req.parentSession.ReasoningStoredEffort,
+		ReasoningRequestedEffort:  req.parentSession.ReasoningRequestedEffort,
+		System:                    req.systemPrompt,
+		Query:                     req.message,
+		SessionType:               sessionpkg.TypeSubagent,
+		PromptCacheTTL:            req.runtime.PromptCacheTTL,
+		ChatCompletionsCompat:     req.runtime.ChatCompletionsCompat,
+		SupportsImageInput:        req.runtime.SupportsImageInput,
+		SupportsFileInput:         req.runtime.SupportsFileInput,
+		SupportsToolCall:          req.runtime.SupportsToolCall,
+		Messages:                  history,
+		Skills:                    req.parentSession.Skills,
+		BackgroundManager:         p.bgManager,
+		ContextBudgetMaxTokens:    contextBudgetMaxTokens,
+		ContextToolExchangePolicy: req.parentSession.ContextToolExchangePolicy,
+		TurnRequestMessageID:      req.requestMessageID,
 		Identity: SpawnIdentity{
 			BotID:               req.parentSession.BotID,
 			ChatID:              req.parentSession.ChatID,
@@ -1537,23 +1547,33 @@ func agentResultMap(res agentRunResult) map[string]any {
 	return out
 }
 
-func (*SpawnProvider) startSpawnHeartbeat(ctx context.Context, session SessionContext, _ int) {
+func (*SpawnProvider) startSpawnProgress(ctx context.Context, session SessionContext) {
 	emitter := session.Emitter
 	if emitter == nil {
 		return
 	}
 	go func() {
-		ticker := time.NewTicker(spawnHeartbeatInterval)
+		ticker := time.NewTicker(spawnProgressInterval)
 		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				emitter(ToolStreamEvent{Type: StreamEventSpawnHeartbeat})
-			}
-		}
+		runSpawnProgress(ctx, emitter, ticker.C)
 	}()
+}
+
+func runSpawnProgress(ctx context.Context, emitter StreamEmitter, ticks <-chan time.Time) {
+	if emitter == nil {
+		return
+	}
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticks:
+			if ctx.Err() != nil {
+				return
+			}
+			emitter(ToolStreamEvent{Type: StreamEventSpawnProgress})
+		}
+	}
 }
 
 func isRetryableSubagentError(err error) bool {
@@ -1601,7 +1621,7 @@ func (p *SpawnProvider) persistMessages(
 		if msg.Role == sdk.MessageRoleUser {
 			continue
 		}
-		content, err := json.Marshal(msg)
+		content, err := historyfrag.MarshalStoredSDKMessage(msg)
 		if err != nil {
 			continue
 		}
@@ -1646,10 +1666,7 @@ func (p *SpawnProvider) persistUserMessage(ctx context.Context, req *agentReques
 	if p.messageService == nil || strings.TrimSpace(req.agentSessionID) == "" {
 		return "", false
 	}
-	userContent, _ := json.Marshal(map[string]any{
-		"role":    "user",
-		"content": req.message,
-	})
+	userContent, _ := historyfrag.MarshalStoredSDKMessage(sdk.UserMessage(req.message))
 	input := messagepkg.PersistInput{
 		BotID:     req.parentSession.BotID,
 		SessionID: req.agentSessionID,
@@ -1830,6 +1847,10 @@ func (p *SpawnProvider) resolveModel(
 	if err != nil {
 		return resolvedSubagentModel{}, fmt.Errorf("resolve subagent reasoning: %w", err)
 	}
+	contextWindow := modelInfo.Config.ContextBudgetMaxTokens()
+	if contextWindow <= 0 {
+		contextWindow = session.ContextBudgetMaxTokens
+	}
 
 	sdkModel := models.NewSDKChatModel(models.SDKModelConfig{
 		ModelID:               modelInfo.ModelID,
@@ -1844,17 +1865,19 @@ func (p *SpawnProvider) resolveModel(
 		ReasoningDefaultOn:    modelInfo.Config.ReasoningDefaultOn,
 		ThinkingBudgetMin:     modelInfo.Config.ThinkingBudgetMin,
 		ThinkingBudgetMax:     modelInfo.Config.ThinkingBudgetMax,
+		ContextWindow:         contextWindow,
 	})
 	return resolvedSubagentModel{
-		Model:                 sdkModel,
-		ReasoningConfig:       reasoningConfig,
-		UUID:                  modelInfo.ID,
-		ModelID:               modelInfo.ModelID,
-		ProviderName:          provider.Name,
-		PromptCacheTTL:        providers.ProviderConfigString(provider, "prompt_cache_ttl"),
-		ChatCompletionsCompat: chatCompletionsCompat,
-		SupportsImageInput:    modelInfo.HasCompatibility(models.CompatVision),
-		SupportsToolCall:      modelInfo.HasCompatibility(models.CompatToolCall),
+		Model:                  sdkModel,
+		ReasoningConfig:        reasoningConfig,
+		UUID:                   modelInfo.ID,
+		ModelID:                modelInfo.ModelID,
+		ProviderName:           provider.Name,
+		PromptCacheTTL:         providers.ProviderConfigString(provider, "prompt_cache_ttl"),
+		ChatCompletionsCompat:  chatCompletionsCompat,
+		SupportsImageInput:     modelInfo.HasCompatibility(models.CompatVision),
+		SupportsToolCall:       modelInfo.HasCompatibility(models.CompatToolCall),
+		ContextBudgetMaxTokens: contextWindow,
 	}, nil
 }
 

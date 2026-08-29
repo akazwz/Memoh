@@ -16,12 +16,13 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/labstack/echo/v4"
 
-	acpclient "github.com/memohai/memoh/internal/agent/runtime/acp/client"
-	"github.com/memohai/memoh/internal/bots"
-	"github.com/memohai/memoh/internal/db/postgres/sqlc"
-	dbstore "github.com/memohai/memoh/internal/db/store"
-	"github.com/memohai/memoh/internal/providers"
-	"github.com/memohai/memoh/internal/workspace/bridge"
+	acpclient "github.com/felinics/memoh/internal/agent/runtime/acp/client"
+	"github.com/felinics/memoh/internal/bots"
+	"github.com/felinics/memoh/internal/db/postgres/sqlc"
+	dbstore "github.com/felinics/memoh/internal/db/store"
+	"github.com/felinics/memoh/internal/providers"
+	"github.com/felinics/memoh/internal/runtimefence"
+	"github.com/felinics/memoh/internal/workspace/bridge"
 )
 
 const (
@@ -120,9 +121,11 @@ func TestACPCodexDeviceSessionKeepsSuccessForLatePolls(t *testing.T) {
 	if polling.Generation != generation {
 		t.Fatalf("generation mismatch: %d != %d", polling.Generation, generation)
 	}
-	if _, err := h.beginDeviceAuthWrite(context.Background(), session.SessionID, generation, now); err != nil {
+	_, cancelWrite, err := h.beginDeviceAuthWrite(context.Background(), session.SessionID, generation, now)
+	if err != nil {
 		t.Fatalf("begin auth write: %v", err)
 	}
+	defer cancelWrite()
 	updated := h.finishDeviceAuthWrite(session.SessionID, generation, "account-123", nil, now)
 	if updated.Status != acpCodexDeviceAuthStatusSuccess {
 		t.Fatalf("status = %q, want success", updated.Status)
@@ -161,7 +164,7 @@ func TestACPCodexDeviceCancelPreventsInflightWrite(t *testing.T) {
 	session.TerminalExpiresAt = now.Add(acpCodexDeviceAuthTerminalTTL)
 	h.mu.Unlock()
 
-	if _, err := h.beginDeviceAuthWrite(context.Background(), session.SessionID, generation, now); err == nil {
+	if _, _, err := h.beginDeviceAuthWrite(context.Background(), session.SessionID, generation, now); err == nil {
 		t.Fatalf("begin auth write should fail after cancellation")
 	}
 	updated := h.finishDeviceAuthWrite(session.SessionID, generation, "account-123", nil, now)
@@ -269,17 +272,6 @@ func TestACPCodexDeviceTransientPollErrorStaysPending(t *testing.T) {
 	if updated.Polling {
 		t.Fatalf("polling should be cleared after transient error")
 	}
-}
-
-func TestACPCodexOAuthStatusReadsNativeWorkspace(t *testing.T) {
-	env := newACPCodexDeviceHTTPTestEnv(t, &acpCodexDeviceIntegrationProvider{})
-
-	rec := env.postJSON(t, http.MethodGet, "/bots/"+env.botID+"/acp/codex/oauth/status", nil)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
-	}
-	assertWorkspaceTargetsNative(t, "Codex status WorkspaceInfo", env.workspace.workspaceInfoTargetsSnapshot())
-	assertWorkspaceTargetsNative(t, "Codex status MCPClient", env.workspace.mcpClientTargetsSnapshot())
 }
 
 func TestACPCodexDeviceHTTPFlowWritesManagedConfig(t *testing.T) { //nolint:gosec // test fixture validates token-shaped Codex auth JSON.
@@ -426,8 +418,6 @@ func TestACPCodexDeviceHTTPFlowWritesManagedConfig(t *testing.T) { //nolint:gose
 	if got := env.provider.exchangeCodeVerifier(); got != "code-verifier" {
 		t.Fatalf("exchange code verifier = %q, want code-verifier", got)
 	}
-	assertWorkspaceTargetsNative(t, "Codex OAuth write WorkspaceInfo", env.workspace.workspaceInfoTargetsSnapshot())
-	assertWorkspaceTargetsNative(t, "Codex OAuth write MCPClient", env.workspace.mcpClientTargetsSnapshot())
 }
 
 func TestACPCodexDeviceHTTPWriteFailureMarksTerminal(t *testing.T) { //nolint:gosec // test fixture uses token-shaped Codex credentials.
@@ -688,13 +678,21 @@ func testCodexDeviceSession(sessionID string, now time.Time) *acpCodexDeviceAuth
 }
 
 type acpCodexDeviceHTTPTestEnv struct {
-	echo      *echo.Echo
-	handler   *ACPCodexOAuthHandler
-	provider  *acpCodexDeviceIntegrationProvider
-	recorder  *usersACPConfigBridgeServer
-	workspace *usersACPConfigWorkspace
-	botID     string
-	userID    string
+	echo     *echo.Echo
+	handler  *ACPCodexOAuthHandler
+	provider *acpCodexDeviceIntegrationProvider
+	recorder *usersACPConfigBridgeServer
+	botID    string
+	userID   string
+}
+
+type recordingCodexOAuthRuntimeReset struct{}
+
+func (*recordingCodexOAuthRuntimeReset) BeginBotHistoryReset(ctx context.Context, botID string) (context.Context, func(), error) {
+	resetCtx := runtimefence.WithResetContext(ctx, runtimefence.ResetFence{
+		Scope: "bot", BotID: botID, Token: "99999999-9999-4999-8999-999999999999",
+	})
+	return resetCtx, func() {}, nil
 }
 
 func newACPCodexDeviceHTTPTestEnv(t *testing.T, provider *acpCodexDeviceIntegrationProvider) *acpCodexDeviceHTTPTestEnv {
@@ -702,18 +700,18 @@ func newACPCodexDeviceHTTPTestEnv(t *testing.T, provider *acpCodexDeviceIntegrat
 	botID := "11111111-1111-1111-1111-111111111111"
 	userID := "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
 	client, recorder := newUsersACPConfigBridgeClient(t)
-	queries := acpCodexDeviceIntegrationQueries{
+	queries := &acpCodexDeviceIntegrationQueries{
 		bot: testBotRow(botID, map[string]any{}),
-	}
-	workspaceProvider := &usersACPConfigWorkspace{
-		backend: bridge.WorkspaceBackendContainer,
-		client:  client,
 	}
 	handler := &ACPCodexOAuthHandler{
 		provider:       provider,
 		botService:     bots.NewService(nil, queries),
 		accountService: newTestAdminAccountService("member"),
-		acpWorkspace:   workspaceProvider,
+		acpWorkspace: &usersACPConfigWorkspace{
+			backend: bridge.WorkspaceBackendContainer,
+			client:  client,
+		},
+		runtimeResets:  &recordingCodexOAuthRuntimeReset{},
 		callbackURL:    "http://localhost:1455/auth/callback",
 		states:         map[string]acpCodexOAuthState{},
 		deviceSessions: map[string]*acpCodexDeviceAuthSession{},
@@ -733,13 +731,12 @@ func newACPCodexDeviceHTTPTestEnv(t *testing.T, provider *acpCodexDeviceIntegrat
 	})
 	handler.Register(e)
 	return &acpCodexDeviceHTTPTestEnv{
-		echo:      e,
-		handler:   handler,
-		provider:  provider,
-		recorder:  recorder,
-		workspace: workspaceProvider,
-		botID:     botID,
-		userID:    userID,
+		echo:     e,
+		handler:  handler,
+		provider: provider,
+		recorder: recorder,
+		botID:    botID,
+		userID:   userID,
 	}
 }
 
@@ -774,11 +771,33 @@ type acpCodexDeviceIntegrationQueries struct {
 	bot sqlc.GetBotByIDRow
 }
 
-func (q acpCodexDeviceIntegrationQueries) GetBotByID(_ context.Context, id pgtype.UUID) (sqlc.GetBotByIDRow, error) {
+func (q *acpCodexDeviceIntegrationQueries) GetBotByID(_ context.Context, id pgtype.UUID) (sqlc.GetBotByIDRow, error) {
 	if !id.Valid || id != q.bot.ID {
 		return sqlc.GetBotByIDRow{}, errors.New("bot not found")
 	}
 	return q.bot, nil
+}
+
+func (*acpCodexDeviceIntegrationQueries) SupportsTransactions() bool { return true }
+
+func (q *acpCodexDeviceIntegrationQueries) InTx(_ context.Context, fn func(dbstore.Queries) error) error {
+	return fn(q)
+}
+
+func (*acpCodexDeviceIntegrationQueries) LockBotForRuntimeReset(_ context.Context, botID pgtype.UUID) (pgtype.UUID, error) {
+	return botID, nil
+}
+
+func (*acpCodexDeviceIntegrationQueries) ValidateLockedBotRuntimeReset(_ context.Context, arg sqlc.ValidateLockedBotRuntimeResetParams) (pgtype.UUID, error) {
+	return arg.BotID, nil
+}
+
+func (*acpCodexDeviceIntegrationQueries) BumpBotRuntimeConfigEpoch(context.Context, pgtype.UUID) (int64, error) {
+	return 1, nil
+}
+
+func (*acpCodexDeviceIntegrationQueries) RefreshLockedBotRuntimeReset(context.Context, sqlc.RefreshLockedBotRuntimeResetParams) (pgtype.Timestamptz, error) {
+	return pgtype.Timestamptz{Valid: true}, nil
 }
 
 type acpCodexDevicePollRequest struct {

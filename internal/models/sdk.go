@@ -4,15 +4,15 @@ import (
 	"net/http"
 	"strings"
 
-	anthropicmessages "github.com/memohai/twilight-ai/provider/anthropic/messages"
-	googlegenerative "github.com/memohai/twilight-ai/provider/google/generativeai"
-	openaicodex "github.com/memohai/twilight-ai/provider/openai/codex"
-	openaicompletions "github.com/memohai/twilight-ai/provider/openai/completions"
-	openairesponses "github.com/memohai/twilight-ai/provider/openai/responses"
-	sdk "github.com/memohai/twilight-ai/sdk"
+	anthropicmessages "github.com/felinics/twilight/provider/anthropic/messages"
+	googlegenerative "github.com/felinics/twilight/provider/google/generativeai"
+	openaicodex "github.com/felinics/twilight/provider/openai/codex"
+	openaicompletions "github.com/felinics/twilight/provider/openai/completions"
+	openairesponses "github.com/felinics/twilight/provider/openai/responses"
+	sdk "github.com/felinics/twilight/sdk"
 
-	memohcopilot "github.com/memohai/memoh/internal/copilot"
-	"github.com/memohai/memoh/internal/reasoning"
+	memohcopilot "github.com/felinics/memoh/internal/copilot"
+	"github.com/felinics/memoh/internal/reasoning"
 )
 
 // SDKModelConfig holds provider and model information resolved from DB,
@@ -40,6 +40,9 @@ type SDKModelConfig struct {
 	// ReasoningDefaultOn reports whether omitting the thinking field leaves the
 	// model thinking. nil means unknown.
 	ReasoningDefaultOn *bool
+	// ContextWindow is the configured context window the turn budgets against;
+	// legacy Anthropic thinking budgets are fitted to it. Zero means unknown.
+	ContextWindow int
 }
 
 // ReasoningConfig is the resolved extended-thinking decision for one call,
@@ -99,8 +102,8 @@ func NewSDKChatModel(cfg SDKModelConfig) *sdk.Model {
 			anthropicmessages.WithAPIKey(cfg.APIKey),
 		}
 		opts = append(opts, anthropicmessages.WithHTTPClient(cfg.HTTPClient))
-		if cfg.BaseURL != "" {
-			opts = append(opts, anthropicmessages.WithBaseURL(cfg.BaseURL))
+		if baseURL := anthropicMessagesBaseURL(cfg.BaseURL); baseURL != "" {
+			opts = append(opts, anthropicmessages.WithBaseURL(baseURL))
 		}
 		// Anthropic extended thinking has two wire shapes by model generation:
 		//   - 4.6+ (Adaptive): thinking{type:"adaptive"}; effort is carried
@@ -127,7 +130,7 @@ func NewSDKChatModel(cfg SDKModelConfig) *sdk.Model {
 			case rc.Active:
 				opts = append(opts, anthropicmessages.WithThinking(anthropicmessages.ThinkingConfig{
 					Type:         "enabled",
-					BudgetTokens: legacyAnthropicBudgetFor(rc.Effort),
+					BudgetTokens: AnthropicThinkingBudget(rc.Effort, cfg.ContextWindow),
 				}))
 			case rc.Disabled && anthropicNeedsExplicitOff(cfg.ReasoningOffSupport, cfg.ReasoningDefaultOn):
 				opts = append(opts, anthropicmessages.WithThinking(anthropicmessages.ThinkingConfig{
@@ -296,6 +299,21 @@ func legacyAnthropicBudgetFor(effort string) int {
 		return b
 	}
 	return anthropicLegacyBudget[ReasoningEffortMedium]
+}
+
+// anthropicMessagesBaseURL normalizes a configured Anthropic base URL to the
+// versioned API root the SDK joins /messages onto. Provider configs follow the
+// template convention of a bare origin (https://api.anthropic.com), which
+// model import already bridged by appending /v1; every other construction
+// site passed the origin through verbatim, sending requests to
+// {origin}/messages and failing on any endpoint. Normalizing here covers
+// them all.
+func anthropicMessagesBaseURL(baseURL string) string {
+	baseURL = strings.TrimRight(baseURL, "/")
+	if baseURL == "" || strings.HasSuffix(baseURL, "/v1") {
+		return baseURL
+	}
+	return baseURL + "/v1"
 }
 
 // ResolveClientType infers the client type string from an SDK Model's provider name.

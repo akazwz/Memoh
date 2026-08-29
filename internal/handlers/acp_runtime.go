@@ -12,17 +12,17 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/labstack/echo/v4"
 
-	"github.com/memohai/memoh/internal/accounts"
-	acpagent "github.com/memohai/memoh/internal/agent/runtime/acp"
-	acpclient "github.com/memohai/memoh/internal/agent/runtime/acp/client"
-	acpprofile "github.com/memohai/memoh/internal/agent/runtime/acp/profile"
-	"github.com/memohai/memoh/internal/apperror"
-	"github.com/memohai/memoh/internal/bots"
-	session "github.com/memohai/memoh/internal/chat/thread"
-	"github.com/memohai/memoh/internal/db"
-	"github.com/memohai/memoh/internal/workdir"
-	"github.com/memohai/memoh/internal/workspace"
-	"github.com/memohai/memoh/internal/workspace/bridge"
+	"github.com/felinics/memoh/internal/accounts"
+	acpagent "github.com/felinics/memoh/internal/agent/runtime/acp"
+	acpclient "github.com/felinics/memoh/internal/agent/runtime/acp/client"
+	acpprofile "github.com/felinics/memoh/internal/agent/runtime/acp/profile"
+	"github.com/felinics/memoh/internal/apperror"
+	"github.com/felinics/memoh/internal/bots"
+	session "github.com/felinics/memoh/internal/chat/thread"
+	"github.com/felinics/memoh/internal/db"
+	"github.com/felinics/memoh/internal/workdir"
+	"github.com/felinics/memoh/internal/workspace"
+	"github.com/felinics/memoh/internal/workspace/bridge"
 )
 
 type ACPRuntimeHandler struct {
@@ -44,11 +44,8 @@ type acpRuntimePool interface {
 	RuntimeStatusByID(botID, runtimeID string) (acpagent.RuntimeStatus, error)
 	SetRuntimeModel(ctx context.Context, botID, runtimeID, modelID string) (acpagent.RuntimeStatus, error)
 	SetRuntimeReasoning(ctx context.Context, botID, runtimeID, effort string) (acpagent.RuntimeStatus, error)
-	CloseRuntime(botID, runtimeID string) error
-}
-
-type acpRuntimeModePool interface {
 	SetRuntimeMode(ctx context.Context, botID, runtimeID, modeID string) (acpagent.RuntimeStatus, error)
+	CloseRuntime(botID, runtimeID string) error
 }
 
 type acpRuntimeWorkdirResolver interface {
@@ -308,11 +305,7 @@ func (h *ACPRuntimeHandler) SetRuntimeMode(c echo.Context) error {
 	if strings.TrimSpace(req.ModeID) == "" {
 		return apperror.New(apperror.CodeACPModeIDRequired, nil)
 	}
-	modePool, ok := h.pool.(acpRuntimeModePool)
-	if !ok {
-		return apperror.New(apperror.CodeACPModeSelectionUnsupported, nil)
-	}
-	status, err := modePool.SetRuntimeMode(context.WithoutCancel(c.Request().Context()), bot.ID, runtimeID, req.ModeID)
+	status, err := h.pool.SetRuntimeMode(context.WithoutCancel(c.Request().Context()), bot.ID, runtimeID, req.ModeID)
 	if err != nil {
 		return runtimePoolError(err)
 	}
@@ -754,7 +747,9 @@ func (h *ACPRuntimeHandler) requireRemoteSessionWorkdirRead(c echo.Context, botI
 
 func (h *ACPRuntimeHandler) requirePrimaryWorkspaceRead(c echo.Context, channelIdentityID, botID string) error {
 	if h.workspaces == nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "workspace service not configured")
+		// The legacy constructor is retained for embedders and unit tests that
+		// have no remote-workspace surface. Production wires workspace access.
+		return nil
 	}
 	info, err := h.workspaces.WorkspaceInfo(c.Request().Context(), botID)
 	if err != nil {

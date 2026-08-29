@@ -4,10 +4,10 @@ import (
 	"context"
 	"testing"
 
-	sdk "github.com/memohai/twilight-ai/sdk"
+	sdk "github.com/felinics/twilight/sdk"
 
-	tools "github.com/memohai/memoh/internal/agent/tool"
-	"github.com/memohai/memoh/internal/models"
+	tools "github.com/felinics/memoh/internal/agent/tool"
+	"github.com/felinics/memoh/internal/models"
 )
 
 // The reasoning decision on the subagent spawn path (#983).
@@ -75,7 +75,7 @@ func runSpawnReasoning(t *testing.T, providerName string, cfg tools.SpawnRunConf
 	}
 
 	rc := runConfigFromSpawnRunConfig(cfg)
-	opts := (*Agent)(nil).buildGenerateOptions(rc, nil, nil, nil)
+	opts := (*Agent)(nil).buildGenerateOptions(context.Background(), rc, nil, nil, nil)
 	if _, err := sdk.GenerateTextResult(context.Background(), opts...); err != nil {
 		t.Fatalf("generate text result: %v", err)
 	}
@@ -185,7 +185,7 @@ func TestParentTurnSendsReasoningForSameDecision(t *testing.T) {
 		ReasoningConfig: &models.ReasoningConfig{Active: true, Effort: models.ReasoningEffortHigh},
 	}
 
-	opts := (*Agent)(nil).buildGenerateOptions(cfg, nil, nil, nil)
+	opts := (*Agent)(nil).buildGenerateOptions(context.Background(), cfg, nil, nil, nil)
 	if _, err := sdk.GenerateTextResult(context.Background(), opts...); err != nil {
 		t.Fatalf("generate text result: %v", err)
 	}

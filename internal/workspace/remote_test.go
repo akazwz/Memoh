@@ -15,14 +15,14 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/test/bufconn"
 
-	"github.com/memohai/memoh/internal/config"
-	ctr "github.com/memohai/memoh/internal/container"
-	"github.com/memohai/memoh/internal/db"
-	dbstore "github.com/memohai/memoh/internal/db/store"
-	"github.com/memohai/memoh/internal/settings"
-	"github.com/memohai/memoh/internal/userruntime"
-	"github.com/memohai/memoh/internal/workspace/bridge"
-	pb "github.com/memohai/memoh/internal/workspace/bridgepb"
+	"github.com/felinics/memoh/internal/config"
+	ctr "github.com/felinics/memoh/internal/container"
+	"github.com/felinics/memoh/internal/db"
+	dbstore "github.com/felinics/memoh/internal/db/store"
+	"github.com/felinics/memoh/internal/settings"
+	"github.com/felinics/memoh/internal/userruntime"
+	"github.com/felinics/memoh/internal/workspace/bridge"
+	pb "github.com/felinics/memoh/internal/workspace/bridgepb"
 )
 
 const (
@@ -138,6 +138,22 @@ func (s *fakeRemoteBindingStore) DeleteMount(_ context.Context, botID, targetID 
 		}
 	}
 	return db.ErrNotFound
+}
+
+func TestDeleteMountRemovesTarget(t *testing.T) {
+	store := &fakeRemoteBindingStore{
+		records: []dbstore.BotRemoteRuntimeBindingRecord{{
+			ID: remoteTestTargetID, BotID: remoteTestBotID, RuntimeID: remoteTestRuntimeID,
+		}},
+	}
+	service := &RemoteWorkspaceService{store: store}
+
+	if err := service.DeleteMount(context.Background(), remoteTestBotID, remoteTestTargetID); err != nil {
+		t.Fatalf("DeleteMount() error = %v", err)
+	}
+	if len(store.records) != 0 {
+		t.Fatalf("target records = %d, want 0", len(store.records))
+	}
 }
 
 type fakeRuntimeConnections map[string]*userruntime.Connection
