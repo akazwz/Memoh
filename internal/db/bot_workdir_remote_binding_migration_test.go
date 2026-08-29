@@ -30,8 +30,8 @@ func TestBotWorkdirRemoteBindingDeletePolicyMigrations(t *testing.T) {
 		!strings.Contains(up, "ON DELETE RESTRICT") {
 		t.Fatal("0142 up migration must replace the published foreign key with RESTRICT")
 	}
-	if strings.Contains(up, "ON DELETE CASCADE") || strings.Contains(up, "NOT VALID") {
-		t.Fatal("0142 up migration must install a fully validated RESTRICT constraint")
+	if strings.Contains(up, "ON DELETE CASCADE") || !strings.Contains(up, "NOT VALID") {
+		t.Fatal("0142 up migration must install an RLS-safe NOT VALID RESTRICT constraint")
 	}
 
 	down := readEmbeddedMigration(t, "postgres/migrations/0142_bot_workdirs_remote_binding_restrict.down.sql")
@@ -40,8 +40,8 @@ func TestBotWorkdirRemoteBindingDeletePolicyMigrations(t *testing.T) {
 		!strings.Contains(down, "ON DELETE CASCADE") {
 		t.Fatal("0142 down migration must restore the published CASCADE constraint")
 	}
-	if strings.Contains(down, "NOT VALID") {
-		t.Fatal("0142 down migration must restore a fully validated CASCADE constraint")
+	if !strings.Contains(down, "NOT VALID") {
+		t.Fatal("0142 down migration must restore an RLS-safe NOT VALID CASCADE constraint")
 	}
 }
 

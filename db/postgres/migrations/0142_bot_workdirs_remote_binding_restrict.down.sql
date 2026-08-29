@@ -4,9 +4,10 @@
 ALTER TABLE public.bot_workdirs
     DROP CONSTRAINT IF EXISTS bot_workdirs_remote_binding_fkey;
 
--- Existing rows were protected by the replaced RESTRICT constraint, so the
--- restored constraint can be installed fully validated.
+-- Match the up migration's RLS-safe installation. NOT VALID skips only the
+-- historical scan; new writes and cascading deletes remain enforced.
 ALTER TABLE public.bot_workdirs
     ADD CONSTRAINT bot_workdirs_remote_binding_fkey
     FOREIGN KEY (team_id, remote_binding_id)
-    REFERENCES public.bot_remote_runtime_bindings(team_id, id) ON DELETE CASCADE;
+    REFERENCES public.bot_remote_runtime_bindings(team_id, id) ON DELETE CASCADE
+    NOT VALID;

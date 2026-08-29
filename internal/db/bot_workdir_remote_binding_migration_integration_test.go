@@ -19,11 +19,11 @@ func TestBotWorkdirRemoteBindingRestrictMigrationRoundTrip(t *testing.T) {
 	pool := freshMigratedDB(t)
 	dsn := teamMigrationDSN(t)
 
-	assertBotWorkdirRemoteBindingDeleteAction(t, ctx, pool, "r")
+	assertBotWorkdirRemoteBindingDeleteAction(t, ctx, pool, "r", false)
 	stepDown(t, dsn, countMigrationsFrom(t, "0142_bot_workdirs_remote_binding_restrict.up.sql"))
-	assertBotWorkdirRemoteBindingDeleteAction(t, ctx, pool, "c")
+	assertBotWorkdirRemoteBindingDeleteAction(t, ctx, pool, "c", false)
 	stepUp(t, dsn, countMigrationsFrom(t, "0142_bot_workdirs_remote_binding_restrict.up.sql"))
-	assertBotWorkdirRemoteBindingDeleteAction(t, ctx, pool, "r")
+	assertBotWorkdirRemoteBindingDeleteAction(t, ctx, pool, "r", false)
 }
 
 func TestReferencedRemoteBindingCannotBeDeleted(t *testing.T) {
@@ -64,6 +64,13 @@ VALUES ($1, $2, 'Pinned Folder', 'remote', $3, '/tmp/pinned')`, []any{workdirID,
 		}
 	}
 
+	_, err = conn.Exec(ctx, `
+INSERT INTO bot_workdirs (id, bot_id, name, target_kind, remote_binding_id, path)
+VALUES ($1, $2, 'Invalid Folder', 'remote', $3, '/tmp/invalid')`,
+		uuid.NewString(), botID, uuid.NewString(),
+	)
+	assertRemoteBindingForeignKeyViolation(t, err)
+
 	_, err = conn.Exec(ctx, "DELETE FROM bot_remote_runtime_bindings WHERE id = $1", targetID)
 	assertRemoteBindingRestrictViolation(t, err)
 	if _, err := conn.Exec(ctx, "UPDATE bot_workdirs SET archived_at = now() WHERE id = $1", workdirID); err != nil {
@@ -103,6 +110,17 @@ VALUES ($1, $2, 'Pinned Folder', 'remote', $3, '/tmp/pinned')`, []any{workdirID,
 	}
 }
 
+func assertRemoteBindingForeignKeyViolation(t *testing.T, err error) {
+	t.Helper()
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) {
+		t.Fatalf("insert invalid remote binding error = %v, want PostgreSQL error", err)
+	}
+	if pgErr.Code != "23503" || pgErr.ConstraintName != "bot_workdirs_remote_binding_fkey" {
+		t.Fatalf("insert invalid remote binding = SQLSTATE %q constraint %q, want 23503 bot_workdirs_remote_binding_fkey", pgErr.Code, pgErr.ConstraintName)
+	}
+}
+
 func assertRemoteBindingRestrictViolation(t *testing.T, err error) {
 	t.Helper()
 	var pgErr *pgconn.PgError
@@ -114,7 +132,7 @@ func assertRemoteBindingRestrictViolation(t *testing.T, err error) {
 	}
 }
 
-func assertBotWorkdirRemoteBindingDeleteAction(t *testing.T, ctx context.Context, pool *pgxpool.Pool, want string) {
+func assertBotWorkdirRemoteBindingDeleteAction(t *testing.T, ctx context.Context, pool *pgxpool.Pool, want string, wantValidated bool) {
 	t.Helper()
 	var deleteAction string
 	var validated bool
@@ -126,7 +144,7 @@ WHERE conrelid = 'public.bot_workdirs'::regclass
 `).Scan(&deleteAction, &validated); err != nil {
 		t.Fatalf("inspect bot_workdirs remote binding constraint: %v", err)
 	}
-	if deleteAction != want || !validated {
-		t.Fatalf("remote binding constraint = delete action %q, validated %t; want %q, true", deleteAction, validated, want)
+	if deleteAction != want || validated != wantValidated {
+		t.Fatalf("remote binding constraint = delete action %q, validated %t; want %q, %t", deleteAction, validated, want, wantValidated)
 	}
 }
