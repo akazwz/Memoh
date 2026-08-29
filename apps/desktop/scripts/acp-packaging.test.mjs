@@ -33,16 +33,16 @@ test('packaged paths address the real platform executable and resources', () => 
     appOutDir: '/build/mac-arm64',
     packager: { appInfo },
   }), {
-    executable: '/build/mac-arm64/Memoh.app/Contents/MacOS/Memoh',
-    resources: '/build/mac-arm64/Memoh.app/Contents/Resources',
+    executable: join('/build/mac-arm64', 'Memoh.app', 'Contents', 'MacOS', 'Memoh'),
+    resources: join('/build/mac-arm64', 'Memoh.app', 'Contents', 'Resources'),
   })
   assert.deepEqual(packagedApplicationPaths({
     electronPlatformName: 'linux',
     appOutDir: '/build/linux-unpacked',
     packager: { appInfo, executableName: 'memoh' },
   }), {
-    executable: '/build/linux-unpacked/memoh',
-    resources: '/build/linux-unpacked/resources',
+    executable: join('/build/linux-unpacked', 'memoh'),
+    resources: join('/build/linux-unpacked', 'resources'),
   })
 })
 
@@ -55,7 +55,7 @@ test('cross-build smoke uses host Electron while native builds use the target ex
       executableName: 'memoh',
     },
   }
-  assert.equal(smokeRuntimeExecutable(context, 'linux', '/host/electron'), '/build/linux-unpacked/memoh')
+  assert.equal(smokeRuntimeExecutable(context, 'linux', '/host/electron'), join('/build/linux-unpacked', 'memoh'))
   assert.equal(smokeRuntimeExecutable(context, 'darwin', '/host/electron'), '/host/electron')
 })
 
