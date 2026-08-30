@@ -13,6 +13,7 @@ import (
 	sdk "github.com/felinics/twilight/sdk"
 
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
+	acpagent "github.com/felinics/memoh/internal/agent/runtime/acp"
 	acpclient "github.com/felinics/memoh/internal/agent/runtime/acp/client"
 	agentpkg "github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
@@ -337,7 +338,7 @@ func TestTriggerScheduleACPPersistsCompletedLifecycle(t *testing.T) {
 	lifecycles := &recordingContextLifecycleStore{}
 	service := newACPLifecycleService(t, pool, messages, lifecycles)
 
-	result, err := service.triggerScheduleACP(
+	result, err := service.triggerScheduleRuntime(
 		context.Background(),
 		lifecycleTestBotID,
 		schedule.TriggerPayload{
@@ -349,17 +350,13 @@ func TestTriggerScheduleACPPersistsCompletedLifecycle(t *testing.T) {
 		},
 		"",
 		lifecycleTestRunID,
-		ACPSessionExecutionInfo{
-			AgentID:               "codex",
-			ProjectPath:           "/data/app",
-			RuntimeOwnerAccountID: "user-1",
-		},
+		acpagent.NewDriver(pool),
 	)
 	if err != nil {
-		t.Fatalf("triggerScheduleACP() error = %v", err)
+		t.Fatalf("triggerScheduleRuntime() error = %v", err)
 	}
 	if result.Status != "ok" || result.Text != "done" {
-		t.Fatalf("triggerScheduleACP() result = %#v, want completed output", result)
+		t.Fatalf("triggerScheduleRuntime() result = %#v, want completed output", result)
 	}
 	if pool.input.RunID != lifecycleTestRunID || pool.input.SessionID != lifecycleTestSessionID {
 		t.Fatalf("ACP prompt identity = (run %q, session %q), want (%q, %q)", pool.input.RunID, pool.input.SessionID, lifecycleTestRunID, lifecycleTestSessionID)

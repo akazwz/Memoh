@@ -22,15 +22,16 @@ func (s *Service) storeRound(ctx context.Context, req ChatRequest, messages []Mo
 }
 
 type storeRoundOptions struct {
-	AllowPendingToolCalls         bool
-	SkipMemory                    bool
-	AllowEmptyAssistantText       bool
-	MessageMetadataByIndex        map[int]map[string]any
-	ReasoningTiming               []messagepkg.ReasoningTimingSegment
-	RequireCompletePersist        bool
-	CleanupACPDecisionProjections bool
-	ACPPublication                *messagepkg.ACPPublication
-	ContextLifecycle              *contextfrag.LifecycleHolder
+	AllowPendingToolCalls             bool
+	SkipMemory                        bool
+	AllowEmptyAssistantText           bool
+	MessageMetadataByIndex            map[int]map[string]any
+	ReasoningTiming                   []messagepkg.ReasoningTimingSegment
+	RequireCompletePersist            bool
+	CleanupRuntimeDecisionProjections bool
+	AgentPublication                  *messagepkg.AgentPublication
+	AgentTurnID                       string
+	ContextLifecycle                  *contextfrag.LifecycleHolder
 }
 
 func (s *Service) storeRoundWithOptions(ctx context.Context, req ChatRequest, messages []ModelMessage, modelID string, opts storeRoundOptions) error {
@@ -221,8 +222,9 @@ func (s *Service) storeMessagesResult(ctx context.Context, req ChatRequest, mess
 			return nil, errors.New("complete round persistence requires an atomic message persister")
 		}
 		persisted, handled, persistErr := atomic.PersistRound(ctx, persistInputs, messagepkg.RoundPersistenceOptions{
-			CleanupACPDecisionProjections: opts.CleanupACPDecisionProjections,
-			ACPPublication:                opts.ACPPublication,
+			CleanupRuntimeDecisionProjections: opts.CleanupRuntimeDecisionProjections,
+			AgentPublication:                  opts.AgentPublication,
+			AgentTurnID:                       opts.AgentTurnID,
 		})
 		if persistErr != nil {
 			return persisted, persistErr

@@ -187,7 +187,6 @@ type clientCallbacks struct {
 	baseSession    ToolSessionContext
 	mu             sync.RWMutex
 	collector      *eventCollector
-	stateReceipt   *sessionStateReceiptCollector
 	sink           EventSink
 	promptSession  ToolSessionContext
 	approvalGrants map[string]approvedToolGrant
@@ -266,7 +265,7 @@ func (g *decisionInflight) waitIdle(timeout time.Duration) bool {
 	}
 }
 
-func newClientCallbacks(ctx context.Context, client *bridge.Client, root, cwd string, timeout time.Duration, sink EventSink, env []string, cleanEnv bool, unsetEnv []string, approval ToolApprovalService, toolGateway *mcp.ToolGatewayService, toolSession ToolSessionContext, quirks acpprofile.ToolQuirks) *clientCallbacks {
+func newClientCallbacks(ctx context.Context, client *bridge.Client, root, cwd string, timeout time.Duration, sink EventSink, env []string, unsetEnv []string, approval ToolApprovalService, toolGateway *mcp.ToolGatewayService, toolSession ToolSessionContext, quirks acpprofile.ToolQuirks) *clientCallbacks {
 	timeoutSeconds := int32(timeout.Seconds())
 	if timeoutSeconds <= 0 {
 		timeoutSeconds = defaultTerminalTimeout
@@ -282,7 +281,7 @@ func newClientCallbacks(ctx context.Context, client *bridge.Client, root, cwd st
 		sink:        sink,
 		events:      events,
 		toolMapper:  newACPToolEventMapper(quirks),
-		terminals:   newTerminalManager(ctx, client, root, cwd, timeoutSeconds, env, cleanEnv, unsetEnv, events),
+		terminals:   newTerminalManager(ctx, client, root, cwd, timeoutSeconds, env, unsetEnv, events),
 		quirks:      quirks,
 	}
 }
@@ -1490,7 +1489,7 @@ func (c *clientCallbacks) SessionUpdate(_ context.Context, p acp.SessionNotifica
 	// write lock, so Prompt cannot return and let its owner close the sink
 	// while a callback that already observed that sink is still emitting.
 	// Delivery is bounded: a sink whose consumer stops draining cancels its
-	// own stream after acpSinkStallTimeout (application layer), so this lock
+	// own stream after runtimeSinkStallTimeout (application layer), so this lock
 	// cannot pin the prompt's runtime slot indefinitely.
 	c.mu.RLock()
 	defer c.mu.RUnlock()

@@ -115,6 +115,139 @@ func TestBotAgentsMigrationAndCanonicalSchema(t *testing.T) {
 		stepUp(t, dsn, 1)
 		assertBotAgentsSchema(t, ctx, pool, true)
 		assertBotAgentConstraintsValidated(t, ctx, pool, false)
+		// Return to head so later suites see a fully migrated database.
+		migrateUpAll(t, dsn)
+	})
+
+	t.Run("moves built-in ACP agents to direct runtimes without copying credentials", func(t *testing.T) {
+		ctx := context.Background()
+		dsn := teamMigrationDSN(t)
+		pool := freshMigratedDB(t)
+		migrateTo(t, dsn, 143)
+
+		const (
+			userID        = "10000000-0000-4000-8000-000000000143"
+			botID         = "20000000-0000-4000-8000-000000000143"
+			agentID       = "30000000-0000-4000-8000-000000000143"
+			credentialID  = "40000000-0000-4000-8000-000000000143"
+			sessionID     = "50000000-0000-4000-8000-000000000143"
+			scheduleID    = "60000000-0000-4000-8000-000000000143"
+			sessionBotID  = "70000000-0000-4000-8000-000000000143"
+			orphanSession = "80000000-0000-4000-8000-000000000143"
+		)
+
+		seed := []struct {
+			query string
+			args  []any
+		}{
+			{`INSERT INTO users (id, username) VALUES ($1, 'external-agent-migration-owner')`, []any{userID}},
+			{`INSERT INTO team_members (team_id, user_id) VALUES ($1, $2)`, []any{team.DefaultTeamID, userID}},
+			{`INSERT INTO bots (
+				id, team_id, owner_user_id, name, chat_runtime, chat_acp_agent_id, metadata
+			) VALUES (
+				$1, $2, $3, 'external-agent-migration-bot', 'acp_agent', 'codex',
+				'{"acp":{"agents":{"codex":{"enabled":true,"setup_mode":"api_key","managed":{"api_key":"plaintext-must-not-move","base_url":"https://gateway.example/v1"}}}}}'::jsonb
+			)`, []any{botID, team.DefaultTeamID, userID}},
+			{`INSERT INTO bots (
+				id, team_id, owner_user_id, name, chat_runtime, metadata
+			) VALUES (
+				$1, $2, $3, 'session-only-external-agent-migration-bot', 'model',
+				'{"acp":{"agents":{"claude-code":{"enabled":true,"setup_mode":"self"}}}}'::jsonb
+			)`, []any{sessionBotID, team.DefaultTeamID, userID}},
+			{`INSERT INTO agent_credentials (
+				id, team_id, owner_user_id, provider, auth_kind, label,
+				encrypted_payload, encryption_nonce, key_version
+			) VALUES (
+				$1, $2, $3, 'openai', 'openai_api_key', 'API key',
+				decode('01', 'hex'), decode(repeat('00', 12), 'hex'), 1
+			)`, []any{credentialID, team.DefaultTeamID, userID}},
+			{`INSERT INTO bot_agents (
+				id, team_id, bot_id, name, runtime, enabled, metadata, agent_credential_id
+			) VALUES ($1, $2, $3, 'Codex', 'acp', true, '{"provider":"codex"}'::jsonb, $4)`, []any{agentID, team.DefaultTeamID, botID, credentialID}},
+			{`UPDATE bots SET default_bot_agent_id = $1 WHERE id = $2`, []any{agentID, botID}},
+			{`INSERT INTO bot_sessions (
+				id, team_id, bot_id, bot_agent_id, type, session_mode, runtime_type, runtime_metadata, metadata
+			) VALUES (
+				$1, $2, $3, $4, 'acp_agent', 'chat', 'acp_agent',
+				'{"acp_agent_id":"codex","project_path":"/data"}'::jsonb,
+				'{"acp_agent_id":"codex","project_path":"/data"}'::jsonb
+			)`, []any{sessionID, team.DefaultTeamID, botID, agentID}},
+			{`INSERT INTO bot_sessions (
+				id, team_id, bot_id, type, session_mode, runtime_type, runtime_metadata, metadata
+			) VALUES (
+				$1, $2, $3, 'acp_agent', 'chat', 'acp_agent',
+				'{"acp_agent_id":"claude-code","project_path":"/data"}'::jsonb,
+				'{"acp_agent_id":"claude-code","project_path":"/data"}'::jsonb
+			)`, []any{orphanSession, team.DefaultTeamID, sessionBotID}},
+			{`INSERT INTO schedule (
+				id, team_id, bot_id, bot_agent_id, name, description, pattern, command,
+				run_target, runtime_type, acp_agent_id
+			) VALUES (
+				$1, $2, $3, $4, 'migration schedule', '', '0 0 * * *', 'run',
+				'new_session', 'acp_agent', 'codex'
+			)`, []any{scheduleID, team.DefaultTeamID, botID, agentID}},
+		}
+		for _, statement := range seed {
+			if _, err := pool.Exec(ctx, statement.query, statement.args...); err != nil {
+				t.Fatalf("seed external Agent migration: %v", err)
+			}
+		}
+
+		stepUp(t, dsn, 1)
+
+		var runtime, auth, baseURL, copiedSecret, storedCredential string
+		if err := pool.QueryRow(ctx, `
+			SELECT runtime,
+			       COALESCE(metadata->>'auth', ''),
+			       COALESCE(metadata->>'base_url', ''),
+			       COALESCE(metadata->>'api_key', ''),
+			       agent_credential_id::text
+			FROM bot_agents WHERE id = $1`, agentID,
+		).Scan(&runtime, &auth, &baseURL, &copiedSecret, &storedCredential); err != nil {
+			t.Fatalf("read migrated Agent: %v", err)
+		}
+		if runtime != "codex" || auth != "api_key" || baseURL != "https://gateway.example/v1" || copiedSecret != "" || storedCredential != credentialID {
+			t.Fatalf("migrated Agent = runtime=%q auth=%q base_url=%q secret=%q credential=%q", runtime, auth, baseURL, copiedSecret, storedCredential)
+		}
+
+		var botRuntime, sessionRuntime, scheduleRuntime string
+		var hasExternalAgents bool
+		if err := pool.QueryRow(ctx, `
+			SELECT
+				(SELECT chat_runtime FROM bots WHERE id = $1),
+				(SELECT metadata ? 'external_agents' FROM bots WHERE id = $1),
+				(SELECT runtime_type FROM bot_sessions WHERE id = $2),
+				(SELECT runtime_type FROM schedule WHERE id = $3)`,
+			botID, sessionID, scheduleID,
+		).Scan(&botRuntime, &hasExternalAgents, &sessionRuntime, &scheduleRuntime); err != nil {
+			t.Fatalf("read migrated runtime bindings: %v", err)
+		}
+		if botRuntime != "codex" || hasExternalAgents || sessionRuntime != "codex" || scheduleRuntime != "codex" {
+			t.Fatalf("migrated bindings = bot=%q external_agents=%t session=%q schedule=%q", botRuntime, hasExternalAgents, sessionRuntime, scheduleRuntime)
+		}
+
+		var sessionOnlyRuntime, sessionOnlyAgentRuntime, sessionOnlyAgentID string
+		if err := pool.QueryRow(ctx, `
+			SELECT session.runtime_type, session.bot_agent_id::text, agent.runtime
+			FROM bot_sessions session
+			JOIN bot_agents agent ON agent.id = session.bot_agent_id
+			WHERE session.id = $1 AND session.bot_id = $2`,
+			orphanSession, sessionBotID,
+		).Scan(&sessionOnlyRuntime, &sessionOnlyAgentID, &sessionOnlyAgentRuntime); err != nil {
+			t.Fatalf("read session-only migrated Agent binding: %v", err)
+		}
+		if sessionOnlyRuntime != "claude-code" || sessionOnlyAgentRuntime != "claude-code" || sessionOnlyAgentID == "" {
+			t.Fatalf("session-only binding = runtime=%q agent=%q agent_runtime=%q", sessionOnlyRuntime, sessionOnlyAgentID, sessionOnlyAgentRuntime)
+		}
+
+		stepDown(t, dsn, 1)
+		if err := pool.QueryRow(ctx, `SELECT runtime FROM bot_agents WHERE id = $1`, agentID).Scan(&runtime); err != nil {
+			t.Fatalf("read rolled-back Agent: %v", err)
+		}
+		if runtime != "acp" {
+			t.Fatalf("rolled-back Agent runtime = %q, want acp", runtime)
+		}
+		migrateUpAll(t, dsn)
 	})
 
 	t.Run("canonical init contains final Bot Agent schema", func(t *testing.T) {

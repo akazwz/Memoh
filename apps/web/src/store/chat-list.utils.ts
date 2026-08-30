@@ -73,6 +73,12 @@ export function normalizedRuntimeType(session: SessionDescriptorShape): string {
   return (session.type ?? '').trim() === 'acp_agent' ? 'acp_agent' : 'model'
 }
 
+export function isAgentRuntimeType(runtimeType: string): boolean {
+  return runtimeType === 'acp_agent'
+    || runtimeType === 'codex'
+    || runtimeType === 'claude-code'
+}
+
 export function isSessionVisibleInSidebarMode(session: SessionDescriptorShape, mode: SidebarSessionMode): boolean {
   switch (mode) {
     case 'recent': {
@@ -82,7 +88,7 @@ export function isSessionVisibleInSidebarMode(session: SessionDescriptorShape, m
     case 'schedule':
       return normalizedSessionMode(session) === 'schedule'
     case 'agent':
-      return normalizedRuntimeType(session) === 'acp_agent'
+      return isAgentRuntimeType(normalizedRuntimeType(session))
     default:
       return false
   }
