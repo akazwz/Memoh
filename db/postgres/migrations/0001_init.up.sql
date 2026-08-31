@@ -917,7 +917,7 @@ CREATE TABLE IF NOT EXISTS schedule (
   CONSTRAINT schedule_acp_fields_check CHECK (
     run_target <> 'new_session'
     OR (runtime_type = 'acp_agent' AND acp_agent_id IS NOT NULL AND model_id IS NULL)
-    OR (runtime_type IN ('codex', 'claude-code') AND acp_agent_id IS NULL AND model_id IS NULL)
+    OR (runtime_type IN ('codex', 'claude-code') AND bot_agent_id IS NOT NULL AND acp_agent_id IS NULL AND model_id IS NULL)
     OR (COALESCE(runtime_type, 'model') = 'model' AND bot_agent_id IS NULL AND acp_agent_id IS NULL AND acp_model_id IS NULL)
   ),
   CONSTRAINT schedule_model_exclusive_check CHECK (

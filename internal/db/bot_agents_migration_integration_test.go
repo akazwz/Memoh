@@ -134,6 +134,9 @@ func TestBotAgentsMigrationAndCanonicalSchema(t *testing.T) {
 			scheduleID    = "60000000-0000-4000-8000-000000000143"
 			sessionBotID  = "70000000-0000-4000-8000-000000000143"
 			orphanSession = "80000000-0000-4000-8000-000000000143"
+			disabledBotID = "90000000-0000-4000-8000-000000000143"
+			disabledAgent = "a0000000-0000-4000-8000-000000000143"
+			disabledSched = "b0000000-0000-4000-8000-000000000143"
 		)
 
 		seed := []struct {
@@ -154,6 +157,12 @@ func TestBotAgentsMigrationAndCanonicalSchema(t *testing.T) {
 				$1, $2, $3, 'session-only-external-agent-migration-bot', 'model',
 				'{"acp":{"agents":{"claude-code":{"enabled":true,"setup_mode":"self"}}}}'::jsonb
 			)`, []any{sessionBotID, team.DefaultTeamID, userID}},
+			{`INSERT INTO bots (
+				id, team_id, owner_user_id, name, chat_runtime, chat_acp_agent_id, metadata
+			) VALUES (
+				$1, $2, $3, 'disabled-only-external-agent-migration-bot', 'acp_agent', 'codex',
+				'{"acp":{"agents":{"codex":{"enabled":true,"setup_mode":"self"}}}}'::jsonb
+			)`, []any{disabledBotID, team.DefaultTeamID, userID}},
 			{`INSERT INTO agent_credentials (
 				id, team_id, owner_user_id, provider, auth_kind, label,
 				encrypted_payload, encryption_nonce, key_version
@@ -164,6 +173,9 @@ func TestBotAgentsMigrationAndCanonicalSchema(t *testing.T) {
 			{`INSERT INTO bot_agents (
 				id, team_id, bot_id, name, runtime, enabled, metadata, agent_credential_id
 			) VALUES ($1, $2, $3, 'Codex', 'acp', true, '{"provider":"codex"}'::jsonb, $4)`, []any{agentID, team.DefaultTeamID, botID, credentialID}},
+			{`INSERT INTO bot_agents (
+				id, team_id, bot_id, name, runtime, enabled, metadata
+			) VALUES ($1, $2, $3, 'Codex', 'acp', false, '{"provider":"codex"}'::jsonb)`, []any{disabledAgent, team.DefaultTeamID, disabledBotID}},
 			{`UPDATE bots SET default_bot_agent_id = $1 WHERE id = $2`, []any{agentID, botID}},
 			{`INSERT INTO bot_sessions (
 				id, team_id, bot_id, bot_agent_id, type, session_mode, runtime_type, runtime_metadata, metadata
@@ -186,6 +198,13 @@ func TestBotAgentsMigrationAndCanonicalSchema(t *testing.T) {
 				$1, $2, $3, $4, 'migration schedule', '', '0 0 * * *', 'run',
 				'new_session', 'acp_agent', 'codex'
 			)`, []any{scheduleID, team.DefaultTeamID, botID, agentID}},
+			{`INSERT INTO schedule (
+				id, team_id, bot_id, name, description, pattern, command,
+				run_target, runtime_type, acp_agent_id
+			) VALUES (
+				$1, $2, $3, 'disabled-only migration schedule', '', '0 0 * * *', 'run',
+				'new_session', 'acp_agent', 'codex'
+			)`, []any{disabledSched, team.DefaultTeamID, disabledBotID}},
 		}
 		for _, statement := range seed {
 			if _, err := pool.Exec(ctx, statement.query, statement.args...); err != nil {
@@ -194,6 +213,7 @@ func TestBotAgentsMigrationAndCanonicalSchema(t *testing.T) {
 		}
 
 		stepUp(t, dsn, 1)
+		assertDirectScheduleRequiresBotAgent(t, ctx, pool)
 
 		var runtime, auth, baseURL, copiedSecret, storedCredential string
 		if err := pool.QueryRow(ctx, `
@@ -240,6 +260,22 @@ func TestBotAgentsMigrationAndCanonicalSchema(t *testing.T) {
 			t.Fatalf("session-only binding = runtime=%q agent=%q agent_runtime=%q", sessionOnlyRuntime, sessionOnlyAgentID, sessionOnlyAgentRuntime)
 		}
 
+		var disabledDefaultAgent, disabledScheduleAgent, disabledScheduleRuntime string
+		var enabledDirectAgents int
+		if err := pool.QueryRow(ctx, `
+			SELECT
+				(SELECT default_bot_agent_id::text FROM bots WHERE id = $1),
+				(SELECT bot_agent_id::text FROM schedule WHERE id = $2),
+				(SELECT runtime_type FROM schedule WHERE id = $2),
+				(SELECT count(*) FROM bot_agents WHERE bot_id = $1 AND runtime = 'codex' AND enabled AND deleted_at IS NULL)`,
+			disabledBotID, disabledSched,
+		).Scan(&disabledDefaultAgent, &disabledScheduleAgent, &disabledScheduleRuntime, &enabledDirectAgents); err != nil {
+			t.Fatalf("read disabled-only migrated bindings: %v", err)
+		}
+		if enabledDirectAgents != 1 || disabledDefaultAgent == "" || disabledScheduleAgent != disabledDefaultAgent || disabledScheduleRuntime != "codex" {
+			t.Fatalf("disabled-only migration = enabled_agents=%d default=%q schedule_agent=%q schedule_runtime=%q", enabledDirectAgents, disabledDefaultAgent, disabledScheduleAgent, disabledScheduleRuntime)
+		}
+
 		stepDown(t, dsn, 1)
 		if err := pool.QueryRow(ctx, `SELECT runtime FROM bot_agents WHERE id = $1`, agentID).Scan(&runtime); err != nil {
 			t.Fatalf("read rolled-back Agent: %v", err)
@@ -257,7 +293,24 @@ func TestBotAgentsMigrationAndCanonicalSchema(t *testing.T) {
 		applyCanonicalInitOnly(t, dsn)
 		assertBotAgentsSchema(t, ctx, pool, true)
 		assertBotAgentConstraintsValidated(t, ctx, pool, true)
+		assertDirectScheduleRequiresBotAgent(t, ctx, pool)
 	})
+}
+
+func assertDirectScheduleRequiresBotAgent(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
+	t.Helper()
+	var definition string
+	if err := pool.QueryRow(ctx, `
+		SELECT pg_get_constraintdef(oid)
+		FROM pg_constraint
+		WHERE conrelid = 'public.schedule'::regclass
+		  AND conname = 'schedule_acp_fields_check'
+	`).Scan(&definition); err != nil {
+		t.Fatalf("inspect direct schedule constraint: %v", err)
+	}
+	if !strings.Contains(definition, "bot_agent_id IS NOT NULL") {
+		t.Fatalf("direct schedule constraint does not require bot_agent_id: %s", definition)
+	}
 }
 
 func assertBotAgentConstraintsValidated(t *testing.T, ctx context.Context, pool *pgxpool.Pool, want bool) {

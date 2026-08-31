@@ -68,7 +68,7 @@ func (s *Service) RuntimeSessionExecutionInfo(ctx context.Context, sessionID str
 	// agents; the WS execution gate must cover both, or a
 	// session reached by other means (a fork, a shared session) executes
 	// with only the inherited runtime owner ever checked.
-	if !session.IsACPRuntime(sess) && !session.IsExternalRuntime(sess) {
+	if !session.IsACPRuntime(sess) && !session.IsDirectRuntime(sess) {
 		return RuntimeSessionExecutionInfo{}, nil
 	}
 	runtimeMeta := runtimeSessionMeta(sess)

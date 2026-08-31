@@ -1,4 +1,4 @@
-// Package acpsession adapts Chat thread metadata to the minimal descriptor
+// Package agentsession adapts Chat thread metadata to the minimal descriptor
 // consumed by the ACP runtime.
 package agentsession
 

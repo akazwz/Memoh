@@ -53,6 +53,7 @@ type turnRunner struct {
 	cliVersion      string
 	result          *inboundMessage
 	pendingCtrl     map[string]chan json.RawMessage
+	inboundCancels  map[string]context.CancelFunc
 	memohMCPCallIDs map[string]struct{}
 	doneOnce        sync.Once
 }
@@ -69,6 +70,7 @@ func newTurnRunner(parent context.Context, input external.PromptInput, proc cliP
 		cancel:          cancel,
 		done:            make(chan struct{}),
 		pendingCtrl:     map[string]chan json.RawMessage{},
+		inboundCancels:  map[string]context.CancelFunc{},
 		memohMCPCallIDs: map[string]struct{}{},
 	}
 }
@@ -245,11 +247,17 @@ func (t *turnRunner) handleMessage(msg *inboundMessage) {
 		}
 		switch payload.Subtype {
 		case "can_use_tool":
-			go t.handleCanUseTool(msg.RequestID, &payload)
+			requestCtx, done := t.beginInboundControl(msg.RequestID)
+			go func() {
+				defer done()
+				t.handleCanUseTool(requestCtx, msg.RequestID, &payload)
+			}()
 		default:
 			t.logger.Warn("claude: unhandled control request", slog.String("subtype", payload.Subtype))
 			t.respondControlError(msg.RequestID, "memoh does not handle this request")
 		}
+	case messageTypeControlCancel:
+		t.cancelInboundControl(msg.RequestID)
 	case messageTypeControlResponse:
 		var envelope struct {
 			Subtype   string          `json:"subtype"`
@@ -267,6 +275,29 @@ func (t *turnRunner) handleMessage(msg *inboundMessage) {
 		if ch != nil {
 			ch <- envelope.Response
 		}
+	}
+}
+
+func (t *turnRunner) beginInboundControl(requestID string) (context.Context, func()) {
+	ctx, cancel := context.WithCancel(t.ctx)
+	t.mu.Lock()
+	t.inboundCancels[requestID] = cancel
+	t.mu.Unlock()
+	return ctx, func() {
+		cancel()
+		t.mu.Lock()
+		delete(t.inboundCancels, requestID)
+		t.mu.Unlock()
+	}
+}
+
+func (t *turnRunner) cancelInboundControl(requestID string) {
+	t.mu.Lock()
+	cancel := t.inboundCancels[requestID]
+	delete(t.inboundCancels, requestID)
+	t.mu.Unlock()
+	if cancel != nil {
+		cancel()
 	}
 }
 
@@ -294,12 +325,15 @@ func (t *turnRunner) respondControlError(requestID, message string) {
 
 // handleCanUseTool routes one permission callback through the Memoh approval
 // flow. Runs on its own goroutine, bounded by the turn-scoped context.
-func (t *turnRunner) handleCanUseTool(requestID string, payload *controlRequestPayload) {
+func (t *turnRunner) handleCanUseTool(ctx context.Context, requestID string, payload *controlRequestPayload) {
 	callID := strings.TrimSpace(payload.ToolUseID)
 	if callID == "" {
 		callID = requestID
 	}
-	result := t.decide(t.ctx, callID, canonicalPolicyToolName(payload.ToolName), payload.Input)
+	result := t.decide(ctx, callID, canonicalPolicyToolName(payload.ToolName), payload.Input)
+	if ctx.Err() != nil {
+		return
+	}
 	var line []byte
 	var err error
 	if result.Approved {
@@ -407,7 +441,7 @@ func (t *turnRunner) decide(ctx context.Context, callID, toolName string, input 
 			ToolName:                     toolName,
 			ToolInput:                    input,
 		},
-		Interactive:    true,
+		Interactive:    t.input.CanRequestUserInput,
 		RegisterWaiter: t.waiter,
 		Emit:           t.emitApprovalRequest,
 		CancelOnAbort: func(cancelCtx context.Context, req approval.Request, reason string) (approval.Request, error) {

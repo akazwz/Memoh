@@ -210,7 +210,10 @@ func (d *Driver) ModelCatalog(ctx context.Context, botID, botAgentID string) (ex
 func (d *Driver) Prompt(ctx context.Context, input external.PromptInput) (external.PromptResult, error) {
 	cfg, credential, err := d.resolveAgentConfig(ctx, input.BotID, input.BotAgentID, true)
 	if err != nil {
-		return external.PromptResult{}, err
+		if apperror.CodeOf(err) != "" {
+			return external.PromptResult{}, err
+		}
+		return external.PromptResult{}, apperror.Wrap(apperror.CodeExternalRuntimeUnavailable, err, map[string]string{"runtime": RuntimeType})
 	}
 
 	srv, releaseServer, err := d.acquireServer(ctx, input.BotID, input.BotAgentID)

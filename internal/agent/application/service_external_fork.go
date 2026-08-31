@@ -39,7 +39,7 @@ func (s *Service) PrepareExternalFork(ctx context.Context, botID, sessionID, tur
 	if err := validateSessionBot(botID, sessionID, sess.BotID); err != nil {
 		return nil, err
 	}
-	if !session.IsExternalRuntime(sess) {
+	if !session.IsDirectRuntime(sess) {
 		return nil, fmt.Errorf("session %s is not on an external runtime", sessionID)
 	}
 	runtimeType := strings.TrimSpace(sess.RuntimeType)

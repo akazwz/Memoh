@@ -49,7 +49,7 @@ type ModelCatalogProvider interface {
 	ModelCatalog(ctx context.Context, botID, botAgentID string) (ModelCatalog, error)
 }
 
-var ErrModelCatalogUnavailable = errors.New("external Agent model catalog unavailable")
+var ErrModelCatalogUnavailable = errors.New("external agent model catalog unavailable")
 
 type Drivers []Driver
 
@@ -236,7 +236,7 @@ type PromptInput struct {
 	ToolHTTPURL string
 
 	// CanRequestUserInput reports whether the surface driving this turn can
-	// deliver an ask_user round trip.
+	// deliver interactive decisions such as approvals and ask_user.
 	CanRequestUserInput bool
 
 	// Sink receives stream events as the turn runs. Never nil.

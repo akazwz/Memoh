@@ -70,7 +70,7 @@ func (s *Service) resolveRuntimeDispatch(ctx context.Context, req ChatRequest) (
 	switch {
 	case session.IsACPRuntime(sess):
 		runtimeType = session.RuntimeACPAgent
-	case session.IsExternalRuntime(sess):
+	case session.IsDirectRuntime(sess):
 		runtimeType = strings.TrimSpace(sess.RuntimeType)
 	default:
 		return runtimeDispatch{kind: dispatchNative}, nil
@@ -669,6 +669,25 @@ func (s *Service) triggerScheduleRuntime(ctx context.Context, botID string, payl
 			lifecycleCause = anchorErr
 			return schedule.TriggerResult{}, anchorErr
 		}
+	}
+	if !result.TurnCompleted && (promptErr == nil || ctx.Err() != nil) {
+		cause := promptErr
+		if cause == nil {
+			cause = context.Cause(ctx)
+		}
+		if cause == nil {
+			cause = errors.New("external schedule runtime ended before completing the turn")
+		}
+		lifecycleCause = cause
+		s.cancelPendingRuntimeApprovals(context.WithoutCancel(ctx), req, "tool approval cancelled: the scheduled run ended before a decision arrived")
+		abortedReq := req
+		abortedReq.SkipMemoryExtraction = true
+		if persistErr := s.persistRuntimeRound(context.WithoutCancel(ctx), abortedReq, runtimeType, projectPath, result, nil, false, contextLifecycle, takeTerminalReasoningTiming(reasoningTiming, native.EventAgentAbort)); persistErr != nil {
+			lifecycleCause = runtimeHistoryError(persistErr)
+			s.logger.Error("external schedule abort persist failed", slog.Any("error", persistErr), slog.String("session_id", payload.SessionID))
+			return schedule.TriggerResult{}, persistErr
+		}
+		return schedule.TriggerResult{}, cause
 	}
 	if promptErr != nil {
 		s.cancelPendingRuntimeApprovals(context.WithoutCancel(ctx), req, "tool approval cancelled: the scheduled run ended before a decision arrived")

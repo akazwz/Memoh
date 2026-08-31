@@ -36,7 +36,7 @@ ALTER TABLE schedule
   CHECK (
     run_target <> 'new_session'
     OR (runtime_type = 'acp_agent' AND acp_agent_id IS NOT NULL AND model_id IS NULL)
-    OR (runtime_type IN ('codex', 'claude-code') AND acp_agent_id IS NULL AND model_id IS NULL)
+    OR (runtime_type IN ('codex', 'claude-code') AND bot_agent_id IS NOT NULL AND acp_agent_id IS NULL AND model_id IS NULL)
     OR (COALESCE(runtime_type, 'model') = 'model' AND bot_agent_id IS NULL AND acp_agent_id IS NULL AND acp_model_id IS NULL)
   );
 
@@ -166,6 +166,7 @@ WHERE NOT EXISTS (
   WHERE agent.team_id = needed.team_id
     AND agent.bot_id = needed.bot_id
     AND agent.runtime = needed.provider
+    AND agent.enabled
     AND agent.deleted_at IS NULL
 );
 

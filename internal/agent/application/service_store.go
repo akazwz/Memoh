@@ -212,10 +212,9 @@ func (s *Service) storeMessagesResult(ctx context.Context, req ChatRequest, mess
 	if err != nil {
 		return nil, fmt.Errorf("prepare messages for persistence: %w", err)
 	}
-	// A successful ACP checkpoint is published by metadata on the final
-	// assistant row. Persist the complete round and that watermark in one
-	// transaction, otherwise a partially-written round could make a staged
-	// native snapshot visible before all canonical messages exist.
+	// Persist the complete round and any runtime checkpoint watermark in one
+	// transaction so a staged snapshot cannot become canonical before every
+	// message in its round exists.
 	if opts.RequireCompletePersist {
 		atomic, ok := s.messageService.(messagepkg.AtomicRoundPersister)
 		if !ok {

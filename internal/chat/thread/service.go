@@ -77,17 +77,16 @@ const (
 	DefaultACPProjectPath = "/data"
 )
 
-// IsExternalRuntimeType reports whether a runtime type is one of the direct
-// external agent runtimes (driven through the external.Driver port, as
-// opposed to the built-in model runtime or the ACP compatibility pool).
-func IsExternalRuntimeType(runtimeType string) bool {
+// IsDirectRuntimeType reports whether a runtime type is one of the direct
+// external agent runtimes, outside the ACP compatibility pool.
+func IsDirectRuntimeType(runtimeType string) bool {
 	return runtimekind.IsDirect(runtimeType)
 }
 
-// IsExternalRuntime reports whether a session runs on a direct external
-// agent runtime.
-func IsExternalRuntime(thread Thread) bool {
-	return IsExternalRuntimeType(normalizeRuntimeType(thread.RuntimeType, thread.Type))
+// IsDirectRuntime reports whether a session runs on a direct external agent
+// runtime.
+func IsDirectRuntime(thread Thread) bool {
+	return IsDirectRuntimeType(normalizeRuntimeType(thread.RuntimeType, thread.Type))
 }
 
 // UsesDecisionWaiter reports whether tool-approval and user-input decisions
@@ -436,7 +435,7 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (Thread, error)
 		if err := s.validateACPCreatePolicy(ctx, pgBotID, meta, strings.TrimSpace(input.BotAgentID) == ""); err != nil {
 			return Thread{}, err
 		}
-	} else if IsExternalRuntimeType(desc.RuntimeType) {
+	} else if IsDirectRuntimeType(desc.RuntimeType) {
 		meta = ApplyExternalMetadataDefaults(meta)
 		runtimeMeta = ApplyExternalMetadataDefaults(runtimeMeta)
 		meta = setACPRuntimeOwner(meta, runtimeOwnerUserID)
@@ -691,7 +690,7 @@ func (s *Service) ForkFromAssistantTurn(ctx context.Context, input ForkFromAssis
 	// External runtime sessions must fork their runtime-side session too; a
 	// caller that has not prepared one (no override) would leave two Memoh
 	// sessions sharing a single runtime session.
-	if IsExternalRuntime(source) && input.RuntimeMetadataOverride == nil {
+	if IsDirectRuntime(source) && input.RuntimeMetadataOverride == nil {
 		return Thread{}, ErrForkSourceNotChat
 	}
 
@@ -974,7 +973,7 @@ func (s *Service) updateDescriptorAndMetadata(ctx context.Context, queries Queri
 	}
 	existingRuntimeMeta := parseJSONMap(existing.RuntimeMetadata)
 	existingMeta := parseJSONMap(existing.Metadata)
-	if existingRuntime := normalizeRuntimeType(existing.RuntimeType, existing.Type); existingRuntime == RuntimeACPAgent || IsExternalRuntimeType(existingRuntime) {
+	if existingRuntime := normalizeRuntimeType(existing.RuntimeType, existing.Type); existingRuntime == RuntimeACPAgent || IsDirectRuntimeType(existingRuntime) {
 		existingRuntimeOwnerUserID := metadataString(existingRuntimeMeta, "runtime_owner_account_id")
 		if existingRuntimeOwnerUserID == "" {
 			existingRuntimeOwnerUserID = metadataString(existingMeta, "runtime_owner_account_id")
@@ -993,7 +992,7 @@ func (s *Service) updateDescriptorAndMetadata(ctx context.Context, queries Queri
 	sessionType = desc.LegacyType
 	metadata = desc.Metadata
 	runtimeMeta := desc.RuntimeMetadata
-	if desc.RuntimeType != RuntimeACPAgent && !IsExternalRuntimeType(desc.RuntimeType) {
+	if desc.RuntimeType != RuntimeACPAgent && !IsDirectRuntimeType(desc.RuntimeType) {
 		runtimeMeta = map[string]any{}
 	}
 	switch {
@@ -1010,7 +1009,7 @@ func (s *Service) updateDescriptorAndMetadata(ctx context.Context, queries Queri
 		if err := s.validateACPCreatePolicyWithQueries(ctx, queries, existing.BotID, metadata, !pgBotAgentID.Valid); err != nil {
 			return Thread{}, err
 		}
-	case IsExternalRuntimeType(desc.RuntimeType):
+	case IsDirectRuntimeType(desc.RuntimeType):
 		metadata = ApplyExternalMetadataDefaults(metadata)
 		runtimeMeta = ApplyExternalMetadataDefaults(runtimeMeta)
 		metadata = setACPRuntimeOwner(metadata, runtimeOwnerUserID)

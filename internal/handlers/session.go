@@ -363,7 +363,7 @@ func (h *SessionHandler) ForkSession(c echo.Context) error {
 	// External runtimes fork their own conversation first; the returned
 	// runtime metadata binds the Memoh fork to the runtime-side fork.
 	var runtimeMetadataOverride map[string]any
-	agentRuntimeSource := session.IsACPRuntime(source) || session.IsExternalRuntime(source)
+	agentRuntimeSource := session.IsACPRuntime(source) || session.IsDirectRuntime(source)
 	if agentRuntimeSource {
 		// Forking an agent-runtime session creates a new workspace execution
 		// surface; read access to the source is not enough.
@@ -372,7 +372,7 @@ func (h *SessionHandler) ForkSession(c echo.Context) error {
 			return echo.NewHTTPError(feedback.HTTPStatus, feedback)
 		}
 	}
-	if session.IsExternalRuntime(source) {
+	if session.IsDirectRuntime(source) {
 		if h.agentRuntimes == nil {
 			return echo.NewHTTPError(http.StatusServiceUnavailable, "agent runtime service unavailable")
 		}
@@ -886,13 +886,13 @@ func (h *SessionHandler) UpdateSession(c echo.Context) error {
 					return err
 				}
 			}
-		case session.IsExternalRuntimeType(targetRuntime):
+		case session.IsDirectRuntimeType(targetRuntime):
 			// Driver-owned keys (the codex thread id) live in runtime
 			// metadata; wiping them silently discards the runtime-side
 			// conversation, so an external target keeps both maps.
 			targetMetadata = session.ApplyExternalMetadataDefaults(targetMetadata)
 			targetRuntimeMetadata = session.ApplyExternalMetadataDefaults(targetRuntimeMetadata)
-		case session.IsACPRuntime(existing) || session.IsExternalRuntime(existing) || req.Type != nil || req.RuntimeType != nil || req.RuntimeMetadata != nil:
+		case session.IsACPRuntime(existing) || session.IsDirectRuntime(existing) || req.Type != nil || req.RuntimeType != nil || req.RuntimeMetadata != nil:
 			targetMetadata = stripACPMetadata(targetMetadata)
 			targetRuntimeMetadata = map[string]any{}
 		}
@@ -980,7 +980,7 @@ func (h *SessionHandler) DeleteSession(c echo.Context) error {
 		defer releaseRuntimeReset()
 		c.SetRequest(c.Request().WithContext(resetCtx))
 	}
-	if session.IsExternalRuntime(existing) && h.agentRuntimes == nil {
+	if session.IsDirectRuntime(existing) && h.agentRuntimes == nil {
 		return echo.NewHTTPError(http.StatusServiceUnavailable, "agent runtime service unavailable")
 	}
 	if err := h.sessionService.SoftDelete(c.Request().Context(), sessionID); err != nil {
@@ -989,7 +989,7 @@ func (h *SessionHandler) DeleteSession(c echo.Context) error {
 		}
 		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 	}
-	if session.IsExternalRuntime(existing) {
+	if session.IsDirectRuntime(existing) {
 		// A direct-runtime session being deleted must not leave its active
 		// turn executing against the workspace. Soft-delete FIRST: every new
 		// turn admission starts with a session lookup, so the tombstone is
@@ -1151,7 +1151,7 @@ func (h *SessionHandler) resolveCreateSessionWorkdir(ctx context.Context, botID,
 	if err != nil {
 		return nil, workdirHTTPError(h.logger, err)
 	}
-	if (runtimeType == session.RuntimeACPAgent || session.IsExternalRuntimeType(runtimeType)) && bound.TargetKind == workdir.TargetKindRemote {
+	if (runtimeType == session.RuntimeACPAgent || session.IsDirectRuntimeType(runtimeType)) && bound.TargetKind == workdir.TargetKindRemote {
 		return nil, echo.NewHTTPError(http.StatusBadRequest,
 			"external agent sessions cannot use a remote computer workdir yet; bind a native workspace workdir instead")
 	}
@@ -1232,13 +1232,13 @@ func sessionAgentConfigChanged(existing session.Thread, targetMode, targetRuntim
 		return true
 	}
 	trimmedRuntime := strings.TrimSpace(targetRuntime)
-	if trimmedRuntime != session.RuntimeACPAgent && !session.IsExternalRuntimeType(trimmedRuntime) {
+	if trimmedRuntime != session.RuntimeACPAgent && !session.IsDirectRuntimeType(trimmedRuntime) {
 		return false
 	}
 	existingMetadata := mergeSessionMetadata(existing.Metadata, existing.RuntimeMetadata)
 	targetMetadata = mergeSessionMetadata(targetMetadata, targetRuntimeMetadata)
 	keys := []string{"acp_agent_id", "project_path", "acp_project_mode"}
-	if session.IsExternalRuntimeType(trimmedRuntime) {
+	if session.IsDirectRuntimeType(trimmedRuntime) {
 		keys = []string{"project_path"}
 	}
 	for _, key := range keys {

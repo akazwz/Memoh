@@ -22,6 +22,7 @@ import (
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
 	"github.com/felinics/memoh/internal/agent/event"
 	acpprofile "github.com/felinics/memoh/internal/agent/runtime/acp/profile"
+	"github.com/felinics/memoh/internal/agent/sessionmode"
 	"github.com/felinics/memoh/internal/mcp"
 	"github.com/felinics/memoh/internal/runtimefence"
 	"github.com/felinics/memoh/internal/toolcontext"
@@ -932,7 +933,8 @@ func (c *clientCallbacks) requireToolApproval(ctx context.Context, toolCallID, t
 			ReplyTarget:                  session.ReplyTarget,
 			ConversationType:             session.ConversationType,
 		},
-		Interactive:    strings.TrimSpace(session.RunID) != "",
+		Interactive: strings.TrimSpace(session.RunID) != "" &&
+			!strings.EqualFold(strings.TrimSpace(session.SessionType), sessionmode.Schedule),
 		RegisterWaiter: c.approval.RegisterWaiter,
 		Emit:           c.emitToolApprovalRequest,
 		CancelOnAbort:  cancelOnAbort,

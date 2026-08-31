@@ -222,6 +222,7 @@ import type { Ref } from 'vue'
 import SettingsAcpDetail from './settings-acp-detail.vue'
 import SettingsDirectAgentDetail from './settings-direct-agent-detail.vue'
 import AddBotAgentDialog from './add-bot-agent-dialog.vue'
+import { externalAgentModelsQueryKey } from '@/composables/useAgentModelCatalog'
 import { useViewSwap } from '@/composables/useViewSwap'
 import { resolveApiErrorMessage } from '@/utils/api-error'
 import {
@@ -483,7 +484,7 @@ function refreshDirectRuntimeModels() {
   const runtime = selectedDirectRuntime.value
   const agentID = selectedAgent.value?.id
   if (!runtime || !agentID) return
-  void queryCache.invalidateQueries({ key: ['external-agent-models', runtime, props.botId, agentID] })
+  void queryCache.invalidateQueries({ key: externalAgentModelsQueryKey(runtime, props.botId, agentID) })
 }
 
 function closeDetail() {

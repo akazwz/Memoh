@@ -572,7 +572,7 @@ func (t *turnState) decide(ctx context.Context, callID, toolName string, input m
 			ToolInput:                    input,
 			Options:                      options,
 		},
-		Interactive:    true,
+		Interactive:    t.input.CanRequestUserInput,
 		RegisterWaiter: t.waiter,
 		Emit:           t.emitApprovalRequest,
 		CancelOnAbort: func(cancelCtx context.Context, req approval.Request, reason string) (approval.Request, error) {

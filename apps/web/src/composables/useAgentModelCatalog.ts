@@ -18,6 +18,10 @@ import {
 
 const ACP_SESSION_RUNTIME = 'acp_agent'
 
+export function externalAgentModelsQueryKey(runtime: string, botId: string, botAgentId: string) {
+  return ['external-agent-models', runtime, botId, botAgentId] as const
+}
+
 export interface AgentModelCatalog {
   models: ModelsGetResponse[]
   providers: ProvidersGetResponse[]
@@ -110,7 +114,7 @@ export function useAgentModelCatalog(options: UseAgentModelCatalogOptions) {
     enabled: () => isNative.value,
   })
   const directQuery = useQuery({
-    key: () => ['external-agent-models', runtime.value, botId.value, botAgentId.value],
+    key: () => externalAgentModelsQueryKey(runtime.value, botId.value, botAgentId.value),
     query: async () => {
       const { data } = await getBotsByBotIdAgentsByIdModels({
         path: { bot_id: botId.value, id: botAgentId.value },

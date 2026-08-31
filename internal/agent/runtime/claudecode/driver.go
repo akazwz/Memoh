@@ -137,7 +137,7 @@ func (d *Driver) ModelCatalog(ctx context.Context, botID, botAgentID string) (ex
 	}
 	turn := newTurnRunner(ctx, input, proc, d.approval, d.approval.RegisterWaiter, d.logger)
 	defer turn.close()
-	go turn.readLoop()
+	go turn.readLoop() //nolint:contextcheck // turnRunner owns the control-channel lifetime
 	responseCh, _, err := turn.sendControl("initialize", nil)
 	if err != nil {
 		return external.ModelCatalog{}, err
@@ -231,7 +231,10 @@ func (d *Driver) Prompt(ctx context.Context, input external.PromptInput) (extern
 		storedSessionID = ""
 	}
 	workDir := strings.TrimSpace(metadataString(input.RuntimeMetadata, "project_path"))
-	storedSessionID = d.ensureResumableSession(ctx, client, input, storedSessionID)
+	storedSessionID, err = d.ensureResumableSession(ctx, client, input, storedSessionID)
+	if err != nil {
+		return external.PromptResult{}, apperror.Wrap(apperror.CodeSessionHistoryInconsistent, err, nil)
+	}
 	// The mount must survive a caller disconnect exactly as long as the CLI
 	// process does (the interrupt handshake still runs tools).
 	mountCtx, cancelMount := context.WithCancel(context.WithoutCancel(ctx))
@@ -254,7 +257,7 @@ func (d *Driver) Prompt(ctx context.Context, input external.PromptInput) (extern
 
 	turn := newTurnRunner(ctx, input, proc, d.approval, d.approval.RegisterWaiter, d.logger)
 	defer turn.close()
-	go turn.readLoop()
+	go turn.readLoop() //nolint:contextcheck // turnRunner owns the control-channel lifetime
 	unregisterToolEvents := toolmount.RegisterTurnSink(d.toolGateway.Contexts, input.BotID, input.ThreadID, input.RunID, turn.emit)
 	defer unregisterToolEvents()
 
@@ -344,18 +347,18 @@ func (d *Driver) stageTurnCheckpoint(ctx context.Context, fs checkpointFS, input
 // is restored from the database checkpoint when one matches; otherwise the
 // turn starts a fresh session (the new id lands in the result's runtime
 // metadata) instead of failing on a resume the CLI cannot honor.
-func (d *Driver) ensureResumableSession(ctx context.Context, client checkpointFS, input external.PromptInput, storedSessionID string) string {
+func (d *Driver) ensureResumableSession(ctx context.Context, client checkpointFS, input external.PromptInput, storedSessionID string) (string, error) {
 	if storedSessionID == "" {
-		return ""
+		return "", nil
 	}
 	_, found, err := locateSessionTranscript(ctx, client, storedSessionID)
 	if err != nil {
 		d.logger.Warn("claude transcript lookup failed; attempting resume anyway",
 			slog.String("bot_id", input.BotID), slog.String("session_id", input.ThreadID), slog.Any("error", err))
-		return storedSessionID
+		return storedSessionID, nil
 	}
 	if found {
-		return storedSessionID
+		return storedSessionID, nil
 	}
 	// The workspace transcript is gone; the database checkpoint decides which
 	// session resumes. Its id wins over the stored metadata id — metadata is a
@@ -364,8 +367,7 @@ func (d *Driver) ensureResumableSession(ctx context.Context, client checkpointFS
 	// checkpoint and silently start the conversation over.
 	restoredID, err := d.restoreSessionCheckpoint(ctx, client, input.BotID, input.ThreadID)
 	if err != nil {
-		d.logger.Warn("claude checkpoint restore failed",
-			slog.String("bot_id", input.BotID), slog.String("session_id", input.ThreadID), slog.Any("error", err))
+		return "", fmt.Errorf("restore claude checkpoint: %w", err)
 	}
 	if restoredID != "" {
 		if restoredID != storedSessionID {
@@ -376,11 +378,11 @@ func (d *Driver) ensureResumableSession(ctx context.Context, client checkpointFS
 			d.logger.Info("claude transcript restored from database checkpoint",
 				slog.String("bot_id", input.BotID), slog.String("session_id", input.ThreadID))
 		}
-		return restoredID
+		return restoredID, nil
 	}
 	d.logger.Warn("claude session transcript is gone and no checkpoint exists; starting a fresh session",
 		slog.String("bot_id", input.BotID), slog.String("session_id", input.ThreadID))
-	return ""
+	return "", nil
 }
 
 // cliArgs builds the pinned stream-json invocation.

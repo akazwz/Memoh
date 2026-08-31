@@ -54,7 +54,7 @@ func (h *BotAgentsHandler) Register(e *echo.Echo) {
 // @Failure 503 {object} apperror.Problem
 // @Router /bots/{bot_id}/agents/{id}/models [get].
 func (h *BotAgentsHandler) ListModels(c echo.Context) error {
-	botID, err := h.authorize(c, bots.PermissionChat)
+	botID, err := h.authorize(c, bots.PermissionWorkspaceExec)
 	if err != nil {
 		return err
 	}
@@ -174,7 +174,9 @@ func (h *BotAgentsHandler) Update(c echo.Context) error {
 	if err != nil {
 		return h.publicError("update", err)
 	}
-	h.runtimes.ResetBotAgent(agent.Runtime, botID, agent.ID)
+	if req.Metadata != nil {
+		h.runtimes.ResetBotAgent(agent.Runtime, botID, agent.ID)
+	}
 	return c.JSON(http.StatusOK, agent)
 }
 

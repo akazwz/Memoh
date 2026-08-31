@@ -374,19 +374,35 @@ func TestRestoreSessionCheckpointRejectsEscapingPath(t *testing.T) {
 	}
 }
 
-func TestEnsureResumableSessionFallsBackToFresh(t *testing.T) {
+func TestEnsureResumableSessionFallsBackOnlyWithoutCheckpoint(t *testing.T) {
 	fs := newFakeCheckpointFS()
 	_ = fs.Mkdir(t.Context(), path.Join(configDir, projectsDirName))
 	driver := checkpointDriver(&fakeStateStore{})
 
 	input := external.PromptInput{BotID: "bot-1", ThreadID: "thread-1"}
-	if got := driver.ensureResumableSession(t.Context(), fs, input, claudeTestSession); got != "" {
-		t.Fatalf("expected fresh session, got %q", got)
+	if got, err := driver.ensureResumableSession(t.Context(), fs, input, claudeTestSession); err != nil || got != "" {
+		t.Fatalf("expected fresh session, got (%q, %v)", got, err)
 	}
 
 	fs.addFile(transcriptFullPath(), "{}\n")
-	if got := driver.ensureResumableSession(t.Context(), fs, input, claudeTestSession); got != claudeTestSession {
-		t.Fatalf("expected resume of %s, got %q", claudeTestSession, got)
+	if got, err := driver.ensureResumableSession(t.Context(), fs, input, claudeTestSession); err != nil || got != claudeTestSession {
+		t.Fatalf("expected resume of %s, got (%q, %v)", claudeTestSession, got, err)
+	}
+}
+
+func TestEnsureResumableSessionRejectsBrokenCheckpoint(t *testing.T) {
+	fs := newFakeCheckpointFS()
+	_ = fs.Mkdir(t.Context(), path.Join(configDir, projectsDirName))
+	driver := checkpointDriver(&fakeStateStore{
+		loadState: &agentstate.PersistedSessionState{
+			AgentID: RuntimeType, AgentSessionID: claudeTestSession, TranscriptPath: "outside.jsonl",
+		},
+		loadRecords: []agentstate.SessionStateRecord{{FilePath: "outside.jsonl", LineNumber: 1, Content: []byte(`{}`)}},
+	})
+
+	input := external.PromptInput{BotID: "bot-1", ThreadID: "thread-1"}
+	if got, err := driver.ensureResumableSession(t.Context(), fs, input, claudeTestSession); err == nil || got != "" {
+		t.Fatalf("broken checkpoint resume = (%q, %v), want error", got, err)
 	}
 }
 
@@ -406,8 +422,8 @@ func TestEnsureResumableSessionRestoresFromStore(t *testing.T) {
 	})
 
 	input := external.PromptInput{BotID: "bot-1", ThreadID: "thread-1"}
-	if got := driver.ensureResumableSession(t.Context(), fs, input, claudeTestSession); got != claudeTestSession {
-		t.Fatalf("expected restored resume, got %q", got)
+	if got, err := driver.ensureResumableSession(t.Context(), fs, input, claudeTestSession); err != nil || got != claudeTestSession {
+		t.Fatalf("expected restored resume, got (%q, %v)", got, err)
 	}
 	if _, ok := fs.files[path.Join(configDir, rel)]; !ok {
 		t.Fatal("transcript was not materialized")
@@ -433,8 +449,8 @@ func TestEnsureResumableSessionPrefersCheckpointOverStaleMetadata(t *testing.T) 
 	// fenced-out merge): the checkpoint's session must resume, not a fresh
 	// conversation.
 	input := external.PromptInput{BotID: "bot-1", ThreadID: "thread-1"}
-	if got := driver.ensureResumableSession(t.Context(), fs, input, "stale-metadata-session"); got != claudeTestSession {
-		t.Fatalf("expected the checkpointed session, got %q", got)
+	if got, err := driver.ensureResumableSession(t.Context(), fs, input, "stale-metadata-session"); err != nil || got != claudeTestSession {
+		t.Fatalf("expected the checkpointed session, got (%q, %v)", got, err)
 	}
 	if _, ok := fs.files[path.Join(configDir, rel)]; !ok {
 		t.Fatal("transcript was not materialized")

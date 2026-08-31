@@ -1207,7 +1207,7 @@ func (s *Service) ResolveRunConfig(ctx context.Context, botID, sessionID, channe
 	}
 
 	sessionType, runtimeType := s.resolveRunConfigSessionDescriptor(ctx, sessionID)
-	if runtimeType == sessionpkg.RuntimeACPAgent || sessionpkg.IsExternalRuntimeType(runtimeType) {
+	if runtimeType == sessionpkg.RuntimeACPAgent || sessionpkg.IsDirectRuntimeType(runtimeType) {
 		// Agent runtimes (ACP and the direct external agents) resolve their
 		// own model and prompt; only the identity travels in the run config.
 		cfg := native.RunConfig{

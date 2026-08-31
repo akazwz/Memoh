@@ -7,6 +7,7 @@
       >
         <Select
           :model-value="config.auth"
+          :disabled="credentialConnected"
           @update:model-value="setAuthMode"
         >
           <SelectTrigger class="w-full sm:w-56">
@@ -293,16 +294,13 @@ async function commitConfig(): Promise<boolean> {
 }
 
 async function setAuthMode(value: unknown) {
-  if (typeof value !== 'string' || !value || value === config.auth) return
+  if (credentialConnected.value || typeof value !== 'string' || !value || value === config.auth) return
   const previous = config.auth
-  const disconnectExisting = credentialConnected.value
   config.auth = value
   credentialSecret.value = ''
   if (!await commitConfig()) {
     config.auth = previous
-    return
   }
-  if (disconnectExisting) await disconnectCredential()
 }
 
 async function saveCredential() {

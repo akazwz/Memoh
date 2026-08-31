@@ -148,7 +148,7 @@ func (s *Service) pumpDiscuss(ctx context.Context, cmd turn.StartTurnCommand, h 
 	}
 
 	if runtimeType := strings.TrimSpace(resolved.RuntimeType); runtimeType == sessionpkg.RuntimeACPAgent ||
-		sessionpkg.IsExternalRuntimeType(runtimeType) {
+		sessionpkg.IsDirectRuntimeType(runtimeType) {
 		if !cmd.DiscussAddressed {
 			if h.emit(turn.DiscussEventSkipped, nil) {
 				h.contentLightTerminal = true

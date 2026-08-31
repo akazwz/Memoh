@@ -4084,7 +4084,7 @@ func resolveNewSessionSpecParsed(parsed command.ParsedCommand, msg channel.Inbou
 			mode = sessionpkg.TypeDiscuss
 		}
 	default:
-		if direct := normalizeACPAgentID(explicit); sessionpkg.IsExternalRuntimeType(direct) {
+		if direct := normalizeACPAgentID(explicit); sessionpkg.IsDirectRuntimeType(direct) {
 			// A bare direct external agent name ("/new codex") is a valid
 			// operand even though it has no ACP profile.
 			agentID = direct
@@ -4122,7 +4122,7 @@ func resolveNewSessionSpecParsed(parsed command.ParsedCommand, msg channel.Inbou
 	}
 	// Direct external agents (codex, claude-code) are addressed by their
 	// runtime name and never live in the ACP profile registry.
-	if sessionpkg.IsExternalRuntimeType(agentID) {
+	if sessionpkg.IsDirectRuntimeType(agentID) {
 		spec.Runtime = agentID
 		if mode != sessionpkg.TypeChat {
 			spec.Type = sessionpkg.TypeDiscuss
@@ -4231,7 +4231,7 @@ func (p *ChannelInboundProcessor) handleNewSessionCommand(
 			return err
 		}
 	}
-	if spec.Runtime == sessionpkg.RuntimeACPAgent || sessionpkg.IsExternalRuntimeType(spec.Runtime) {
+	if spec.Runtime == sessionpkg.RuntimeACPAgent || sessionpkg.IsDirectRuntimeType(spec.Runtime) {
 		if err := p.requireWorkspaceExecForACP(ctx, identity); err != nil {
 			if feedback := acpFeedbackFromError(err); feedback != nil {
 				return p.sendACPFeedbackError(ctx, sender, msg, identity, feedback)
@@ -4286,7 +4286,7 @@ func (p *ChannelInboundProcessor) handleNewSessionCommand(
 		})
 	}
 
-	if spec.Runtime == sessionpkg.RuntimeACPAgent || sessionpkg.IsExternalRuntimeType(spec.Runtime) {
+	if spec.Runtime == sessionpkg.RuntimeACPAgent || sessionpkg.IsDirectRuntimeType(spec.Runtime) {
 		spec.RuntimeOwnerAccountID = acpRuntimeOwnerPrincipal(identity, spec.RuntimeOwnerAccountID)
 	}
 	if strings.TrimSpace(spec.CreatedByUserID) == "" {
@@ -4379,7 +4379,7 @@ func newSessionConfirmModeText(spec NewSessionSpec) string {
 			return mode + " " + agentID
 		}
 	}
-	if sessionpkg.IsExternalRuntimeType(spec.Runtime) {
+	if sessionpkg.IsDirectRuntimeType(spec.Runtime) {
 		return mode + " " + spec.Runtime
 	}
 	return mode
@@ -4401,7 +4401,7 @@ func newSessionDisplayModeLabel(loc *i18n.Localizer, spec NewSessionSpec, profil
 		if runtime == "" {
 			runtime = "ACP"
 		}
-	case sessionpkg.IsExternalRuntimeType(spec.Runtime):
+	case sessionpkg.IsDirectRuntimeType(spec.Runtime):
 		runtime = spec.Runtime
 	default:
 		return mode
@@ -4808,7 +4808,7 @@ func acpFeedbackFromError(err error) *agentfeedback.Error {
 }
 
 func currentContextForNewSessionSpec(cc command.CurrentContext, spec NewSessionSpec, profiles turn.ACPProfileResolver) command.CurrentContext {
-	if sessionpkg.IsExternalRuntimeType(spec.Runtime) {
+	if sessionpkg.IsDirectRuntimeType(spec.Runtime) {
 		cc.ChatModel = spec.Runtime
 		return cc
 	}

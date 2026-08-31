@@ -31,6 +31,37 @@ type recordingSink struct {
 	events []event.StreamEvent
 }
 
+type cancelAwareApproval struct {
+	waiting  chan struct{}
+	rejected chan struct{}
+}
+
+func (*cancelAwareApproval) EvaluatePolicy(context.Context, approval.CreatePendingInput) (approval.Evaluation, error) {
+	return approval.Evaluation{Decision: approval.DecisionNeedsApproval}, nil
+}
+
+func (*cancelAwareApproval) CreatePending(_ context.Context, input approval.CreatePendingInput) (approval.Request, error) {
+	return approval.Request{
+		ID: "approval-1", BotID: input.BotID, SessionID: input.SessionID,
+		ToolCallID: input.ToolCallID, ToolName: input.ToolName, Status: approval.StatusPending,
+	}, nil
+}
+
+func (*cancelAwareApproval) Get(context.Context, string) (approval.Request, error) {
+	return approval.Request{}, approval.ErrNotFound
+}
+
+func (a *cancelAwareApproval) Reject(context.Context, string, string, string) (approval.Request, error) {
+	close(a.rejected)
+	return approval.Request{ID: "approval-1", Status: approval.StatusRejected}, nil
+}
+
+func (a *cancelAwareApproval) WaitForDecision(ctx context.Context, _ string) (approval.Request, error) {
+	close(a.waiting)
+	<-ctx.Done()
+	return approval.Request{}, ctx.Err()
+}
+
 func (s *recordingSink) EmitStreamEvent(ev event.StreamEvent) {
 	s.mu.Lock()
 	s.events = append(s.events, ev)
@@ -188,6 +219,33 @@ func TestClaudeEmitAfterCloseIsDropped(t *testing.T) {
 	if len(sink.snapshot()) != 0 {
 		t.Fatal("post-close emit must be dropped")
 	}
+}
+
+func TestClaudeControlCancelStopsPendingApproval(t *testing.T) {
+	sink := &recordingSink{}
+	approvals := &cancelAwareApproval{waiting: make(chan struct{}), rejected: make(chan struct{})}
+	proc := &testCLIProcess{done: make(chan struct{})}
+	r := newTurnRunner(context.Background(), external.PromptInput{
+		BotID: "bot-1", ThreadID: "session-1", Sink: sink, CanRequestUserInput: true,
+	}, proc, approvals, nil, slog.Default())
+
+	feed(t, r, `{"type":"control_request","request_id":"request-1","request":{"subtype":"can_use_tool","tool_name":"Bash","tool_use_id":"tool-1","input":{"command":"pwd"}}}`)
+	select {
+	case <-approvals.waiting:
+	case <-time.After(time.Second):
+		t.Fatal("approval did not begin waiting")
+	}
+	feed(t, r, `{"type":"control_cancel_request","request_id":"request-1"}`)
+	select {
+	case <-approvals.rejected:
+	case <-time.After(time.Second):
+		t.Fatal("cancelled control request did not reject its pending approval")
+	}
+	time.Sleep(10 * time.Millisecond)
+	if strings.Contains(proc.String(), `"type":"control_response"`) {
+		t.Fatalf("cancelled control request emitted a late response: %s", proc.String())
+	}
+	r.close()
 }
 
 // Claude CLI tool names must land on Memoh's policy operations; otherwise a
