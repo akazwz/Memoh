@@ -1,0 +1,115 @@
+import { readFile, rm } from 'node:fs/promises'
+import { join } from 'node:path'
+
+import {
+  ensurePrivateDirectory,
+  writeFileAtomic,
+  writeInstallManifest,
+  type RuntimeInstallManifest,
+  type RuntimePaths,
+} from '../runtime-config'
+import { createLaunchdServiceManager } from './launchd'
+import { createSystemdServiceManager } from './systemd'
+import {
+  serviceExecutablePath,
+  type CommandRunner,
+  type RuntimeServiceManager,
+  type RuntimeServiceSpec,
+} from './types'
+import { createWindowsTaskServiceManager } from './windows'
+
+export * from './types'
+export { renderLaunchdPlist } from './launchd'
+export { renderSystemdUnit } from './systemd'
+export { renderWindowsTaskXML, secureWindowsCredentialFile } from './windows'
+
+export interface RuntimeArtifactSources {
+  entryPath: string
+  protoPath: string
+}
+
+export interface StagedRuntimeArtifacts {
+  entryPath: string
+  protoPath: string
+}
+
+export async function stageRuntimeArtifacts(
+  paths: RuntimePaths,
+  version: string,
+  sources: RuntimeArtifactSources,
+): Promise<StagedRuntimeArtifacts> {
+  const versionDirectory = join(paths.versionsDir, version)
+  await ensurePrivateDirectory(versionDirectory)
+  const entryPath = join(versionDirectory, 'cli.mjs')
+  const protoPath = join(versionDirectory, 'bridge.proto')
+  await copyReplacing(sources.entryPath, entryPath, 0o700)
+  await copyReplacing(sources.protoPath, protoPath, 0o600)
+  return { entryPath, protoPath }
+}
+
+export function createRuntimeServiceManager(options: {
+  platform: NodeJS.Platform
+  paths: RuntimePaths
+  runner: CommandRunner
+  uid?: number
+}): RuntimeServiceManager {
+  switch (options.platform) {
+    case 'darwin': {
+      if (options.uid === undefined) throw new Error('launchd service installation requires a user ID')
+      return createLaunchdServiceManager(options.paths, options.runner, options.uid)
+    }
+    case 'linux':
+      return createSystemdServiceManager(options.paths, options.runner)
+    case 'win32':
+      return createWindowsTaskServiceManager(options.paths, options.runner)
+    default:
+      throw new Error(`background service installation is not supported on ${options.platform}`)
+  }
+}
+
+export function runtimeServiceSpec(options: {
+  paths: RuntimePaths
+  entryPath: string
+  nodePath: string
+  environmentPath?: string
+  platform?: NodeJS.Platform
+}): RuntimeServiceSpec {
+  return {
+    entryPath: options.entryPath,
+    configPath: options.paths.configPath,
+    nodePath: options.nodePath,
+    runtimeHome: options.paths.runtimeHome,
+    logsDir: options.paths.logsDir,
+    workingDirectory: options.paths.home,
+    servicePath: serviceExecutablePath(options.nodePath, options.environmentPath, options.platform),
+  }
+}
+
+export async function recordRuntimeServiceInstall(options: {
+  paths: RuntimePaths
+  version: string
+  backend: string
+  entryPath: string
+  nodePath: string
+}): Promise<RuntimeInstallManifest> {
+  const manifest: RuntimeInstallManifest = {
+    schemaVersion: 1,
+    packageVersion: options.version,
+    backend: options.backend,
+    entryPath: options.entryPath,
+    configPath: options.paths.configPath,
+    nodePath: options.nodePath,
+    installedAt: new Date().toISOString(),
+  }
+  await writeInstallManifest(options.paths.manifestPath, manifest)
+  return manifest
+}
+
+export async function removeRuntimeInstallManifest(paths: RuntimePaths): Promise<void> {
+  await rm(paths.manifestPath, { force: true })
+}
+
+async function copyReplacing(source: string, destination: string, mode: number): Promise<void> {
+  const content = await readFile(source)
+  await writeFileAtomic(destination, content, mode)
+}
