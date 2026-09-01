@@ -1,6 +1,6 @@
 import { mkdtemp, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 
 import { afterEach, describe, expect, it } from 'vitest'
 
@@ -70,9 +70,9 @@ describe('runtime enrollment configuration', () => {
         XDG_CONFIG_HOME: '/cfg',
       },
     })
-    expect(paths.runtimeHome).toBe('/private/memoh-runtime')
-    expect(paths.configPath).toBe('/secrets/runtime.json')
-    expect(paths.systemdUnitPath).toBe('/cfg/systemd/user/memoh-runtime.service')
+    expect(paths.runtimeHome).toBe(resolve('/private/memoh-runtime'))
+    expect(paths.configPath).toBe(resolve('/secrets/runtime.json'))
+    expect(paths.systemdUnitPath).toBe(resolve('/cfg/systemd/user/memoh-runtime.service'))
   })
 
   it.runIf(process.platform !== 'win32')('refuses to read a credential through a symbolic link', async () => {
