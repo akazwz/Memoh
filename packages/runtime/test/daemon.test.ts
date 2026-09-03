@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, readlink, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
@@ -37,6 +37,9 @@ describe('runtime background service definitions', () => {
     expect(plist).toContain('<string>/Users/a&amp;b/runtime/cli.mjs</string>')
     expect(plist).toContain('<key>KeepAlive</key>')
     expect(plist).toContain('<key>StandardErrorPath</key>')
+    // ProcessType Background makes node hang inside dyld under launchd on
+    // macOS 27 (user lookup never returns), so the agent runs as Standard.
+    expect(plist).not.toContain('ProcessType')
     expect(plist).not.toContain('mrk_')
   })
 
@@ -77,6 +80,36 @@ describe('runtime background service definitions', () => {
     expect(staged.entryPath).toBe(join(root, 'installed', 'versions', '1.2.3', 'cli.mjs'))
     expect(await readFile(staged.entryPath, 'utf8')).toContain('console.log')
     expect(await readFile(staged.protoPath, 'utf8')).toContain('proto3')
+  })
+
+  it.runIf(process.platform !== 'win32')('launches through a "Memoh Runtime" link so Login Items shows the product name', async () => {
+    const root = await temporaryDirectory()
+    const sourceEntry = join(root, 'source-cli.mjs')
+    const sourceProto = join(root, 'source-bridge.proto')
+    await writeFile(sourceEntry, 'export const ok = true\n')
+    await writeFile(sourceProto, 'syntax = "proto3";\n')
+    const paths = resolveRuntimePaths({ home: root, env: { MEMOH_RUNTIME_HOME: join(root, 'installed') } })
+
+    const first = await stageRuntimeArtifacts(paths, '1.2.3', { entryPath: sourceEntry, protoPath: sourceProto })
+    const second = await stageRuntimeArtifacts(paths, '1.2.3', { entryPath: sourceEntry, protoPath: sourceProto })
+
+    expect(second.launcherPath).toBe(join(root, 'installed', 'versions', '1.2.3', 'Memoh Runtime'))
+    expect(first.launcherPath).toBe(second.launcherPath)
+    expect(await readlink(second.launcherPath)).toBe('cli.mjs')
+    expect(await readFile(second.launcherPath, 'utf8')).toContain('ok = true')
+  })
+
+  it('launches the entry file directly on Windows', async () => {
+    const root = await temporaryDirectory()
+    const sourceEntry = join(root, 'source-cli.mjs')
+    const sourceProto = join(root, 'source-bridge.proto')
+    await writeFile(sourceEntry, 'export const ok = true\n')
+    await writeFile(sourceProto, 'syntax = "proto3";\n')
+    const paths = resolveRuntimePaths({ home: root, env: { MEMOH_RUNTIME_HOME: join(root, 'installed') } })
+
+    const staged = await stageRuntimeArtifacts(paths, '1.2.3', { entryPath: sourceEntry, protoPath: sourceProto }, 'win32')
+
+    expect(staged.launcherPath).toBe(staged.entryPath)
   })
 
   it('replaces and bootstraps one launchd job during an idempotent install', async () => {
