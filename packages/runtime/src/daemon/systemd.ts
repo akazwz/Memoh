@@ -13,7 +13,7 @@ const unitName = 'memoh-runtime.service'
 
 export function renderSystemdUnit(spec: RuntimeServiceSpec): string {
   return `[Unit]
-Description=Memoh Remote Runtime
+Description=Memoh Runtime
 
 [Service]
 Type=simple
