@@ -2,7 +2,7 @@ import { readFile, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 
 import {
-  ensurePrivateDirectory,
+  ensureDirectory,
   writeFileAtomic,
   writeInstallManifest,
   type RuntimeInstallManifest,
@@ -39,7 +39,7 @@ export async function stageRuntimeArtifacts(
   sources: RuntimeArtifactSources,
 ): Promise<StagedRuntimeArtifacts> {
   const versionDirectory = join(paths.versionsDir, version)
-  await ensurePrivateDirectory(versionDirectory)
+  await ensureDirectory(versionDirectory)
   const entryPath = join(versionDirectory, 'cli.mjs')
   const protoPath = join(versionDirectory, 'bridge.proto')
   await copyReplacing(sources.entryPath, entryPath, 0o700)

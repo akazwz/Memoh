@@ -168,8 +168,6 @@ export async function readRuntimeEnrollmentIfExists(path: string, workspaceBase 
 
 export async function writeRuntimeEnrollment(path: string, enrollment: RuntimeEnrollment): Promise<void> {
   const normalized = normalizeRuntimeEnrollment(enrollment)
-  // The default parent (~/.memoh) is shared with other Memoh components and
-  // --config may point anywhere, so only the file itself is locked down.
   await ensureDirectory(dirname(path))
   await writeFileAtomic(path, `${JSON.stringify(normalized, null, 2)}\n`, 0o600)
 }
@@ -197,7 +195,7 @@ export async function readInstallManifest(path: string): Promise<RuntimeInstallM
 }
 
 export async function writeInstallManifest(path: string, manifest: RuntimeInstallManifest): Promise<void> {
-  await ensurePrivateDirectory(dirname(path))
+  await ensureDirectory(dirname(path))
   await writeFileAtomic(path, `${JSON.stringify(manifest, null, 2)}\n`, 0o600)
 }
 
@@ -229,19 +227,14 @@ export async function writeFileAtomic(path: string, content: string | Uint8Array
   await chmod(path, mode)
 }
 
-export async function ensurePrivateDirectory(path: string): Promise<void> {
-  await ensureDirectory(path)
-  const info = await lstat(path)
-  if (process.platform !== 'win32' && (info.mode & 0o077) !== 0) {
-    throw new Error(`runtime directory permissions must be 0700: ${path}`)
-  }
-}
-
+// Directories are created private, but existing ones are left as they are:
+// ~/.memoh is shared with other Memoh components and --config may point
+// anywhere. The 0600 file mode is what protects the enrollment itself.
 export async function ensureDirectory(path: string): Promise<void> {
   await mkdir(path, { recursive: true, mode: 0o700 })
   const info = await lstat(path)
   if (!info.isDirectory() || info.isSymbolicLink()) {
-    throw new Error(`runtime directory is not a private directory: ${path}`)
+    throw new Error(`runtime directory is not a directory: ${path}`)
   }
 }
 
