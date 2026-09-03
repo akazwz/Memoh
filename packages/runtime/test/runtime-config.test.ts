@@ -1,4 +1,4 @@
-import { mkdtemp, rm, stat, symlink, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, mkdtemp, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 
@@ -46,6 +46,22 @@ describe('runtime enrollment configuration', () => {
       expect((await stat(configPath)).mode & 0o777).toBe(0o600)
       expect((await stat(join(root, 'private'))).mode & 0o777).toBe(0o700)
     }
+  })
+
+  it.runIf(process.platform !== 'win32')('keeps the key private inside a parent directory shared with other components', async () => {
+    const root = await temporaryDirectory()
+    const shared = join(root, '.memoh')
+    await mkdir(shared)
+    await chmod(shared, 0o750)
+    const configPath = join(shared, 'runtime.json')
+
+    await writeRuntimeEnrollment(configPath, normalizeRuntimeEnrollment({
+      serverUrl: 'wss://memoh.example/api',
+      key: runtimeKey,
+    }))
+
+    expect((await stat(configPath)).mode & 0o777).toBe(0o600)
+    expect((await stat(shared)).mode & 0o777).toBe(0o750)
   })
 
   it('rejects malformed and unsupported configurations without echoing the key', async () => {
