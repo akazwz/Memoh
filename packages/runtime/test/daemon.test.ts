@@ -156,6 +156,29 @@ describe('runtime background service definitions', () => {
     expect(bootstrapCalls).toBe(3)
   })
 
+  it('waits for launchd to finish tearing the job down before uninstall returns', async () => {
+    const root = await temporaryDirectory()
+    const paths = resolveRuntimePaths({ home: root, env: { MEMOH_RUNTIME_HOME: join(root, 'runtime') } })
+    const calls: string[] = []
+    let printsAfterBootout = 0
+    let bootedOut = false
+    const runner = async (_command: string, args: string[]): Promise<CommandResult> => {
+      calls.push(args[0])
+      if (args[0] === 'bootout') bootedOut = true
+      if (args[0] === 'print') {
+        if (!bootedOut) return { code: 0, stdout: 'state = running', stderr: '' }
+        printsAfterBootout++
+        return { code: printsAfterBootout <= 2 ? 0 : 113, stdout: '', stderr: '' }
+      }
+      return { code: 0, stdout: '', stderr: '' }
+    }
+
+    await createLaunchdServiceManager(paths, runner, 501, { bootstrapRetryDelayMs: 0 }).uninstall()
+
+    expect(printsAfterBootout).toBe(3)
+    expect(calls.indexOf('bootout')).toBeLessThan(calls.lastIndexOf('print'))
+  })
+
   it('gives up launchd bootstrap after repeated failures with the original error', async () => {
     const root = await temporaryDirectory()
     const paths = resolveRuntimePaths({ home: root, env: { MEMOH_RUNTIME_HOME: join(root, 'runtime') } })
