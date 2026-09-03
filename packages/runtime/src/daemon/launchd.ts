@@ -13,6 +13,7 @@ import {
 const launchdLabel = 'ai.memoh.runtime'
 const bootstrapAttempts = 5
 const defaultBootstrapRetryDelayMs = 300
+const bootoutWaitAttempts = 50
 
 export function renderLaunchdPlist(spec: RuntimeServiceSpec): string {
   return `<?xml version="1.0" encoding="UTF-8"?>
@@ -79,21 +80,28 @@ export function createLaunchdServiceManager(
     if (await loaded()) return
     await bootstrap()
   }
+  // bootout is asynchronous as well: launchctl print keeps reporting the job
+  // for a moment, which would make a status check right after stop or
+  // uninstall claim the service is still running.
+  const bootout = async () => {
+    await requireCommand(runner, launchctl, ['bootout', target], { allowedExitCodes: [0, 3] })
+    for (let attempt = 0; attempt < bootoutWaitAttempts && await loaded(); attempt++) {
+      await sleep(retryDelayMs / 3)
+    }
+  }
   return {
     backend: 'launchd-user',
     async install(spec, options = {}) {
       await mkdir(spec.logsDir, { recursive: true, mode: 0o700 })
       await writeFileAtomic(paths.launchdPlistPath, renderLaunchdPlist(spec), 0o600)
-      if (await loaded()) {
-        await requireCommand(runner, launchctl, ['bootout', target], { allowedExitCodes: [0, 3] })
-      }
+      if (await loaded()) await bootout()
       if (options.start !== false) await bootstrap()
     },
     async start() {
       await bootstrapIfUnloaded()
     },
     async stop() {
-      await requireCommand(runner, launchctl, ['bootout', target], { allowedExitCodes: [0, 3] })
+      await bootout()
     },
     async restart() {
       if (await loaded()) {
@@ -118,7 +126,7 @@ export function createLaunchdServiceManager(
       }
     },
     async uninstall() {
-      await requireCommand(runner, launchctl, ['bootout', target], { allowedExitCodes: [0, 3] })
+      await bootout()
       await rm(paths.launchdPlistPath, { force: true })
     },
   }
