@@ -1,4 +1,5 @@
 import { access, mkdir, rm } from 'node:fs/promises'
+import { setTimeout as sleep } from 'node:timers/promises'
 
 import { writeFileAtomic, type RuntimePaths } from '../runtime-config'
 import {
@@ -10,6 +11,8 @@ import {
 } from './types'
 
 const launchdLabel = 'ai.memoh.runtime'
+const bootstrapAttempts = 5
+const defaultBootstrapRetryDelayMs = 300
 
 export function renderLaunchdPlist(spec: RuntimeServiceSpec): string {
   return `<?xml version="1.0" encoding="UTF-8"?>
@@ -53,14 +56,30 @@ export function createLaunchdServiceManager(
   paths: RuntimePaths,
   runner: CommandRunner,
   uid: number,
+  options: { bootstrapRetryDelayMs?: number } = {},
 ): RuntimeServiceManager {
   const launchctl = '/bin/launchctl'
   const domain = `gui/${uid}`
   const target = `${domain}/${launchdLabel}`
+  const retryDelayMs = options.bootstrapRetryDelayMs ?? defaultBootstrapRetryDelayMs
   const loaded = async () => (await runner(launchctl, ['print', target])).code === 0
+  // `launchctl bootout` returns before launchd has finished tearing the job
+  // down, so a bootstrap issued right after it intermittently fails with
+  // "Bootstrap failed: 5: Input/output error". Retrying briefly is enough.
   const bootstrap = async () => {
+    for (let attempt = 1; ; attempt++) {
+      try {
+        await requireCommand(runner, launchctl, ['bootstrap', domain, paths.launchdPlistPath])
+        return
+      } catch (error) {
+        if (attempt >= bootstrapAttempts) throw error
+        await sleep(retryDelayMs)
+      }
+    }
+  }
+  const bootstrapIfUnloaded = async () => {
     if (await loaded()) return
-    await requireCommand(runner, launchctl, ['bootstrap', domain, paths.launchdPlistPath])
+    await bootstrap()
   }
   return {
     backend: 'launchd-user',
@@ -70,12 +89,10 @@ export function createLaunchdServiceManager(
       if (await loaded()) {
         await requireCommand(runner, launchctl, ['bootout', target], { allowedExitCodes: [0, 3] })
       }
-      if (options.start !== false) {
-        await requireCommand(runner, launchctl, ['bootstrap', domain, paths.launchdPlistPath])
-      }
+      if (options.start !== false) await bootstrap()
     },
     async start() {
-      await bootstrap()
+      await bootstrapIfUnloaded()
     },
     async stop() {
       await requireCommand(runner, launchctl, ['bootout', target], { allowedExitCodes: [0, 3] })
@@ -85,7 +102,7 @@ export function createLaunchdServiceManager(
         await requireCommand(runner, launchctl, ['kickstart', '-k', target])
         return
       }
-      await bootstrap()
+      await bootstrapIfUnloaded()
     },
     async status(): Promise<RuntimeServiceStatus> {
       const result = await runner(launchctl, ['print', target])
