@@ -203,12 +203,12 @@ async function installService(args: string[], context: CLIContext): Promise<numb
   const staged = await stageRuntimeArtifacts(paths, runtimeClientVersion, {
     entryPath: context.entryPath,
     protoPath: context.protoPath,
-  })
+  }, context.platform)
   await writeRuntimeEnrollment(paths.configPath, enrollment)
 
   const spec = runtimeServiceSpec({
     paths,
-    entryPath: staged.entryPath,
+    entryPath: staged.launcherPath,
     nodePath: context.nodePath,
     environmentPath: context.env.PATH,
     platform: context.platform,

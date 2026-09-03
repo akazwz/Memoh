@@ -1,4 +1,4 @@
-import { readFile, rm } from 'node:fs/promises'
+import { readFile, rm, symlink } from 'node:fs/promises'
 import { join } from 'node:path'
 
 import {
@@ -31,12 +31,19 @@ export interface RuntimeArtifactSources {
 export interface StagedRuntimeArtifacts {
   entryPath: string
   protoPath: string
+  // What the service manager launches. macOS lists a LaunchAgent in Login
+  // Items under its executable's file name, so on POSIX this is a
+  // "Memoh Runtime" symlink to the entry rather than "cli.mjs".
+  launcherPath: string
 }
+
+export const runtimeLauncherName = 'Memoh Runtime'
 
 export async function stageRuntimeArtifacts(
   paths: RuntimePaths,
   version: string,
   sources: RuntimeArtifactSources,
+  platform: NodeJS.Platform = process.platform,
 ): Promise<StagedRuntimeArtifacts> {
   const versionDirectory = join(paths.versionsDir, version)
   await ensureDirectory(versionDirectory)
@@ -44,7 +51,11 @@ export async function stageRuntimeArtifacts(
   const protoPath = join(versionDirectory, 'bridge.proto')
   await copyReplacing(sources.entryPath, entryPath, 0o700)
   await copyReplacing(sources.protoPath, protoPath, 0o600)
-  return { entryPath, protoPath }
+  if (platform === 'win32') return { entryPath, protoPath, launcherPath: entryPath }
+  const launcherPath = join(versionDirectory, runtimeLauncherName)
+  await rm(launcherPath, { force: true })
+  await symlink('cli.mjs', launcherPath)
+  return { entryPath, protoPath, launcherPath }
 }
 
 export function createRuntimeServiceManager(options: {

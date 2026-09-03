@@ -39,8 +39,6 @@ export function renderLaunchdPlist(spec: RuntimeServiceSpec): string {
   <true/>
   <key>KeepAlive</key>
   <true/>
-  <key>ProcessType</key>
-  <string>Background</string>
   <key>ThrottleInterval</key>
   <integer>5</integer>
   <key>StandardOutPath</key>
