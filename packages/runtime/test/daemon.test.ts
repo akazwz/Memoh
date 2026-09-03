@@ -100,6 +100,46 @@ describe('runtime background service definitions', () => {
     expect(await readFile(paths.launchdPlistPath, 'utf8')).toContain('ai.memoh.runtime')
   })
 
+  it('retries launchd bootstrap while a booted-out job is still being torn down', async () => {
+    const root = await temporaryDirectory()
+    const paths = resolveRuntimePaths({ home: root, env: { MEMOH_RUNTIME_HOME: join(root, 'runtime') } })
+    let bootstrapCalls = 0
+    const runner = async (_command: string, args: string[]): Promise<CommandResult> => {
+      if (args[0] === 'print') return { code: 0, stdout: '', stderr: '' }
+      if (args[0] === 'bootstrap') {
+        bootstrapCalls++
+        return bootstrapCalls < 3
+          ? { code: 5, stdout: '', stderr: 'Bootstrap failed: 5: Input/output error' }
+          : { code: 0, stdout: '', stderr: '' }
+      }
+      return { code: 0, stdout: '', stderr: '' }
+    }
+
+    await createLaunchdServiceManager(paths, runner, 501, { bootstrapRetryDelayMs: 0 }).install({
+      ...serviceSpec(join(root, 'cli.mjs')),
+      logsDir: paths.logsDir,
+    })
+
+    expect(bootstrapCalls).toBe(3)
+  })
+
+  it('gives up launchd bootstrap after repeated failures with the original error', async () => {
+    const root = await temporaryDirectory()
+    const paths = resolveRuntimePaths({ home: root, env: { MEMOH_RUNTIME_HOME: join(root, 'runtime') } })
+    let bootstrapCalls = 0
+    const runner = async (_command: string, args: string[]): Promise<CommandResult> => {
+      if (args[0] === 'bootstrap') {
+        bootstrapCalls++
+        return { code: 5, stdout: '', stderr: 'Bootstrap failed: 5: Input/output error' }
+      }
+      return { code: 1, stdout: '', stderr: '' }
+    }
+
+    await expect(createLaunchdServiceManager(paths, runner, 501, { bootstrapRetryDelayMs: 0 }).start())
+      .rejects.toThrow('Bootstrap failed: 5: Input/output error')
+    expect(bootstrapCalls).toBe(5)
+  })
+
   it('locks the credential ACL before registering and starting a Windows task', async () => {
     const root = await temporaryDirectory()
     const paths = resolveRuntimePaths({ home: root, env: { MEMOH_RUNTIME_HOME: join(root, 'runtime') } })
