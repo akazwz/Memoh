@@ -1,6 +1,6 @@
 import { rm } from 'node:fs/promises'
 
-import { writeFileAtomic, type RuntimePaths } from '../runtime-config'
+import { ensureDirectory, writeFileAtomic, type RuntimePaths } from '../runtime-config'
 import {
   requireCommand,
   type CommandRunner,
@@ -9,7 +9,7 @@ import {
   type RuntimeServiceStatus,
 } from './types'
 
-const taskName = '\\Memoh\\Runtime'
+// Task Scheduler names are machine-wide; isolate each account by its SID.
 
 export function renderWindowsTaskXML(spec: RuntimeServiceSpec, userId: string): string {
   const argumentsValue = [
@@ -67,85 +67,71 @@ export function renderWindowsTaskXML(spec: RuntimeServiceSpec, userId: string): 
 
 export function createWindowsTaskServiceManager(paths: RuntimePaths, runner: CommandRunner): RuntimeServiceManager {
   const schtasks = 'schtasks.exe'
-  const run = (args: string[], allowedExitCodes?: number[]) => (
-    requireCommand(runner, schtasks, args, { allowedExitCodes })
+  let identity: Promise<string> | undefined
+  const userID = () => identity ??= currentWindowsUserID(runner)
+  const taskName = async () => `\\Memoh\\Runtime-${await userID()}`
+  const inspect = async (): Promise<string> => {
+    const sid = await userID()
+    const result = await requireCommand(runner, 'powershell.exe', [
+      '-NoProfile', '-NonInteractive', '-Command',
+      `$ErrorActionPreference = 'Stop'; $task = Get-ScheduledTask | Where-Object { $_.TaskPath -eq '\\Memoh\\' -and $_.TaskName -eq 'Runtime-${sid}' }; if ($null -eq $task) { 'not-installed' } else { $owner = $task.Principal.UserId; if ($owner -notmatch '^S-1-') { $owner = ([System.Security.Principal.NTAccount]::new($owner)).Translate([System.Security.Principal.SecurityIdentifier]).Value }; if ($owner -ne '${sid}') { throw 'Runtime task belongs to another account' }; $task.State.ToString() }`,
+    ])
+    const state = result.stdout.trim().toLowerCase()
+    if (!['not-installed', 'running', 'ready', 'disabled', 'queued', 'unknown'].includes(state)) {
+      throw new Error('could not determine the Windows runtime task state')
+    }
+    return state
+  }
+  const run = async (args: string[], allowedExitCodes?: number[]) => (
+    requireCommand(runner, schtasks, [...args, '/tn', await taskName()], { allowedExitCodes })
   )
+  const stop = async () => {
+    if (['running', 'queued', 'unknown'].includes(await inspect())) await run(['/end'])
+  }
+  const start = async () => {
+    if (await inspect() === 'not-installed') throw new Error('Windows runtime task is not installed')
+    await run(['/run'])
+  }
   return {
     backend: 'windows-task-scheduler',
-    async install(spec, options = {}) {
-      const userId = await currentWindowsUserID(runner)
-      await secureWindowsCredentialFile(spec.configPath, runner, userId)
-      // Task Scheduler's XML importer recognizes UTF-16, but it also accepts a
-      // UTF-8 file whose declaration names UTF-16 inconsistently on some older
-      // builds. Write the actual UTF-16LE payload with a BOM for deterministic
-      // behavior across supported Windows versions.
+    async register(spec) {
+      const userId = await userID()
+      await inspect()
+      // Write actual UTF-16LE with a BOM for the Task Scheduler XML importer.
       const xml = renderWindowsTaskXML(spec, userId)
       const utf16 = Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(xml, 'utf16le')])
       await writeFileAtomic(paths.windowsTaskXMLPath, utf16, 0o600)
-      await run(['/create', '/tn', taskName, '/xml', paths.windowsTaskXMLPath, '/f'])
-      if (options.start !== false) await run(['/run', '/tn', taskName])
+      await run(['/create', '/xml', paths.windowsTaskXMLPath, '/f'])
     },
-    async start() {
-      await run(['/run', '/tn', taskName])
-    },
-    async stop() {
-      await run(['/end', '/tn', taskName], [0, 1])
-    },
-    async restart() {
-      await run(['/end', '/tn', taskName], [0, 1])
-      await run(['/run', '/tn', taskName])
-    },
+    start,
+    stop,
     async status(): Promise<RuntimeServiceStatus> {
-      const result = await runner('powershell.exe', [
-        '-NoProfile',
-        '-NonInteractive',
-        '-Command',
-        '(Get-ScheduledTask -TaskPath \'\\Memoh\\\' -TaskName \'Runtime\' -ErrorAction Stop).State.ToString()',
-      ])
-      if (result.code !== 0) {
-        const fallback = await runner(schtasks, ['/query', '/tn', taskName])
+      try {
+        const state = await inspect()
         return {
           backend: 'windows-task-scheduler',
-          state: fallback.code === 0 ? 'unknown' : 'not-installed',
-          detail: fallback.code === 0 ? 'Task state could not be read through PowerShell' : undefined,
+          state: state === 'running' ? 'running' : state === 'not-installed' ? 'not-installed'
+            : ['ready', 'disabled'].includes(state) ? 'stopped' : 'unknown',
         }
-      }
-      const normalized = result.stdout.toLowerCase()
-      return {
-        backend: 'windows-task-scheduler',
-        state: normalized.includes('running') ? 'running' : 'stopped',
+      } catch {
+        return { backend: 'windows-task-scheduler', state: 'unknown' }
       }
     },
     async uninstall() {
-      await run(['/end', '/tn', taskName], [0, 1])
-      await run(['/delete', '/tn', taskName, '/f'], [0, 1])
+      if (await inspect() !== 'not-installed') {
+        await stop()
+        await run(['/delete', '/f'])
+      }
       await rm(paths.windowsTaskXMLPath, { force: true })
     },
   }
 }
 
-export async function secureWindowsCredentialFile(
-  path: string,
-  runner: CommandRunner,
-  knownUserId?: string,
-): Promise<void> {
-  const userId = knownUserId ?? await currentWindowsUserID(runner)
-  const aclIdentity = /^S-1-/i.test(userId) ? `*${userId}` : userId
-  await requireCommand(runner, 'icacls.exe', [
-    path,
-    '/inheritance:r',
-    '/grant:r',
-    `${aclIdentity}:(F)`,
-  ])
-}
-
 async function currentWindowsUserID(runner: CommandRunner): Promise<string> {
   const result = await requireCommand(runner, 'whoami.exe', ['/user', '/fo', 'csv', '/nh'])
   const fields = [...result.stdout.matchAll(/"([^"]*)"/g)].map(match => match[1])
-  const sid = fields.find(field => /^S-1-/i.test(field))
+  const sid = fields.find(field => /^S-1-(?:[0-9]+-)*[0-9]+$/i.test(field))
   if (sid) return sid
-  const account = fields[0]?.trim()
-  if (account) return account
   throw new Error('could not determine the current Windows account')
 }
 
@@ -163,4 +149,44 @@ function xmlEscape(value: string): string {
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;')
     .replaceAll('\'', '&apos;')
+}
+
+// Secure the directory before writing any credential bytes. Protecting only
+// the final file leaves inherited temporary-file ACLs and replacement open.
+export async function secureWindowsDirectory(path: string, runner: CommandRunner): Promise<void> {
+  await ensureDirectory(path)
+  const literal = path.replaceAll('\'', '\'\'')
+  const script = `
+$ErrorActionPreference = 'Stop'
+$path = '${literal}'
+$sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+$trusted = @($sid.Value, 'S-1-5-18', 'S-1-5-32-544', 'S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464')
+$item = Get-Item -LiteralPath $path -Force
+while ($null -ne $item) {
+  if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Runtime directory cannot be a reparse point' }
+  $acl = Get-Acl -LiteralPath $item.FullName
+  $owner = $acl.GetOwner([System.Security.Principal.SecurityIdentifier]).Value
+  if ($trusted -notcontains $owner) { throw 'Runtime directory has an untrusted owner' }
+  foreach ($rule in $acl.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier])) {
+    if ($rule.AccessControlType -eq 'Allow' -and $trusted -notcontains $rule.IdentityReference.Value -and -not ($rule.PropagationFlags -band [Security.AccessControl.PropagationFlags]::InheritOnly)) {
+      $unsafe = [Security.AccessControl.FileSystemRights]::Delete -bor [Security.AccessControl.FileSystemRights]::DeleteSubdirectoriesAndFiles -bor [Security.AccessControl.FileSystemRights]::ChangePermissions -bor [Security.AccessControl.FileSystemRights]::TakeOwnership
+      if ($item.FullName -eq $path) { $unsafe = $unsafe -bor [Security.AccessControl.FileSystemRights]::Write -bor [Security.AccessControl.FileSystemRights]::Delete }
+      if ($rule.FileSystemRights -band $unsafe) { throw 'Runtime directory is writable by another account' }
+    }
+  }
+  $item = $item.Parent
+}
+$private = New-Object Security.AccessControl.DirectorySecurity
+$private.SetOwner($sid)
+$private.SetAccessRuleProtection($true, $false)
+foreach ($identity in @($sid.Value, 'S-1-5-18', 'S-1-5-32-544')) {
+  $principal = New-Object Security.Principal.SecurityIdentifier($identity)
+  $rule = New-Object Security.AccessControl.FileSystemAccessRule($principal, 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow')
+  $private.AddAccessRule($rule)
+}
+# Persist only the owner and DACL changes. Set-Acl can also write the SACL
+# on an already protected directory, requiring SeSecurityPrivilege.
+[IO.Directory]::SetAccessControl($path, $private)
+`
+  await requireCommand(runner, 'powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')])
 }

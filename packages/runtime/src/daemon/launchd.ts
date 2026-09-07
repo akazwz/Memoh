@@ -1,7 +1,7 @@
-import { access, mkdir, rm } from 'node:fs/promises'
+import { access, rm } from 'node:fs/promises'
 import { setTimeout as sleep } from 'node:timers/promises'
 
-import { writeFileAtomic, type RuntimePaths } from '../runtime-config'
+import { ensureDirectory, writeFileAtomic, type RuntimePaths } from '../runtime-config'
 import {
   requireCommand,
   type CommandRunner,
@@ -88,27 +88,25 @@ export function createLaunchdServiceManager(
     for (let attempt = 0; attempt < bootoutWaitAttempts && await loaded(); attempt++) {
       await sleep(retryDelayMs / 3)
     }
+    if (await loaded()) throw new Error('launchd job did not stop before the deadline')
   }
   return {
     backend: 'launchd-user',
-    async install(spec, options = {}) {
-      await mkdir(spec.logsDir, { recursive: true, mode: 0o700 })
+    async validate(spec) {
+      await ensureDirectory(spec.logsDir)
+      const path = `${spec.entryPath}.plist`
+      await writeFileAtomic(path, renderLaunchdPlist(spec), 0o600)
+      await requireCommand(runner, '/usr/bin/plutil', ['-lint', path])
+    },
+    async register(spec) {
+      await ensureDirectory(spec.logsDir)
       await writeFileAtomic(paths.launchdPlistPath, renderLaunchdPlist(spec), 0o600)
-      if (await loaded()) await bootout()
-      if (options.start !== false) await bootstrap()
     },
     async start() {
       await bootstrapIfUnloaded()
     },
     async stop() {
       await bootout()
-    },
-    async restart() {
-      if (await loaded()) {
-        await requireCommand(runner, launchctl, ['kickstart', '-k', target])
-        return
-      }
-      await bootstrapIfUnloaded()
     },
     async status(): Promise<RuntimeServiceStatus> {
       const result = await runner(launchctl, ['print', target])

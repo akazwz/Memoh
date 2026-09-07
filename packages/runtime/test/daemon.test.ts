@@ -1,6 +1,6 @@
-import { mkdtemp, readFile, readlink, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { spawnSync } from 'node:child_process'
 
 import { afterEach, describe, expect, it } from 'vitest'
@@ -26,7 +26,7 @@ afterEach(async () => {
 describe('runtime background service definitions', () => {
   it('renders a foreground worker under systemd without credentials', () => {
     const unit = renderSystemdUnit(serviceSpec('/home/alice/Memoh Runtime/cli.mjs'))
-    expect(unit).toContain('ExecStart="/home/alice/Memoh Runtime/cli.mjs" run --config "/home/alice/.memoh/runtime/config.json"')
+    expect(unit).toContain('ExecStart="/usr/local/bin/node" "/home/alice/Memoh Runtime/cli.mjs" run --config "/home/alice/.memoh/runtime/config.json"')
     expect(unit).toContain('Restart=always')
     expect(unit).toContain('UMask=0077')
     expect(unit).not.toContain('mrk_')
@@ -67,36 +67,34 @@ describe('runtime background service definitions', () => {
     const sourceProto = join(root, 'source-bridge.proto')
     await writeFile(sourceEntry, '#!/usr/bin/env node\nconsole.log("runtime")\n')
     await writeFile(sourceProto, 'syntax = "proto3";\n')
-    const paths = resolveRuntimePaths({
-      home: root,
-      env: { MEMOH_RUNTIME_HOME: join(root, 'installed') },
-    })
+    const paths = resolveRuntimePaths({ home: root })
 
     const staged = await stageRuntimeArtifacts(paths, '1.2.3', {
       entryPath: sourceEntry,
       protoPath: sourceProto,
     })
 
-    expect(staged.entryPath).toBe(join(root, 'installed', 'versions', '1.2.3', 'cli.mjs'))
+    expect(dirname(dirname(staged.entryPath))).toBe(paths.versionsDir)
+    expect(basename(dirname(staged.entryPath))).toMatch(/^1\.2\.3-/)
     expect(await readFile(staged.entryPath, 'utf8')).toContain('console.log')
     expect(await readFile(staged.protoPath, 'utf8')).toContain('proto3')
   })
 
-  it.runIf(process.platform !== 'win32')('launches through a "Memoh Runtime" link so Login Items shows the product name', async () => {
+  it('creates an immutable named macOS launcher with a pinned node path', async () => {
     const root = await temporaryDirectory()
     const sourceEntry = join(root, 'source-cli.mjs')
     const sourceProto = join(root, 'source-bridge.proto')
     await writeFile(sourceEntry, 'export const ok = true\n')
     await writeFile(sourceProto, 'syntax = "proto3";\n')
-    const paths = resolveRuntimePaths({ home: root, env: { MEMOH_RUNTIME_HOME: join(root, 'installed') } })
+    const paths = resolveRuntimePaths({ home: root })
 
-    const first = await stageRuntimeArtifacts(paths, '1.2.3', { entryPath: sourceEntry, protoPath: sourceProto })
-    const second = await stageRuntimeArtifacts(paths, '1.2.3', { entryPath: sourceEntry, protoPath: sourceProto })
+    const first = await stageRuntimeArtifacts(paths, '1.2.3', { entryPath: sourceEntry, protoPath: sourceProto }, 'darwin', '/opt/node with space/node')
+    const second = await stageRuntimeArtifacts(paths, '1.2.3', { entryPath: sourceEntry, protoPath: sourceProto }, 'darwin', '/opt/node with space/node')
 
-    expect(second.launcherPath).toBe(join(root, 'installed', 'versions', '1.2.3', 'Memoh Runtime'))
-    expect(first.launcherPath).toBe(second.launcherPath)
-    expect(await readlink(second.launcherPath)).toBe('cli.mjs')
-    expect(await readFile(second.launcherPath, 'utf8')).toContain('ok = true')
+    expect(basename(second.launcherPath)).toBe('Memoh Runtime')
+    expect(first.launcherPath).not.toBe(second.launcherPath)
+    expect(await readFile(second.launcherPath, 'utf8')).toContain('exec \'/opt/node with space/node\'')
+    expect(await readFile(second.entryPath, 'utf8')).toContain('ok = true')
   })
 
   it('launches the entry file directly on Windows', async () => {
@@ -105,40 +103,37 @@ describe('runtime background service definitions', () => {
     const sourceProto = join(root, 'source-bridge.proto')
     await writeFile(sourceEntry, 'export const ok = true\n')
     await writeFile(sourceProto, 'syntax = "proto3";\n')
-    const paths = resolveRuntimePaths({ home: root, env: { MEMOH_RUNTIME_HOME: join(root, 'installed') } })
+    const paths = resolveRuntimePaths({ home: root })
 
     const staged = await stageRuntimeArtifacts(paths, '1.2.3', { entryPath: sourceEntry, protoPath: sourceProto }, 'win32')
 
     expect(staged.launcherPath).toBe(staged.entryPath)
   })
 
-  it('replaces and bootstraps one launchd job during an idempotent install', async () => {
+  it('registers a launchd definition without loading or starting the job', async () => {
     const root = await temporaryDirectory()
-    const paths = resolveRuntimePaths({ home: root, env: { MEMOH_RUNTIME_HOME: join(root, 'runtime') } })
+    const paths = resolveRuntimePaths({ home: root })
     const calls: string[][] = []
-    let printCount = 0
     const runner = async (_command: string, args: string[]): Promise<CommandResult> => {
       calls.push(args)
-      if (args[0] === 'print') return { code: printCount++ === 0 ? 0 : 1, stdout: '', stderr: '' }
       return { code: 0, stdout: '', stderr: '' }
     }
 
-    await createLaunchdServiceManager(paths, runner, 501).install({
+    await createLaunchdServiceManager(paths, runner, 501).register({
       ...serviceSpec(join(root, 'cli.mjs')),
       logsDir: paths.logsDir,
     })
 
-    expect(calls).toContainEqual(['bootout', 'gui/501/ai.memoh.runtime'])
-    expect(calls).toContainEqual(['bootstrap', 'gui/501', paths.launchdPlistPath])
+    expect(calls).toEqual([])
     expect(await readFile(paths.launchdPlistPath, 'utf8')).toContain('ai.memoh.runtime')
   })
 
   it('retries launchd bootstrap while a booted-out job is still being torn down', async () => {
     const root = await temporaryDirectory()
-    const paths = resolveRuntimePaths({ home: root, env: { MEMOH_RUNTIME_HOME: join(root, 'runtime') } })
+    const paths = resolveRuntimePaths({ home: root })
     let bootstrapCalls = 0
     const runner = async (_command: string, args: string[]): Promise<CommandResult> => {
-      if (args[0] === 'print') return { code: 0, stdout: '', stderr: '' }
+      if (args[0] === 'print') return { code: 3, stdout: '', stderr: '' }
       if (args[0] === 'bootstrap') {
         bootstrapCalls++
         return bootstrapCalls < 3
@@ -148,17 +143,14 @@ describe('runtime background service definitions', () => {
       return { code: 0, stdout: '', stderr: '' }
     }
 
-    await createLaunchdServiceManager(paths, runner, 501, { bootstrapRetryDelayMs: 0 }).install({
-      ...serviceSpec(join(root, 'cli.mjs')),
-      logsDir: paths.logsDir,
-    })
+    await createLaunchdServiceManager(paths, runner, 501, { bootstrapRetryDelayMs: 0 }).start()
 
     expect(bootstrapCalls).toBe(3)
   })
 
   it('waits for launchd to finish tearing the job down before uninstall returns', async () => {
     const root = await temporaryDirectory()
-    const paths = resolveRuntimePaths({ home: root, env: { MEMOH_RUNTIME_HOME: join(root, 'runtime') } })
+    const paths = resolveRuntimePaths({ home: root })
     const calls: string[] = []
     let printsAfterBootout = 0
     let bootedOut = false
@@ -175,13 +167,13 @@ describe('runtime background service definitions', () => {
 
     await createLaunchdServiceManager(paths, runner, 501, { bootstrapRetryDelayMs: 0 }).uninstall()
 
-    expect(printsAfterBootout).toBe(3)
+    expect(printsAfterBootout).toBe(4)
     expect(calls.indexOf('bootout')).toBeLessThan(calls.lastIndexOf('print'))
   })
 
   it('gives up launchd bootstrap after repeated failures with the original error', async () => {
     const root = await temporaryDirectory()
-    const paths = resolveRuntimePaths({ home: root, env: { MEMOH_RUNTIME_HOME: join(root, 'runtime') } })
+    const paths = resolveRuntimePaths({ home: root })
     let bootstrapCalls = 0
     const runner = async (_command: string, args: string[]): Promise<CommandResult> => {
       if (args[0] === 'bootstrap') {
@@ -196,30 +188,85 @@ describe('runtime background service definitions', () => {
     expect(bootstrapCalls).toBe(5)
   })
 
-  it('locks the credential ACL before registering and starting a Windows task', async () => {
+  it('registers a UTF-16 Windows task without requesting its start', async () => {
     const root = await temporaryDirectory()
-    const paths = resolveRuntimePaths({ home: root, env: { MEMOH_RUNTIME_HOME: join(root, 'runtime') } })
+    const paths = resolveRuntimePaths({ home: root })
     const calls: Array<[string, string[]]> = []
     const runner = async (command: string, args: string[]): Promise<CommandResult> => {
       calls.push([command, args])
       if (command === 'whoami.exe') {
         return { code: 0, stdout: '"DESKTOP\\alice","S-1-5-21-123"\r\n', stderr: '' }
       }
-      return { code: 0, stdout: '', stderr: '' }
+      return { code: 0, stdout: command === 'powershell.exe' ? 'Ready' : '', stderr: '' }
     }
 
-    await createWindowsTaskServiceManager(paths, runner).install(serviceSpec('C:\\Memoh\\cli.mjs'))
+    await createWindowsTaskServiceManager(paths, runner).register(serviceSpec('C:\\Memoh\\cli.mjs'))
 
-    expect(calls).toContainEqual([
-      'icacls.exe',
-      [expect.any(String), '/inheritance:r', '/grant:r', '*S-1-5-21-123:(F)'],
-    ])
+    expect((await readFile(paths.windowsTaskXMLPath)).subarray(0, 2)).toEqual(Buffer.from([0xff, 0xfe]))
     expect(calls).toContainEqual([
       'schtasks.exe',
-      ['/create', '/tn', '\\Memoh\\Runtime', '/xml', paths.windowsTaskXMLPath, '/f'],
+      ['/create', '/xml', paths.windowsTaskXMLPath, '/f', '/tn', '\\Memoh\\Runtime-S-1-5-21-123'],
     ])
-    expect(calls).toContainEqual(['schtasks.exe', ['/run', '/tn', '\\Memoh\\Runtime']])
+    expect(calls.filter(([command]) => command === 'schtasks.exe')).toHaveLength(1)
   })
+
+  it('isolates Windows lifecycle operations by SID and checks the task principal', async () => {
+    const root = await temporaryDirectory()
+    const paths = resolveRuntimePaths({ home: root, env: {} })
+    for (const sid of ['S-1-5-21-123', 'S-1-5-21-456']) {
+      const calls: Array<[string, string[]]> = []
+      const manager = createWindowsTaskServiceManager(paths, async (command, args) => {
+        calls.push([command, args])
+        if (command === 'whoami.exe') return { code: 0, stdout: `"account","${sid}"`, stderr: '' }
+        return { code: 0, stdout: command === 'powershell.exe' ? 'Running' : '', stderr: '' }
+      })
+      expect((await manager.status()).state).toBe('running')
+      await manager.start()
+      await manager.stop()
+      await manager.uninstall()
+      const commands = calls.filter(([command]) => command === 'schtasks.exe')
+      expect(commands.length).toBeGreaterThan(0)
+      for (const [, args] of commands) expect(args.at(-1)).toBe(`\\Memoh\\Runtime-${sid}`)
+      const queries = calls.filter(([command]) => command === 'powershell.exe')
+      for (const [, args] of queries) {
+        expect(args.at(-1)).toContain(`$_.TaskName -eq 'Runtime-${sid}'`)
+        expect(args.at(-1)).toContain(`if ($owner -ne '${sid}')`)
+      }
+    }
+  })
+
+  it('refuses Windows mutations when the existing task has another principal', async () => {
+    const root = await temporaryDirectory()
+    const paths = resolveRuntimePaths({ home: root, env: {} })
+    const commands: string[] = []
+    const manager = createWindowsTaskServiceManager(paths, async command => {
+      commands.push(command)
+      return command === 'whoami.exe'
+        ? { code: 0, stdout: '"alice","S-1-5-21-123"', stderr: '' }
+        : { code: 1, stdout: '', stderr: 'Runtime task belongs to another account' }
+    })
+    expect((await manager.status()).state).toBe('unknown')
+    await expect(manager.register(serviceSpec('C:\\Memoh\\cli.mjs'))).rejects.toThrow('belongs to another account')
+    await expect(manager.start()).rejects.toThrow('belongs to another account')
+    await expect(manager.stop()).rejects.toThrow('belongs to another account')
+    await expect(manager.uninstall()).rejects.toThrow('belongs to another account')
+    expect(commands).not.toContain('schtasks.exe')
+  })
+
+  it('does not target a legacy global Windows task when this SID has no task', async () => {
+    const root = await temporaryDirectory()
+    const paths = resolveRuntimePaths({ home: root, env: {} })
+    const commands: string[] = []
+    const manager = createWindowsTaskServiceManager(paths, async command => {
+      commands.push(command)
+      return { code: 0, stdout: command === 'whoami.exe' ? '"alice","S-1-5-21-123"' : 'not-installed', stderr: '' }
+    })
+    expect((await manager.status()).state).toBe('not-installed')
+    await manager.stop()
+    await manager.uninstall()
+    expect(commands).not.toContain('schtasks.exe')
+  })
+
 })
 
 function serviceSpec(entryPath: string): RuntimeServiceSpec {
@@ -231,7 +278,6 @@ function serviceSpec(entryPath: string): RuntimeServiceSpec {
         ? '/Users/a&b/.memoh/runtime/config.json'
         : '/home/alice/.memoh/runtime/config.json',
     nodePath: entryPath.startsWith('C:') ? 'C:\\Program Files\\nodejs\\node.exe' : '/usr/local/bin/node',
-    runtimeHome: '/runtime',
     logsDir: entryPath.startsWith('/Users') ? '/Users/a&b/.memoh/runtime/logs' : '/runtime/logs',
     workingDirectory: entryPath.startsWith('C:') ? 'C:\\Users\\Alice' : '/home/alice',
     servicePath: '/usr/local/bin:/usr/bin:/bin',

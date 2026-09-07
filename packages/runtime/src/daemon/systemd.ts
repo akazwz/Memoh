@@ -1,3 +1,4 @@
+import { dirname, join } from 'node:path'
 import { rm } from 'node:fs/promises'
 
 import { nodeErrorCode, writeFileAtomic, type RuntimePaths } from '../runtime-config'
@@ -12,14 +13,15 @@ import {
 const unitName = 'memoh-runtime.service'
 
 export function renderSystemdUnit(spec: RuntimeServiceSpec): string {
+  // systemd expands dollars in argv, but the executable path is resolved separately.
   return `[Unit]
 Description=Memoh Runtime
 
 [Service]
 Type=simple
-Environment=${systemdQuote(`PATH=${spec.servicePath}`)}
-ExecStart=${systemdQuote(spec.entryPath)} run --config ${systemdQuote(spec.configPath)}
-WorkingDirectory=${systemdQuote(spec.workingDirectory)}
+Environment=${systemdQuote(`PATH=${spec.servicePath}`, false)}
+ExecStart=${systemdQuote(spec.nodePath, false)} ${systemdQuote(spec.entryPath)} run --config ${systemdQuote(spec.configPath)}
+WorkingDirectory=${systemdPath(spec.workingDirectory)}
 UMask=0077
 Restart=always
 RestartSec=5
@@ -38,10 +40,15 @@ export function createSystemdServiceManager(paths: RuntimePaths, runner: Command
   )
   return {
     backend: 'systemd-user',
-    async install(spec, options = {}) {
+    async validate(spec) {
+      const path = join(dirname(spec.entryPath), unitName)
+      await writeFileAtomic(path, renderSystemdUnit(spec), 0o600)
+      await requireCommand(runner, 'systemd-analyze', ['--user', 'verify', path])
+    },
+    async register(spec) {
       await writeFileAtomic(paths.systemdUnitPath, renderSystemdUnit(spec), 0o600)
       await run(['daemon-reload'])
-      await run(options.start === false ? ['enable', unitName] : ['enable', '--now', unitName])
+      await run(['enable', paths.systemdUnitPath])
     },
     async start() {
       await run(['start', unitName])
@@ -49,26 +56,18 @@ export function createSystemdServiceManager(paths: RuntimePaths, runner: Command
     async stop() {
       await run(['stop', unitName], [0, 5])
     },
-    async restart() {
-      await run(['restart', unitName])
-    },
     async status(): Promise<RuntimeServiceStatus> {
-      const result = await runner(systemctl, [...baseArgs, 'is-active', unitName])
-      if (result.code === 0 && result.stdout.trim() === 'active') {
-        return { backend: 'systemd-user', state: 'running' }
-      }
-      try {
-        const enabled = await runner(systemctl, [...baseArgs, 'is-enabled', unitName])
-        if (enabled.code !== 0 && result.code === 4) {
-          return { backend: 'systemd-user', state: 'not-installed' }
-        }
-      } catch {
-        // is-active already provides the best available local state.
-      }
+      const result = await runner(systemctl, [...baseArgs, 'show', unitName, '--property=LoadState,ActiveState,SubState,MainPID'])
+      const fields = Object.fromEntries(result.stdout.trim().split('\n').map(line => line.split('=')))
+      if (fields.LoadState === 'not-found') return { backend: 'systemd-user', state: 'not-installed' }
+      if (result.code !== 0 || fields.LoadState !== 'loaded') return { backend: 'systemd-user', state: 'unknown', detail: fields.LoadState }
+      const pid = Number(fields.MainPID)
       return {
         backend: 'systemd-user',
-        state: result.code === 4 ? 'not-installed' : 'stopped',
-        detail: result.stderr.trim() || result.stdout.trim() || undefined,
+        state: fields.ActiveState === 'active' && fields.SubState === 'running' && pid > 0 ? 'running'
+          : ['inactive', 'failed'].includes(fields.ActiveState) ? 'stopped' : 'unknown',
+        pid: pid > 0 ? pid : undefined,
+        detail: fields.SubState,
       }
     },
     async uninstall() {
@@ -84,9 +83,16 @@ export function createSystemdServiceManager(paths: RuntimePaths, runner: Command
   }
 }
 
-function systemdQuote(value: string): string {
+function systemdQuote(value: string, expandDollar = true): string {
+  if (expandDollar) value = value.replaceAll('$', () => '$$')
   if (value.includes('\0') || value.includes('\n') || value.includes('\r')) {
     throw new Error('systemd service value contains unsupported control characters')
   }
   return `"${value.replaceAll('\\', '\\\\').replaceAll('"', '\\"').replaceAll('%', '%%')}"`
+}
+
+// Path-valued directives do not use ExecStart's argument unquoting rules.
+function systemdPath(value: string): string {
+  if (!value.startsWith('/') || value.trim() !== value || /[\\\0\n\r]/.test(value)) throw new Error('invalid systemd working directory')
+  return value.replaceAll('%', '%%')
 }

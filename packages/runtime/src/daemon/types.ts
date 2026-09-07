@@ -5,6 +5,7 @@ export type RuntimeServiceState = 'not-installed' | 'running' | 'stopped' | 'unk
 export interface RuntimeServiceStatus {
   backend: string
   state: RuntimeServiceState
+  pid?: number
   detail?: string
 }
 
@@ -12,7 +13,6 @@ export interface RuntimeServiceSpec {
   entryPath: string
   configPath: string
   nodePath: string
-  runtimeHome: string
   logsDir: string
   workingDirectory: string
   servicePath: string
@@ -20,10 +20,10 @@ export interface RuntimeServiceSpec {
 
 export interface RuntimeServiceManager {
   readonly backend: string
-  install(spec: RuntimeServiceSpec, options?: { start?: boolean }): Promise<void>
+  validate?(spec: RuntimeServiceSpec): Promise<void>
+  register(spec: RuntimeServiceSpec): Promise<void>
   start(): Promise<void>
   stop(): Promise<void>
-  restart(): Promise<void>
   status(): Promise<RuntimeServiceStatus>
   uninstall(): Promise<void>
 }
@@ -60,8 +60,10 @@ export const spawnCommand: CommandRunner = (command, args, options = {}) => (
     child.stderr.on('data', (chunk: string) => {
       if (stderr.length < maxCommandOutputBytes) stderr += chunk.slice(0, maxCommandOutputBytes - stderr.length)
     })
-    child.once('error', reject)
-    child.once('close', code => resolve({ code: code ?? 1, stdout, stderr }))
+    const timer = setTimeout(() => { child.kill(); reject(new Error(`${command} timed out`)) }, 30_000)
+    timer.unref()
+    child.once('error', error => { clearTimeout(timer); reject(error) })
+    child.once('close', code => { clearTimeout(timer); resolve({ code: code ?? 1, stdout, stderr }) })
   })
 )
 

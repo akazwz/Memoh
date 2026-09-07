@@ -67,7 +67,7 @@ describe('runtime enrollment configuration', () => {
   it('rejects malformed and unsupported configurations without echoing the key', async () => {
     const root = await temporaryDirectory()
     const configPath = join(root, 'config.json')
-    await writeFile(configPath, JSON.stringify({ schemaVersion: 2, serverUrl: 'https://example.com', key: runtimeKey }))
+    await writeFile(configPath, JSON.stringify({ schemaVersion: 2, serverUrl: 'https://example.com', key: runtimeKey }), { mode: 0o600 })
 
     await expect(readRuntimeEnrollment(configPath, root)).rejects.toThrow('unsupported schema version')
     await expect(readRuntimeEnrollment(configPath, root)).rejects.not.toThrow(runtimeKey)
@@ -77,7 +77,7 @@ describe('runtime enrollment configuration', () => {
     }, root)).toThrow('query string or fragment')
   })
 
-  it('resolves one private runtime home and honors explicit path overrides', () => {
+  it('uses fixed managed paths regardless of input environment', () => {
     const paths = resolveRuntimePaths({
       home: '/Users/alice',
       env: {
@@ -86,9 +86,9 @@ describe('runtime enrollment configuration', () => {
         XDG_CONFIG_HOME: '/cfg',
       },
     })
-    expect(paths.runtimeHome).toBe(resolve('/private/memoh-runtime'))
-    expect(paths.configPath).toBe(resolve('/secrets/runtime.json'))
-    expect(paths.systemdUnitPath).toBe(resolve('/cfg/systemd/user/memoh-runtime.service'))
+    expect(paths.runtimeHome).toBe(resolve('/Users/alice/.memoh/runtime'))
+    expect(paths.configPath).toBe(resolve('/Users/alice/.memoh/runtime.json'))
+    expect(paths.systemdUnitPath).toBe(resolve('/Users/alice/.memoh/runtime/service/memoh-runtime.service'))
   })
 
   it.runIf(process.platform !== 'win32')('refuses to read a credential through a symbolic link', async () => {
@@ -104,7 +104,7 @@ describe('runtime enrollment configuration', () => {
     await expect(readRuntimeEnrollment(link, root)).rejects.toThrow('could not be read safely')
   })
 
-  it('uses runtime identity when deciding whether an install is idempotent', () => {
+  it('requires replacement for any enrollment change, including key rotation', () => {
     const first = normalizeRuntimeEnrollment({ runtimeId: runtimeID, serverUrl: 'https://one.example', key: runtimeKey })
     const reissued = normalizeRuntimeEnrollment({ runtimeId: runtimeID, serverUrl: 'https://one.example', key: `mrk_${'b'.repeat(64)}` })
     const moved = normalizeRuntimeEnrollment({ runtimeId: runtimeID, serverUrl: 'https://two.example', key: runtimeKey })
@@ -113,7 +113,7 @@ describe('runtime enrollment configuration', () => {
       serverUrl: 'https://one.example',
       key: runtimeKey,
     })
-    expect(sameEnrollment(first, reissued)).toBe(true)
+    expect(sameEnrollment(first, reissued)).toBe(false)
     expect(sameEnrollment(first, moved)).toBe(false)
     expect(sameEnrollment(first, other)).toBe(false)
   })
@@ -124,3 +124,19 @@ async function temporaryDirectory(): Promise<string> {
   temporaryDirectories.push(path)
   return path
 }
+
+it.runIf(process.platform !== 'win32')('rejects a writable ancestor even when the immediate parent is private', async () => {
+  const root = await temporaryDirectory()
+  const shared = join(root, 'shared')
+  const privateDirectory = join(shared, 'private')
+  await mkdir(privateDirectory, { recursive: true, mode: 0o700 })
+  await chmod(shared, 0o777)
+  await expect(writeRuntimeEnrollment(join(privateDirectory, 'config.json'), normalizeRuntimeEnrollment({ serverUrl: 'https://one.example', key: runtimeKey }))).rejects.toThrow('not writable')
+})
+
+it.runIf(process.platform !== 'win32')('rejects a symlinked ancestor', async () => {
+  const root = await temporaryDirectory()
+  await mkdir(join(root, 'target'))
+  await symlink(join(root, 'target'), join(root, 'link'))
+  await expect(writeRuntimeEnrollment(join(root, 'link', 'nested', 'config.json'), normalizeRuntimeEnrollment({ serverUrl: 'https://one.example', key: runtimeKey }))).rejects.toThrow('unsafe runtime directory')
+})

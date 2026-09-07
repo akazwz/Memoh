@@ -1,18 +1,13 @@
-import { randomUUID } from 'node:crypto'
-import {
-  chmod,
-  lstat,
-  mkdir,
-  open,
-  readFile,
-  rename,
-  rm,
-} from 'node:fs/promises'
+import { lstat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 
+import { ensureDirectory, readPrivateFile, writeFileAtomic } from './secure-files'
+import type { RuntimeServiceSpec } from './daemon/types'
+export { ensureDirectory, writeFileAtomic } from './secure-files'
+
 import { normalizeRuntimeTeamId, validateConfig } from './config'
-import { normalizeRuntimeServerUrl } from './server-url'
+import { assertSecureRuntimeUrl, runtimeConnectUrl, normalizeRuntimeServerUrl } from './server-url'
 
 export const runtimeEnrollmentSchemaVersion = 1
 
@@ -29,12 +24,8 @@ export interface RuntimeEnrollment {
 
 export interface RuntimeInstallManifest {
   schemaVersion: 1
-  packageVersion: string
-  backend: string
-  entryPath: string
-  configPath: string
-  nodePath: string
-  installedAt: string
+  state: 'prepared' | 'installed'
+  spec: RuntimeServiceSpec
 }
 
 export interface RuntimePaths {
@@ -44,6 +35,7 @@ export interface RuntimePaths {
   versionsDir: string
   manifestPath: string
   logsDir: string
+  controlHome: string
   launchdPlistPath: string
   systemdUnitPath: string
   windowsTaskXMLPath: string
@@ -56,19 +48,18 @@ export interface RuntimePathOptions {
 
 export function resolveRuntimePaths(options: RuntimePathOptions = {}): RuntimePaths {
   const home = resolve(options.home ?? homedir())
-  const env = options.env ?? process.env
-  const runtimeHome = resolve(nonEmpty(env.MEMOH_RUNTIME_HOME) ?? join(home, '.memoh', 'runtime'))
-  const configPath = resolve(nonEmpty(env.MEMOH_RUNTIME_CONFIG) ?? join(home, '.memoh', 'runtime.json'))
-  const xdgConfigHome = resolve(nonEmpty(env.XDG_CONFIG_HOME) ?? join(home, '.config'))
+  const runtimeHome = join(home, '.memoh', 'runtime')
+  const configPath = join(home, '.memoh', 'runtime.json')
   return {
     home,
     runtimeHome,
     configPath,
     versionsDir: join(runtimeHome, 'versions'),
+    controlHome: runtimeHome,
     manifestPath: join(runtimeHome, 'install.json'),
     logsDir: join(runtimeHome, 'logs'),
     launchdPlistPath: join(home, 'Library', 'LaunchAgents', 'ai.memoh.runtime.plist'),
-    systemdUnitPath: join(xdgConfigHome, 'systemd', 'user', 'memoh-runtime.service'),
+    systemdUnitPath: join(runtimeHome, 'service', 'memoh-runtime.service'),
     windowsTaskXMLPath: join(runtimeHome, 'service', 'memoh-runtime-task.xml'),
   }
 }
@@ -94,6 +85,7 @@ export function normalizeRuntimeEnrollment(input: {
     workspaceBase,
     insecureLocalhost,
   })
+  assertSecureRuntimeUrl(runtimeConnectUrl(rawServerUrl), insecureLocalhost)
   const serverUrl = normalizeRuntimeServerUrl(rawServerUrl)
   return {
     schemaVersion: runtimeEnrollmentSchemaVersion,
@@ -108,9 +100,7 @@ export function normalizeRuntimeEnrollment(input: {
 export async function readRuntimeEnrollment(path: string, workspaceBase = homedir()): Promise<RuntimeEnrollment> {
   let raw: string
   try {
-    const info = await lstat(path)
-    if (info.isSymbolicLink()) throw new Error('symbolic link')
-    raw = await readFile(path, 'utf8')
+    raw = await readPrivateFile(path)
   } catch (error) {
     if (nodeErrorCode(error) === 'ENOENT') {
       throw new Error(`runtime configuration was not found at ${path}`)
@@ -175,17 +165,15 @@ export async function writeRuntimeEnrollment(path: string, enrollment: RuntimeEn
 export async function readInstallManifest(path: string): Promise<RuntimeInstallManifest | undefined> {
   let raw: string
   try {
-    raw = await readFile(path, 'utf8')
+    raw = await readPrivateFile(path)
   } catch (error) {
     if (nodeErrorCode(error) === 'ENOENT') return undefined
     throw new Error(`runtime install manifest could not be read at ${path}`)
   }
   try {
     const parsed = JSON.parse(raw) as Partial<RuntimeInstallManifest> | null
-    if (!parsed || parsed.schemaVersion !== 1 || typeof parsed.packageVersion !== 'string'
-      || typeof parsed.backend !== 'string' || typeof parsed.entryPath !== 'string'
-      || typeof parsed.configPath !== 'string' || typeof parsed.nodePath !== 'string'
-      || typeof parsed.installedAt !== 'string') {
+    if (!parsed || parsed.schemaVersion !== 1 || !['prepared', 'installed'].includes(parsed.state ?? '') || !parsed.spec
+      || !['entryPath', 'configPath', 'nodePath', 'logsDir', 'workingDirectory', 'servicePath'].every(key => typeof (parsed.spec as unknown as Record<string, unknown>)[key] === 'string')) {
       throw new Error('invalid manifest')
     }
     return parsed as RuntimeInstallManifest
@@ -199,54 +187,10 @@ export async function writeInstallManifest(path: string, manifest: RuntimeInstal
   await writeFileAtomic(path, `${JSON.stringify(manifest, null, 2)}\n`, 0o600)
 }
 
-export async function writeFileAtomic(path: string, content: string | Uint8Array, mode: number): Promise<void> {
-  const directory = dirname(path)
-  await mkdir(directory, { recursive: true })
-  const temporary = join(directory, `.${randomUUID()}.tmp`)
-  const handle = await open(temporary, 'wx', mode)
-  try {
-    await handle.writeFile(content)
-    await handle.sync()
-  } finally {
-    await handle.close()
-  }
-  await chmod(temporary, mode)
-  try {
-    await rename(temporary, path)
-  } catch (error) {
-    // Windows does not replace an existing destination atomically. Keep the
-    // POSIX path atomic, and use the narrow remove-then-rename fallback only
-    // for the Windows error shapes.
-    if (process.platform !== 'win32' || !['EEXIST', 'EPERM'].includes(nodeErrorCode(error) ?? '')) {
-      await rm(temporary, { force: true })
-      throw error
-    }
-    await rm(path, { force: true })
-    await rename(temporary, path)
-  }
-  await chmod(path, mode)
-}
-
-// Directories are created private, but existing ones are left as they are:
-// ~/.memoh is shared with other Memoh components and --config may point
-// anywhere. The 0600 file mode is what protects the enrollment itself.
-export async function ensureDirectory(path: string): Promise<void> {
-  await mkdir(path, { recursive: true, mode: 0o700 })
-  const info = await lstat(path)
-  if (!info.isDirectory() || info.isSymbolicLink()) {
-    throw new Error(`runtime directory is not a directory: ${path}`)
-  }
-}
-
 export function sameEnrollment(left: RuntimeEnrollment, right: RuntimeEnrollment): boolean {
-  if (left.runtimeId && right.runtimeId) {
-    return left.runtimeId === right.runtimeId
-      && left.serverUrl === right.serverUrl
-      && (!left.teamId || !right.teamId || left.teamId === right.teamId)
-  }
-  return left.serverUrl === right.serverUrl
-    && left.key === right.key
-    && left.teamId === right.teamId
+  return left.serverUrl === right.serverUrl && left.key === right.key
+    && left.runtimeId === right.runtimeId && left.teamId === right.teamId
+    && left.insecureLocalhost === right.insecureLocalhost
 }
 
 export function parseBooleanEnvironment(value: string | undefined, name: string): boolean | undefined {
@@ -270,8 +214,4 @@ function normalizeRuntimeID(value: string | undefined): string | undefined {
     throw new Error('runtime ID must be a UUID')
   }
   return normalized
-}
-
-function nonEmpty(value: string | undefined): string | undefined {
-  return value?.trim() || undefined
 }

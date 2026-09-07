@@ -1,154 +1,171 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-
 import { afterEach, describe, expect, it, vi } from 'vitest'
-
 import { runCLI, type CLIContext } from '../src/cli-main'
-import type { CommandResult } from '../src/daemon'
-import { readRuntimeEnrollment, resolveRuntimePaths } from '../src/runtime-config'
+import { readInstallManifest, readRuntimeEnrollment, resolveRuntimePaths, writeRuntimeEnrollment, normalizeRuntimeEnrollment } from '../src/runtime-config'
 
-const runtimeKey = `mrk_${'a'.repeat(64)}`
-const replacementKey = `mrk_${'b'.repeat(64)}`
-const runtimeID = '11111111-1111-4111-8111-111111111111'
-const replacementRuntimeID = '22222222-2222-4222-8222-222222222222'
-const temporaryDirectories: string[] = []
+const keyA = `mrk_${'a'.repeat(64)}`
+const keyB = `mrk_${'b'.repeat(64)}`
+const flagsA = ['--server', 'https://one.example', '--key', keyA]
+const flagsB = ['--server', 'https://two.example', '--key', keyB]
+const roots: string[] = []
+afterEach(async () => { await Promise.all(roots.splice(0).map(path => rm(path, { recursive: true, force: true }))) })
 
-afterEach(async () => {
-  await Promise.all(temporaryDirectories.splice(0).map(path => rm(path, { recursive: true, force: true })))
+describe('runtime CLI command ownership', () => {
+  it('saves enrollment explicitly and keeps temporary runs read-only', async () => {
+    const f = await fixture()
+    await runCLI(flagsA, f.context)
+    await expect(readFile(f.paths.configPath)).rejects.toMatchObject({ code: 'ENOENT' })
+    await runCLI(['enroll', ...flagsA], f.context)
+    expect(f.context.runner).not.toHaveBeenCalled()
+    await runCLI(['run', ...flagsB], f.context)
+    await runCLI([], f.context)
+    expect(f.createSession).toHaveBeenLastCalledWith(expect.objectContaining({ key: keyA }), expect.any(Object))
+    expect((await readRuntimeEnrollment(f.paths.configPath)).key).toBe(keyA)
+  })
+
+  it('requires explicit replacement for imported credentials and repairs corrupt enrollment', async () => {
+    const f = await fixture()
+    await runCLI(['enroll', ...flagsA], f.context)
+    const other = join(f.root, 'other.json')
+    await writeRuntimeEnrollment(other, normalizeRuntimeEnrollment({ serverUrl: 'https://two.example', key: keyB }))
+    await expect(runCLI(['enroll', '--config', other], f.context)).rejects.toThrow('--replace')
+    await runCLI(['enroll', '--config', other, '--replace'], f.context)
+    expect((await readRuntimeEnrollment(f.paths.configPath)).key).toBe(keyB)
+    await writeFile(f.paths.configPath, '{broken')
+    await runCLI(['enroll', ...flagsA, '--replace'], f.context)
+    expect((await readRuntimeEnrollment(f.paths.configPath)).key).toBe(keyA)
+    expect(f.context.runner).not.toHaveBeenCalled()
+  })
+
+  it('treats explicit config as read-only input and ignores inherited credentials', async () => {
+    const f = await fixture()
+    const input = join(f.root, 'input.json')
+    await writeRuntimeEnrollment(input, normalizeRuntimeEnrollment({ serverUrl: 'https://one.example', key: keyA }))
+    await runCLI(['run', '--config', input], { ...f.context, env: { MEMOH_RUNTIME_SERVER: 'https://two.example', MEMOH_RUNTIME_KEY: keyB } })
+    expect(f.createSession).toHaveBeenLastCalledWith(expect.objectContaining({ key: keyA }), expect.any(Object))
+    await expect(readFile(f.paths.configPath)).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  it('installs without credentials and starts only after explicit enrollment and start', async () => {
+    const f = await fixture()
+    await runCLI(['service', 'install'], f.context)
+    expect(await runCLI(['service', 'status'], f.context)).toBe(1)
+    await expect(readFile(f.paths.configPath)).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(runCLI(['service', 'start'], f.context)).rejects.toThrow()
+    await runCLI(['enroll', ...flagsA], f.context)
+    await runCLI(['service', 'start'], f.context)
+    expect(await runCLI(['service', 'status'], f.context)).toBe(0)
+    const previous = (await readInstallManifest(f.paths.manifestPath))!
+    await runCLI(['service', 'install'], f.context)
+    const next = (await readInstallManifest(f.paths.manifestPath))!
+    expect(next.spec.entryPath).not.toBe(previous.spec.entryPath)
+    expect(await runCLI(['service', 'status'], f.context)).toBe(1)
+    expect((await readRuntimeEnrollment(f.paths.configPath)).key).toBe(keyA)
+    expect(await readFile(f.paths.systemdUnitPath, 'utf8')).not.toContain(keyA)
+    expect(await readFile(f.paths.manifestPath, 'utf8')).not.toContain(keyA)
+  })
+
+  it('validates restart before stopping a running process', async () => {
+    const f = await fixture()
+    await runCLI(['enroll', ...flagsA], f.context)
+    await runCLI(['service', 'install'], f.context)
+    await runCLI(['service', 'start'], f.context)
+    const pid = f.pid()
+    await writeFile(f.paths.configPath, '{broken')
+    await expect(runCLI(['service', 'restart'], f.context)).rejects.toThrow()
+    expect(await runCLI(['service', 'status'], f.context)).toBe(0)
+    expect(f.pid()).toBe(pid)
+  })
+
+  it.each(['http://remote.example', 'http://localhost:8080'])('rejects unsafe transport before saving or stopping (%s)', async (server) => {
+    const f = await fixture()
+    await expect(runCLI(['enroll', '--server', server, '--key', keyA], f.context)).rejects.toThrow('require wss')
+    await runCLI(['enroll', ...flagsA], f.context)
+    await runCLI(['service', 'install'], f.context)
+    await runCLI(['service', 'start'], f.context)
+    const saved = JSON.parse(await readFile(f.paths.configPath, 'utf8'))
+    await writeFile(f.paths.configPath, JSON.stringify({ ...saved, serverUrl: server }))
+    await expect(runCLI(['service', 'restart'], f.context)).rejects.toThrow('require wss')
+    expect(await runCLI(['service', 'status'], f.context)).toBe(0)
+  })
+
+  it.runIf(process.platform !== 'win32')('does not stop a running process when its installed program loses execution permission', async () => {
+    const f = await fixture()
+    await runCLI(['enroll', ...flagsA], f.context)
+    await runCLI(['service', 'install'], f.context)
+    await runCLI(['service', 'start'], f.context)
+    const installation = (await readInstallManifest(f.paths.manifestPath))!
+    await chmod(installation.spec.entryPath, 0o600)
+    await expect(runCLI(['service', 'restart'], f.context)).rejects.toThrow()
+    expect(await runCLI(['service', 'status'], f.context)).toBe(0)
+  })
+
+  it('stops and uninstalls despite corrupt records; purge retains enrollment', async () => {
+    const f = await fixture()
+    await runCLI(['enroll', ...flagsA], f.context)
+    await runCLI(['service', 'install'], f.context)
+    await runCLI(['service', 'start'], f.context)
+    await writeFile(f.paths.manifestPath, '{broken')
+    await writeFile(f.paths.configPath, '{broken')
+    const pid = f.pid()
+    await runCLI(['service', 'stop'], f.context)
+    await runCLI(['service', 'uninstall', '--purge'], f.context)
+    expect(f.pid()).toBe(pid)
+    expect(await readFile(f.paths.configPath, 'utf8')).toBe('{broken')
+    await expect(readFile(f.paths.manifestPath)).rejects.toMatchObject({ code: 'ENOENT' })
+    await runCLI(['service', 'install'], f.context)
+    expect((await readInstallManifest(f.paths.manifestPath))?.state).toBe('installed')
+  })
+
+  it('refuses incomplete installation and allows retry', async () => {
+    const f = await fixture()
+    const runner = f.context.runner!
+    f.context.runner = async (command, args, options) => args.includes('enable')
+      ? { code: 1, stdout: '', stderr: 'registration failed' } : runner(command, args, options)
+    await expect(runCLI(['service', 'install'], f.context)).rejects.toThrow('registration failed')
+    expect((await readInstallManifest(f.paths.manifestPath))?.state).toBe('prepared')
+    await expect(runCLI(['service', 'start'], f.context)).rejects.toThrow('incomplete')
+    f.context.runner = runner
+    await runCLI(['service', 'install'], f.context)
+    expect((await readInstallManifest(f.paths.manifestPath))?.state).toBe('installed')
+  })
+
+  it('keeps managed paths fixed and rejects mixed command responsibilities', async () => {
+    const f = await fixture()
+    await expect(runCLI(['service', 'install', ...flagsA], f.context)).rejects.toThrow()
+    await expect(runCLI(['enroll', ...flagsA], { ...f.context, env: { MEMOH_RUNTIME_HOME: join(f.root, 'other') } })).rejects.toThrow('not supported')
+    await runCLI(['service', 'install'], { ...f.context, env: { XDG_CONFIG_HOME: join(f.root, 'other') } })
+    expect((await readInstallManifest(f.paths.manifestPath))?.spec.configPath).toBe(f.paths.configPath)
+  })
 })
 
-describe('runtime CLI', () => {
-  it('keeps the legacy foreground invocation, saves it, and allows a bare restart', async () => {
-    const fixture = await cliFixture()
-    const factory = vi.fn(() => resolvedSession())
-
-    await expect(runCLI([
-      '--server', 'https://memoh.example/api',
-      '--key', runtimeKey,
-      '--runtime-id', runtimeID,
-    ], { ...fixture.context, createSession: factory })).resolves.toBe(0)
-
-    expect(factory).toHaveBeenLastCalledWith(
-      expect.objectContaining({ serverUrl: 'https://memoh.example/api', key: runtimeKey }),
-      expect.objectContaining({ onStatus: expect.any(Function) }),
-    )
-    expect(await readRuntimeEnrollment(fixture.paths.configPath, fixture.root)).toMatchObject({
-      runtimeId: runtimeID,
-      key: runtimeKey,
-    })
-
-    factory.mockClear()
-    await expect(runCLI([], { ...fixture.context, createSession: factory })).resolves.toBe(0)
-    expect(factory).toHaveBeenCalledWith(
-      expect.objectContaining({ key: runtimeKey }),
-      expect.any(Object),
-    )
-  })
-
-  it('does not persist environment-only credentials unless requested', async () => {
-    const fixture = await cliFixture({
-      MEMOH_RUNTIME_SERVER: 'https://memoh.example',
-      MEMOH_RUNTIME_KEY: runtimeKey,
-    })
-    await runCLI([], { ...fixture.context, createSession: () => resolvedSession() })
-    await expect(readFile(fixture.paths.configPath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
-  })
-
-  it('installs one idempotent systemd user service from staged package assets', async () => {
-    const fixture = await cliFixture()
-    const commands: Array<[string, string[]]> = []
-    const runner = vi.fn(async (command: string, args: string[]): Promise<CommandResult> => {
-      commands.push([command, args])
-      return { code: 0, stdout: args.includes('is-active') ? 'active\n' : '', stderr: '' }
-    })
-
-    await expect(runCLI([
-      'service', 'install',
-      '--server', 'https://memoh.example/api',
-      '--key', runtimeKey,
-      '--runtime-id', runtimeID,
-    ], { ...fixture.context, runner })).resolves.toBe(0)
-
-    const unit = await readFile(fixture.paths.systemdUnitPath, 'utf8')
-    const manifest = await readFile(fixture.paths.manifestPath, 'utf8')
-    expect(unit).toContain('Restart=always')
-    expect(unit).not.toContain(runtimeKey)
-    expect(manifest).not.toContain(runtimeKey)
-    expect(commands).toContainEqual(['systemctl', ['--user', 'daemon-reload']])
-    expect(commands).toContainEqual(['systemctl', ['--user', 'enable', '--now', 'memoh-runtime.service']])
-    expect(fixture.output.join('\n')).toContain('installed and started')
-  })
-
-  it('does not replace a different enrollment without an explicit flag', async () => {
-    const fixture = await cliFixture()
-    await runCLI([
-      'service', 'install', '--server', 'https://one.example', '--key', runtimeKey, '--runtime-id', runtimeID,
-    ], { ...fixture.context, runner: successfulRunner })
-
-    await expect(runCLI([
-      'service', 'install', '--server', 'https://two.example', '--key', replacementKey,
-      '--runtime-id', replacementRuntimeID,
-    ], { ...fixture.context, runner: successfulRunner })).rejects.toThrow('--replace')
-    expect((await readRuntimeEnrollment(fixture.paths.configPath, fixture.root)).runtimeId).toBe(runtimeID)
-  })
-
-  it('refuses recursive purge when the runtime home was overridden', async () => {
-    const fixture = await cliFixture()
-    await expect(runCLI(
-      ['service', 'uninstall', '--purge'],
-      { ...fixture.context, runner: successfulRunner },
-    )).rejects.toThrow('remove custom paths manually')
-  })
-})
-
-async function cliFixture(extraEnv: NodeJS.ProcessEnv = {}) {
-  const root = await temporaryDirectory()
-  const runtimeHome = join(root, 'runtime-home')
-  const entryPath = join(root, 'package', 'cli.mjs')
-  const protoPath = join(root, 'package', 'bridge.proto')
-  await mkdir(join(root, 'package'))
-  await writeFile(entryPath, '#!/usr/bin/env node\n')
-  await writeFile(protoPath, 'syntax = "proto3";\n')
-  const env = {
-    PATH: '/usr/local/bin:/usr/bin:/bin',
-    MEMOH_RUNTIME_HOME: runtimeHome,
-    XDG_CONFIG_HOME: join(root, 'config'),
-    ...extraEnv,
-  }
-  const output: string[] = []
+async function fixture() {
+  const root = await mkdtemp(join(tmpdir(), 'memoh-cli-'))
+  roots.push(root)
+  const source = join(root, 'package')
+  await mkdir(source)
+  await writeFile(join(source, 'cli.mjs'), '#!/usr/bin/env node\n')
+  await writeFile(join(source, 'bridge.proto'), 'syntax = "proto3";')
+  let installed = false
+  let running = false
+  let pid = 100
+  const createSession = vi.fn(() => ({ start: async () => {}, stop: () => {} }))
   const context: Partial<CLIContext> = {
-    platform: 'linux',
-    env,
-    home: root,
-    nodePath: '/usr/local/bin/node',
-    entryPath,
-    protoPath,
-    uid: 501,
-    stdout: message => output.push(message),
-    stderr: message => output.push(message),
+    platform: 'linux', home: root, env: { PATH: '/usr/bin:/bin' }, nodePath: process.execPath,
+    entryPath: join(source, 'cli.mjs'), protoPath: join(source, 'bridge.proto'), createSession,
+    pollIntervalMs: 0, timeoutMs: 100, stdout: () => {}, stderr: () => {},
+    runner: vi.fn(async (command, args) => {
+      if (command === 'systemctl') {
+        if (args.includes('enable')) installed = true
+        if (args.includes('start') || args.includes('restart')) { running = true; pid++ }
+        if (args.includes('stop')) running = false
+        if (args.includes('disable')) { installed = false; running = false }
+        if (args.includes('show')) return { code: 0, stderr: '', stdout: `LoadState=${installed ? 'loaded' : 'not-found'}\nActiveState=${running ? 'active' : 'inactive'}\nSubState=${running ? 'running' : 'dead'}\nMainPID=${running ? pid : 0}` }
+      }
+      return { code: 0, stdout: '', stderr: '' }
+    }),
   }
-  return {
-    root,
-    output,
-    context,
-    paths: resolveRuntimePaths({ home: root, env }),
-  }
-}
-
-function resolvedSession() {
-  return {
-    start: vi.fn(async () => undefined),
-    stop: vi.fn(),
-  }
-}
-
-async function successfulRunner(_command: string, _args: string[]): Promise<CommandResult> {
-  return { code: 0, stdout: '', stderr: '' }
-}
-
-async function temporaryDirectory(): Promise<string> {
-  const path = await mkdtemp(join(tmpdir(), 'memoh-runtime-cli-'))
-  temporaryDirectories.push(path)
-  return path
+  return { root, context, paths: resolveRuntimePaths({ home: root, env: context.env }), createSession, pid: () => pid }
 }

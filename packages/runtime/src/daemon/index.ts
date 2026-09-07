@@ -1,11 +1,10 @@
-import { readFile, rm, symlink } from 'node:fs/promises'
+import { randomUUID } from 'node:crypto'
+import { readFile, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 
 import {
   ensureDirectory,
   writeFileAtomic,
-  writeInstallManifest,
-  type RuntimeInstallManifest,
   type RuntimePaths,
 } from '../runtime-config'
 import { createLaunchdServiceManager } from './launchd'
@@ -21,7 +20,7 @@ import { createWindowsTaskServiceManager } from './windows'
 export * from './types'
 export { renderLaunchdPlist } from './launchd'
 export { renderSystemdUnit } from './systemd'
-export { renderWindowsTaskXML, secureWindowsCredentialFile } from './windows'
+export { renderWindowsTaskXML } from './windows'
 
 export interface RuntimeArtifactSources {
   entryPath: string
@@ -31,9 +30,7 @@ export interface RuntimeArtifactSources {
 export interface StagedRuntimeArtifacts {
   entryPath: string
   protoPath: string
-  // What the service manager launches. macOS lists a LaunchAgent in Login
-  // Items under its executable's file name, so on POSIX this is a
-  // "Memoh Runtime" symlink to the entry rather than "cli.mjs".
+  // macOS launches a named shell wrapper that execs the pinned Node binary.
   launcherPath: string
 }
 
@@ -44,18 +41,24 @@ export async function stageRuntimeArtifacts(
   version: string,
   sources: RuntimeArtifactSources,
   platform: NodeJS.Platform = process.platform,
+  nodePath = process.execPath,
 ): Promise<StagedRuntimeArtifacts> {
-  const versionDirectory = join(paths.versionsDir, version)
+  const versionDirectory = join(paths.versionsDir, `${version}-${randomUUID()}`)
   await ensureDirectory(versionDirectory)
-  const entryPath = join(versionDirectory, 'cli.mjs')
-  const protoPath = join(versionDirectory, 'bridge.proto')
-  await copyReplacing(sources.entryPath, entryPath, 0o700)
-  await copyReplacing(sources.protoPath, protoPath, 0o600)
-  if (platform === 'win32') return { entryPath, protoPath, launcherPath: entryPath }
-  const launcherPath = join(versionDirectory, runtimeLauncherName)
-  await rm(launcherPath, { force: true })
-  await symlink('cli.mjs', launcherPath)
-  return { entryPath, protoPath, launcherPath }
+  try {
+    const entryPath = join(versionDirectory, 'cli.mjs')
+    const protoPath = join(versionDirectory, 'bridge.proto')
+    await copyReplacing(sources.entryPath, entryPath, 0o700)
+    await copyReplacing(sources.protoPath, protoPath, 0o600)
+    if (platform !== 'darwin') return { entryPath, protoPath, launcherPath: entryPath }
+    const launcherPath = join(versionDirectory, runtimeLauncherName)
+    const quote = (value: string) => `'${value.replaceAll('\'', '\'\\\'\'')}'`
+    await writeFileAtomic(launcherPath, `#!/bin/sh\nexec ${quote(nodePath)} ${quote(entryPath)} "$@"\n`, 0o700)
+    return { entryPath, protoPath, launcherPath }
+  } catch (error) {
+    await rm(versionDirectory, { recursive: true, force: true })
+    throw error
+  }
 }
 
 export function createRuntimeServiceManager(options: {
@@ -89,35 +92,10 @@ export function runtimeServiceSpec(options: {
     entryPath: options.entryPath,
     configPath: options.paths.configPath,
     nodePath: options.nodePath,
-    runtimeHome: options.paths.runtimeHome,
     logsDir: options.paths.logsDir,
     workingDirectory: options.paths.home,
     servicePath: serviceExecutablePath(options.nodePath, options.environmentPath, options.platform),
   }
-}
-
-export async function recordRuntimeServiceInstall(options: {
-  paths: RuntimePaths
-  version: string
-  backend: string
-  entryPath: string
-  nodePath: string
-}): Promise<RuntimeInstallManifest> {
-  const manifest: RuntimeInstallManifest = {
-    schemaVersion: 1,
-    packageVersion: options.version,
-    backend: options.backend,
-    entryPath: options.entryPath,
-    configPath: options.paths.configPath,
-    nodePath: options.nodePath,
-    installedAt: new Date().toISOString(),
-  }
-  await writeInstallManifest(options.paths.manifestPath, manifest)
-  return manifest
-}
-
-export async function removeRuntimeInstallManifest(paths: RuntimePaths): Promise<void> {
-  await rm(paths.manifestPath, { force: true })
 }
 
 async function copyReplacing(source: string, destination: string, mode: number): Promise<void> {
