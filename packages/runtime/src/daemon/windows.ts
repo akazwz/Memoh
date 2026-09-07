@@ -1,4 +1,5 @@
 import { rm } from 'node:fs/promises'
+import { windowsPowerShellEnv } from '../windows-powershell'
 
 import { ensureDirectory, writeFileAtomic, type RuntimePaths } from '../runtime-config'
 import {
@@ -75,7 +76,7 @@ export function createWindowsTaskServiceManager(paths: RuntimePaths, runner: Com
     const result = await requireCommand(runner, 'powershell.exe', [
       '-NoProfile', '-NonInteractive', '-Command',
       `$ErrorActionPreference = 'Stop'; $task = Get-ScheduledTask | Where-Object { $_.TaskPath -eq '\\Memoh\\' -and $_.TaskName -eq 'Runtime-${sid}' }; if ($null -eq $task) { 'not-installed' } else { $owner = $task.Principal.UserId; if ($owner -notmatch '^S-1-') { $owner = ([System.Security.Principal.NTAccount]::new($owner)).Translate([System.Security.Principal.SecurityIdentifier]).Value }; if ($owner -ne '${sid}') { throw 'Runtime task belongs to another account' }; $task.State.ToString() }`,
-    ])
+    ], { env: windowsPowerShellEnv() })
     const state = result.stdout.trim().toLowerCase()
     if (!['not-installed', 'running', 'ready', 'disabled', 'queued', 'unknown'].includes(state)) {
       throw new Error('could not determine the Windows runtime task state')
@@ -188,5 +189,5 @@ foreach ($identity in @($sid.Value, 'S-1-5-18', 'S-1-5-32-544')) {
 # on an already protected directory, requiring SeSecurityPrivilege.
 [IO.Directory]::SetAccessControl($path, $private)
 `
-  await requireCommand(runner, 'powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')])
+  await requireCommand(runner, 'powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], { env: windowsPowerShellEnv() })
 }

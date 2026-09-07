@@ -1,9 +1,10 @@
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
+import { windowsPowerShellEnv } from './windows-powershell'
 
 // Arguments are encoded as data in a PowerShell literal, never a shell command.
 async function powershell(script: string): Promise<void> {
-  await promisify(execFile)('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], { timeout: 30_000, windowsHide: true })
+  await promisify(execFile)('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], { timeout: 30_000, windowsHide: true, env: windowsPowerShellEnv() })
 }
 
 export async function checkWindowsAccess(path: string, privateFile: boolean): Promise<void> {

@@ -148,12 +148,16 @@ async function fixture() {
   await mkdir(source)
   await writeFile(join(source, 'cli.mjs'), '#!/usr/bin/env node\n')
   await writeFile(join(source, 'bridge.proto'), 'syntax = "proto3";')
+  // The service manager is mocked; its Node path must not depend on the host
+  // toolcache permissions (GitHub's Linux runner has a group-writable /opt).
+  const nodePath = join(source, 'node')
+  await writeFile(nodePath, '#!/bin/sh\nexit 0\n', { mode: 0o755 })
   let installed = false
   let running = false
   let pid = 100
   const createSession = vi.fn(() => ({ start: async () => {}, stop: () => {} }))
   const context: Partial<CLIContext> = {
-    platform: 'linux', home: root, env: { PATH: '/usr/bin:/bin' }, nodePath: process.execPath,
+    platform: 'linux', home: root, env: { PATH: '/usr/bin:/bin' }, nodePath,
     entryPath: join(source, 'cli.mjs'), protoPath: join(source, 'bridge.proto'), createSession,
     pollIntervalMs: 0, timeoutMs: 100, stdout: () => {}, stderr: () => {},
     runner: vi.fn(async (command, args) => {

@@ -20,11 +20,14 @@ const directories: string[] = []
 
 afterEach(async () => {
   vi.restoreAllMocks()
+  vi.unstubAllEnvs()
   await Promise.all(directories.splice(0).map(path => rm(path, { recursive: true, force: true })))
 })
 
 describe('atomic credential writes', () => {
   it.runIf(process.platform === 'win32')('reapplies private ACLs to existing files and directories', async () => {
+    // Simulate Node inheriting module paths that cannot load in Windows PowerShell.
+    vi.stubEnv('PSModulePath', join(tmpdir(), 'memoh-no-powershell-modules'))
     const directory = await mkdtemp(join(tmpdir(), 'memoh-acl-repeat-'))
     directories.push(directory)
     const file = join(directory, 'credential')
