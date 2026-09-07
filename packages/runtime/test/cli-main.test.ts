@@ -63,7 +63,7 @@ describe('runtime CLI command ownership', () => {
     expect(next.spec.entryPath).not.toBe(previous.spec.entryPath)
     expect(await runCLI(['service', 'status'], f.context)).toBe(1)
     expect((await readRuntimeEnrollment(f.paths.configPath)).key).toBe(keyA)
-    expect(await readFile(f.paths.systemdUnitPath, 'utf8')).not.toContain(keyA)
+    expect(await readFile(process.platform === 'win32' ? f.paths.windowsTaskXMLPath : f.paths.systemdUnitPath, process.platform === 'win32' ? 'utf16le' : 'utf8')).not.toContain(keyA)
     expect(await readFile(f.paths.manifestPath, 'utf8')).not.toContain(keyA)
   })
 
@@ -122,7 +122,7 @@ describe('runtime CLI command ownership', () => {
   it('refuses incomplete installation and allows retry', async () => {
     const f = await fixture()
     const runner = f.context.runner!
-    f.context.runner = async (command, args, options) => args.includes('enable')
+    f.context.runner = async (command, args, options) => (args.includes('enable') || args.includes('/create'))
       ? { code: 1, stdout: '', stderr: 'registration failed' } : runner(command, args, options)
     await expect(runCLI(['service', 'install'], f.context)).rejects.toThrow('registration failed')
     expect((await readInstallManifest(f.paths.manifestPath))?.state).toBe('prepared')
@@ -157,10 +157,22 @@ async function fixture() {
   let pid = 100
   const createSession = vi.fn(() => ({ start: async () => {}, stop: () => {} }))
   const context: Partial<CLIContext> = {
-    platform: 'linux', home: root, env: { PATH: '/usr/bin:/bin' }, nodePath,
+    platform: process.platform === 'win32' ? 'win32' : 'linux', home: root, env: { PATH: '/usr/bin:/bin' }, nodePath,
     entryPath: join(source, 'cli.mjs'), protoPath: join(source, 'bridge.proto'), createSession,
     pollIntervalMs: 0, timeoutMs: 100, stdout: () => {}, stderr: () => {},
     runner: vi.fn(async (command, args) => {
+      // Exercise the native path renderer on Windows too; systemd correctly
+      // rejects Windows drive-letter paths as invalid WorkingDirectory values.
+      if (command === 'whoami.exe') return { code: 0, stdout: '"test-user","S-1-5-21-1000"', stderr: '' }
+      if (command === 'powershell.exe' && args.includes('-Command')) {
+        return { code: 0, stdout: !installed ? 'not-installed' : running ? 'Running' : 'Ready', stderr: '' }
+      }
+      if (command === 'schtasks.exe') {
+        if (args.includes('/create')) installed = true
+        if (args.includes('/run')) { running = true; pid++ }
+        if (args.includes('/end')) running = false
+        if (args.includes('/delete')) { installed = false; running = false }
+      }
       if (command === 'systemctl') {
         if (args.includes('enable')) installed = true
         if (args.includes('start') || args.includes('restart')) { running = true; pid++ }
