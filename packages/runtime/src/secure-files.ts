@@ -3,8 +3,13 @@ import { promisify } from 'node:util'
 import { randomUUID } from 'node:crypto'
 import { constants } from 'node:fs'
 import { access, chmod, lstat, mkdir, open, realpath, rename, rm } from 'node:fs/promises'
+import { userInfo } from 'node:os'
 import { dirname, join, parse, resolve } from 'node:path'
 import { checkWindowsAccess, protectWindowsDirectory, protectWindowsFile } from './windows-file-security'
+
+const directoryWriteRights = ['write', 'append', 'delete', 'add_file', 'add_subdirectory', 'writeattr', 'writeextattr', 'writesecurity', 'chown', 'delete_child']
+const fileWriteRights = ['write', 'append', 'delete', 'writeattr', 'writeextattr', 'writesecurity', 'chown']
+const privateFileRights = ['read', ...fileWriteRights]
 
 // Check the entire namespace, not just the mode of the final credential file.
 // Root-owned sticky temporary directories are allowed: an unprivileged user
@@ -18,12 +23,21 @@ export async function checkDirectory(path: string): Promise<void> {
   }
   const checked = new Set<string>()
   await inspectDirectory(absolute, checked)
-  if (process.platform === 'darwin') {
-    const { stdout } = await promisify(execFile)('/bin/ls', ['-lde', ...checked])
-    if (/^\s*\d+:.*\ballow\b.*\b(write|append|delete|add_file|add_subdirectory|writeattr|writeextattr|writesecurity|chown|delete_child)\b/m.test(stdout)) {
-      throw new Error(`runtime directory chain has a writable extended ACL: ${absolute}`)
-    }
+  if (process.platform === 'darwin' && await grantsOthers([...checked], directoryWriteRights)) {
+    throw new Error(`runtime directory chain has a writable extended ACL: ${absolute}`)
   }
+}
+
+// An ACL entry the user granted to themselves adds nothing another account
+// could abuse, so only entries for other principals count.
+async function grantsOthers(paths: string[], rights: string[]): Promise<boolean> {
+  const { stdout } = await promisify(execFile)('/bin/ls', ['-lde', ...paths])
+  const self = userInfo().username
+  for (const [, kind, principal, granted] of stdout.matchAll(/^\s*\d+:\s+(user|group):(\S+)\s+allow\s+(\S+)/gm)) {
+    if (kind === 'user' && principal === self) continue
+    if (granted.split(',').some(right => rights.includes(right))) return true
+  }
+  return false
 }
 
 async function inspectDirectory(absolute: string, checked: Set<string>): Promise<void> {
@@ -67,11 +81,8 @@ export async function readPrivateFile(path: string): Promise<string> {
     || (process.platform !== 'win32' && (info.uid !== process.getuid!() || (info.mode & 0o077) !== 0))) {
     throw new Error(`runtime file must be a private regular file owned by you: ${path}`)
   }
-  if (process.platform === 'darwin') {
-    const { stdout } = await promisify(execFile)('/bin/ls', ['-le', path])
-    if (/^\s*\d+:.*\ballow\b.*\b(read|write|append|delete|writesecurity|chown)\b/m.test(stdout)) {
-      throw new Error(`runtime file has an unsafe extended ACL: ${path}`)
-    }
+  if (process.platform === 'darwin' && await grantsOthers([path], privateFileRights)) {
+    throw new Error(`runtime file has an unsafe extended ACL: ${path}`)
   }
   if (process.platform === 'win32') await checkWindowsAccess(path, true)
   const handle = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0))
@@ -114,19 +125,19 @@ export function errorCode(error: unknown): string | undefined {
   return error && typeof error === 'object' && 'code' in error ? String(error.code) : undefined
 }
 
+// Executables are whatever Node the user's shell already trusts, and package
+// managers keep them in group-writable prefixes (Homebrew's Cellar is
+// admin-writable, shared /usr/local installs belong to another account). Only
+// the file itself must be immune to rewriting by everyone else; the managed
+// directory chain is covered by the credential and manifest checks.
 export async function checkExecutable(path: string): Promise<void> {
-  await checkDirectory(dirname(path))
   const info = await lstat(path)
-  if (!info.isFile() || info.isSymbolicLink()
-    || (process.platform !== 'win32' && ((info.uid !== 0 && info.uid !== process.getuid!()) || (info.mode & 0o022) !== 0))) {
+  if (!info.isFile() || info.isSymbolicLink() || (process.platform !== 'win32' && (info.mode & 0o002) !== 0)) {
     throw new Error(`runtime executable is not a trusted regular file: ${path}`)
   }
   await access(path, constants.R_OK | (process.platform === 'win32' ? 0 : constants.X_OK))
   if (process.platform === 'win32') await checkWindowsAccess(path, false)
-  if (process.platform === 'darwin') {
-    const { stdout } = await promisify(execFile)('/bin/ls', ['-le', path])
-    if (/^\s*\d+:.*\ballow\b.*\b(write|append|delete|writeattr|writeextattr|writesecurity|chown)\b/m.test(stdout)) {
-      throw new Error(`runtime executable has a writable extended ACL: ${path}`)
-    }
+  if (process.platform === 'darwin' && await grantsOthers([path], fileWriteRights)) {
+    throw new Error(`runtime executable has a writable extended ACL: ${path}`)
   }
 }

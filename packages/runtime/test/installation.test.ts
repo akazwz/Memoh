@@ -1,9 +1,9 @@
 import { chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import * as runtimeConfig from '../src/runtime-config'
-import { installRuntime, withServiceLock, type InstallationOptions } from '../src/daemon/installation'
+import { installRuntime, validateInstalledProgram, withServiceLock, type InstallationOptions } from '../src/daemon/installation'
 import type { RuntimeServiceManager, RuntimeServiceState } from '../src/daemon/types'
 import { readInstallManifest, resolveRuntimePaths, writeFileAtomic } from '../src/runtime-config'
 
@@ -99,6 +99,29 @@ describe('runtime service installation', () => {
     expect(await readdir(f.options.paths.versionsDir)).toHaveLength(1)
     expect(f.options.manager.register).toHaveBeenCalledTimes(1)
     expect(f.state()).toBe('running')
+  })
+
+  it('removes superseded generations once the replacement is installed', async () => {
+    const f = await fixture()
+    await f.install()
+    const first = (await readInstallManifest(f.options.paths.manifestPath))!
+    vi.mocked(f.options.manager.register).mockRejectedValueOnce(new Error('registration failed'))
+    await expect(f.install()).rejects.toThrow('registration failed')
+    expect(await readdir(f.options.paths.versionsDir)).toHaveLength(2)
+    await f.install()
+    const current = (await readInstallManifest(f.options.paths.manifestPath))!
+    expect(await readdir(f.options.paths.versionsDir)).toEqual([basename(dirname(current.spec.entryPath))])
+    await expect(readFile(first.spec.entryPath)).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  it('names a missing pinned Node executable instead of a bare ENOENT', async () => {
+    const f = await fixture()
+    await f.install()
+    const record = (await readInstallManifest(f.options.paths.manifestPath))!
+    await expect(validateInstalledProgram(record.spec.entryPath, join(f.root, 'gone', 'node')))
+      .rejects.toThrow(`the pinned Node executable ${join(f.root, 'gone', 'node')} no longer exists; run service install`)
+    await rm(dirname(record.spec.entryPath), { recursive: true, force: true })
+    await expect(validateInstalledProgram(record.spec.entryPath, process.execPath)).rejects.toThrow('the installed program no longer exists')
   })
 
   it('refuses to change a service whose state cannot be determined', async () => {

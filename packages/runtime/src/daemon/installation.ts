@@ -1,5 +1,5 @@
-import { mkdir, rm } from 'node:fs/promises'
-import { dirname, join } from 'node:path'
+import { mkdir, readdir, rm } from 'node:fs/promises'
+import { basename, dirname, join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 
 import { checkExecutable, readPrivateFile, errorCode } from '../secure-files'
@@ -58,7 +58,9 @@ export async function waitForService(
 export async function installRuntime(options: InstallationOptions): Promise<void> {
   const { paths, manager } = options
   const before = await manager.status()
-  if (before.state === 'unknown') throw new Error('could not determine the current service state; installation was not changed')
+  if (before.state === 'unknown') {
+    throw new Error(`could not determine the current service state${before.detail ? ` (${before.detail})` : ''}; installation was not changed`)
+  }
   await ensureDirectory(paths.versionsDir)
   await options.secureDirectory?.(paths.versionsDir)
   const staged = await stageRuntimeArtifacts(paths, runtimeClientVersion, options.sources, options.platform, options.nodePath)
@@ -83,11 +85,30 @@ export async function installRuntime(options: InstallationOptions): Promise<void
     if (!recordWriteAttempted) await rm(directory, { recursive: true, force: true })
     throw error
   }
+  // The old process is stopped and the native definition now points at the
+  // new generation, so nothing references earlier generations any more. The
+  // installation is already complete, so a leftover that cannot be removed
+  // (a handle Windows has not released yet) is not a failure.
+  for (const entry of await readdir(paths.versionsDir)) {
+    if (entry === basename(directory)) continue
+    await rm(join(paths.versionsDir, entry), { recursive: true, force: true }).catch(() => undefined)
+  }
 }
 
 export async function validateInstalledProgram(entryPath: string, nodePath: string): Promise<void> {
-  await checkExecutable(entryPath)
-  await checkExecutable(join(dirname(entryPath), 'cli.mjs'))
-  await checkExecutable(nodePath)
-  await readPrivateFile(join(dirname(entryPath), 'bridge.proto'))
+  await checkInstalledFile(() => checkExecutable(entryPath), 'the installed program', 'service install')
+  await checkInstalledFile(() => checkExecutable(join(dirname(entryPath), 'cli.mjs')), 'the installed program', 'service install')
+  await checkInstalledFile(() => checkExecutable(nodePath), `the pinned Node executable ${nodePath}`, 'service install with an available Node')
+  await checkInstalledFile(() => readPrivateFile(join(dirname(entryPath), 'bridge.proto')), 'the installed program', 'service install')
+}
+
+// Package managers remove the pinned Node binary on upgrade; say so instead
+// of surfacing a bare ENOENT.
+async function checkInstalledFile(check: () => Promise<unknown>, subject: string, remedy: string): Promise<void> {
+  try {
+    await check()
+  } catch (error) {
+    if (errorCode(error) !== 'ENOENT') throw error
+    throw new Error(`${subject} no longer exists; run ${remedy}`)
+  }
 }

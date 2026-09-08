@@ -11,11 +11,10 @@ import { assertSecureRuntimeUrl, runtimeConnectUrl, normalizeRuntimeServerUrl } 
 
 export const runtimeEnrollmentSchemaVersion = 1
 
-const runtimeIDPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
-
+// The server identifies a runtime by its key alone, so the enrollment carries
+// nothing else that names it.
 export interface RuntimeEnrollment {
   schemaVersion: typeof runtimeEnrollmentSchemaVersion
-  runtimeId?: string
   serverUrl: string
   key: string
   teamId?: string
@@ -35,6 +34,7 @@ export interface RuntimePaths {
   versionsDir: string
   manifestPath: string
   logsDir: string
+  serviceDir: string
   controlHome: string
   launchdPlistPath: string
   systemdUnitPath: string
@@ -50,6 +50,7 @@ export function resolveRuntimePaths(options: RuntimePathOptions = {}): RuntimePa
   const home = resolve(options.home ?? homedir())
   const runtimeHome = join(home, '.memoh', 'runtime')
   const configPath = join(home, '.memoh', 'runtime.json')
+  const serviceDir = join(runtimeHome, 'service')
   return {
     home,
     runtimeHome,
@@ -58,20 +59,19 @@ export function resolveRuntimePaths(options: RuntimePathOptions = {}): RuntimePa
     controlHome: runtimeHome,
     manifestPath: join(runtimeHome, 'install.json'),
     logsDir: join(runtimeHome, 'logs'),
+    serviceDir,
     launchdPlistPath: join(home, 'Library', 'LaunchAgents', 'ai.memoh.runtime.plist'),
-    systemdUnitPath: join(runtimeHome, 'service', 'memoh-runtime.service'),
-    windowsTaskXMLPath: join(runtimeHome, 'service', 'memoh-runtime-task.xml'),
+    systemdUnitPath: join(serviceDir, 'memoh-runtime.service'),
+    windowsTaskXMLPath: join(serviceDir, 'memoh-runtime-task.xml'),
   }
 }
 
 export function normalizeRuntimeEnrollment(input: {
-  runtimeId?: string
   serverUrl: string
   key: string
   teamId?: string
   insecureLocalhost?: boolean
 }, workspaceBase = homedir()): RuntimeEnrollment {
-  const runtimeId = normalizeRuntimeID(input.runtimeId)
   const rawServerUrl = input.serverUrl.trim()
   const key = input.key.trim()
   const teamId = input.teamId === undefined
@@ -89,7 +89,6 @@ export function normalizeRuntimeEnrollment(input: {
   const serverUrl = normalizeRuntimeServerUrl(rawServerUrl)
   return {
     schemaVersion: runtimeEnrollmentSchemaVersion,
-    runtimeId,
     serverUrl,
     key,
     teamId,
@@ -123,9 +122,6 @@ export async function readRuntimeEnrollment(path: string, workspaceBase = homedi
   if (typeof record.serverUrl !== 'string' || typeof record.key !== 'string') {
     throw new Error(`runtime configuration at ${path} is missing serverUrl or key`)
   }
-  if (record.runtimeId !== undefined && typeof record.runtimeId !== 'string') {
-    throw new Error(`runtime configuration at ${path} has an invalid runtimeId`)
-  }
   if (record.teamId !== undefined && typeof record.teamId !== 'string') {
     throw new Error(`runtime configuration at ${path} has an invalid teamId`)
   }
@@ -134,7 +130,6 @@ export async function readRuntimeEnrollment(path: string, workspaceBase = homedi
   }
   try {
     return normalizeRuntimeEnrollment({
-      runtimeId: record.runtimeId as string | undefined,
       serverUrl: record.serverUrl,
       key: record.key,
       teamId: record.teamId as string | undefined,
@@ -189,8 +184,7 @@ export async function writeInstallManifest(path: string, manifest: RuntimeInstal
 
 export function sameEnrollment(left: RuntimeEnrollment, right: RuntimeEnrollment): boolean {
   return left.serverUrl === right.serverUrl && left.key === right.key
-    && left.runtimeId === right.runtimeId && left.teamId === right.teamId
-    && left.insecureLocalhost === right.insecureLocalhost
+    && left.teamId === right.teamId && left.insecureLocalhost === right.insecureLocalhost
 }
 
 export function parseBooleanEnvironment(value: string | undefined, name: string): boolean | undefined {
@@ -205,13 +199,4 @@ export function nodeErrorCode(error: unknown): string | undefined {
   return error && typeof error === 'object' && 'code' in error
     ? String((error as { code?: unknown }).code)
     : undefined
-}
-
-function normalizeRuntimeID(value: string | undefined): string | undefined {
-  const normalized = value?.trim().toLowerCase()
-  if (!normalized) return undefined
-  if (!runtimeIDPattern.test(normalized)) {
-    throw new Error('runtime ID must be a UUID')
-  }
-  return normalized
 }

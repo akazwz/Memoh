@@ -58,6 +58,7 @@ describe('runtime background service definitions', () => {
     expect(task).toContain('<ExecutionTimeLimit>PT0S</ExecutionTimeLimit>')
     expect(task).toContain('<Count>255</Count>')
     expect(task).toContain('<Command>C:\\Program Files\\nodejs\\node.exe</Command>')
+    expect(task).toContain('--log &quot;/runtime/logs\\runtime.log&quot;')
     expect(task).not.toContain('mrk_')
   })
 
@@ -200,7 +201,7 @@ describe('runtime background service definitions', () => {
       return { code: 0, stdout: command === 'powershell.exe' ? 'Ready' : '', stderr: '' }
     }
 
-    await createWindowsTaskServiceManager(paths, runner).register(serviceSpec('C:\\Memoh\\cli.mjs'))
+    await createWindowsTaskServiceManager(paths, runner).register({ ...serviceSpec('C:\\Memoh\\cli.mjs'), logsDir: paths.logsDir })
 
     expect((await readFile(paths.windowsTaskXMLPath)).subarray(0, 2)).toEqual(Buffer.from([0xff, 0xfe]))
     expect(calls).toContainEqual([

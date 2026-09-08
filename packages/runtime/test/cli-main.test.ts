@@ -39,6 +39,27 @@ describe('runtime CLI command ownership', () => {
     expect(f.context.runner).not.toHaveBeenCalled()
   })
 
+  it('names --replace when the saved enrollment cannot be read', async () => {
+    const f = await fixture()
+    await runCLI(['enroll', ...flagsA], f.context)
+    await writeFile(f.paths.configPath, '{broken')
+    await expect(runCLI(['enroll', ...flagsA], f.context)).rejects.toThrow('not valid JSON; pass --replace to overwrite it')
+    expect(await readFile(f.paths.configPath, 'utf8')).toBe('{broken')
+  })
+
+  it('keeps its own log for service managers that capture no output', async () => {
+    const f = await fixture()
+    const log = join(f.root, 'logs', 'runtime.log')
+    await expect(runCLI(['run', '--log', log], f.context)).rejects.toThrow('not found')
+    expect(await readFile(log, 'utf8')).toMatch(/^\d{4}-\d{2}-\d{2}T.* error: runtime configuration was not found/m)
+    f.createSession.mockImplementationOnce((_config, options) => ({
+      start: async () => { options.onStatus?.('connecting'); options.warn?.('careful'); options.onStatus?.('stopped', 'closed') }, stop: () => {},
+    }))
+    await runCLI(['run', ...flagsA, '--log', log], f.context)
+    const lines = (await readFile(log, 'utf8')).trim().split('\n')
+    expect(lines.slice(-3).map(line => line.slice(line.indexOf(' ') + 1))).toEqual(['connecting', 'careful', 'stopped: closed'])
+  })
+
   it('treats explicit config as read-only input and ignores inherited credentials', async () => {
     const f = await fixture()
     const input = join(f.root, 'input.json')
@@ -115,6 +136,9 @@ describe('runtime CLI command ownership', () => {
     expect(f.pid()).toBe(pid)
     expect(await readFile(f.paths.configPath, 'utf8')).toBe('{broken')
     await expect(readFile(f.paths.manifestPath)).rejects.toMatchObject({ code: 'ENOENT' })
+    for (const path of [f.paths.versionsDir, f.paths.logsDir, f.paths.serviceDir]) {
+      await expect(readFile(path)).rejects.toMatchObject({ code: 'ENOENT' })
+    }
     await runCLI(['service', 'install'], f.context)
     expect((await readInstallManifest(f.paths.manifestPath))?.state).toBe('installed')
   })
@@ -155,7 +179,7 @@ async function fixture() {
   let installed = false
   let running = false
   let pid = 100
-  const createSession = vi.fn(() => ({ start: async () => {}, stop: () => {} }))
+  const createSession = vi.fn<CLIContext['createSession']>(() => ({ start: async () => {}, stop: () => {} }))
   const context: Partial<CLIContext> = {
     platform: process.platform === 'win32' ? 'win32' : 'linux', home: root, env: { PATH: '/usr/bin:/bin' }, nodePath,
     entryPath: join(source, 'cli.mjs'), protoPath: join(source, 'bridge.proto'), createSession,

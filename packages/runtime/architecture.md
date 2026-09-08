@@ -11,8 +11,8 @@ lifecycle are separate operations.
 | `service install` | Fresh program generation, installation record, native service definition | Never writes enrollment or starts a process. An interrupted registration leaves a `prepared` record; rerun install. |
 | `service start` | Native process state | Requires completed installation and readable enrollment; never installs or recovers. Already-running service is a no-op. |
 | `service restart` | Native process state | Validates first, then stops and starts. No automatic rollback. |
-| `service stop` | Native process state | Does not read enrollment or installation records, and never starts anything. |
-| `service uninstall [--purge]` | Native registration and installation record; optionally managed programs/logs | Does not read enrollment or installation records, and never starts anything. Enrollment is retained. |
+| `service stop` | Native process state | Does not read enrollment or installation records, and never starts anything. Registration stays, so the service returns at the next login. |
+| `service uninstall [--purge]` | Native registration and installation record; optionally managed programs, service definitions and logs | Does not read enrollment or installation records, and never starts anything. Enrollment is retained. |
 | `service status` | Nothing | Reports the OS service state. It does not claim server connectivity. |
 
 There is one saved enrollment at `~/.memoh/runtime.json`. Service programs,
@@ -26,9 +26,10 @@ connection until the user restarts it. Reenrollment is not a service install.
 
 Installation prepares immutable program files and validates the platform
 representation before stopping any existing process. It then publishes a
-`prepared` record, registers the service without starting it, and publishes an
-`installed` record. A failed operation reports failure and leaves these files
-for inspection/retry. No journal, historical credential copies, or automatic
+`prepared` record, registers the service without starting it, publishes an
+`installed` record, and finally removes the generations nothing references any
+more. A failed operation reports failure and leaves these files for
+inspection/retry. No journal, historical credential copies, or automatic
 cross-system rollback is needed. Old enrollment is never part of the install
 transaction. A failed registration can always be followed by stop, uninstall or
 another install; only start requires an installed record.
@@ -46,4 +47,8 @@ SID. These identifiers do not depend on the enrollment or installation record.
 Trust checks and private atomic writes remain necessary. The supported namespace
 is limited to the owned storage above. File creation occurs inside an already
 private staging directory to avoid inherited-ACL pre-open races. Input files are
-read-only, and unsafe directory chains/executable ACLs are rejected.
+read-only, and directory chains writable by other accounts are rejected. The
+pinned Node executable is outside that namespace: it is whatever the user's
+shell already runs, so only the file itself must be immune to rewriting by other
+accounts. Task Scheduler cannot capture output, so the Windows definition passes
+`run --log`; launchd redirects stdout/stderr and systemd uses the journal.

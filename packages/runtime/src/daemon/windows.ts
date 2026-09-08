@@ -13,11 +13,14 @@ import {
 // Task Scheduler names are machine-wide; isolate each account by its SID.
 
 export function renderWindowsTaskXML(spec: RuntimeServiceSpec, userId: string): string {
+  // Task Scheduler captures no output, so the process keeps its own log.
   const argumentsValue = [
     windowsQuoteArgument(spec.entryPath),
     'run',
     '--config',
     windowsQuoteArgument(spec.configPath),
+    '--log',
+    windowsQuoteArgument(`${spec.logsDir}\\runtime.log`),
   ].join(' ')
   return `<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
@@ -98,6 +101,7 @@ export function createWindowsTaskServiceManager(paths: RuntimePaths, runner: Com
     async register(spec) {
       const userId = await userID()
       await inspect()
+      await ensureDirectory(spec.logsDir)
       // Write actual UTF-16LE with a BOM for the Task Scheduler XML importer.
       const xml = renderWindowsTaskXML(spec, userId)
       const utf16 = Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(xml, 'utf16le')])

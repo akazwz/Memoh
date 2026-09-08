@@ -60,7 +60,9 @@ export function createSystemdServiceManager(paths: RuntimePaths, runner: Command
       const result = await runner(systemctl, [...baseArgs, 'show', unitName, '--property=LoadState,ActiveState,SubState,MainPID'])
       const fields = Object.fromEntries(result.stdout.trim().split('\n').map(line => line.split('=')))
       if (fields.LoadState === 'not-found') return { backend: 'systemd-user', state: 'not-installed' }
-      if (result.code !== 0 || fields.LoadState !== 'loaded') return { backend: 'systemd-user', state: 'unknown', detail: fields.LoadState }
+      if (result.code !== 0 || fields.LoadState !== 'loaded') {
+        return { backend: 'systemd-user', state: 'unknown', detail: result.stderr.trim() || fields.LoadState }
+      }
       const pid = Number(fields.MainPID)
       return {
         backend: 'systemd-user',

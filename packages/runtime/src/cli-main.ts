@@ -1,4 +1,4 @@
-import { realpath, rm } from 'node:fs/promises'
+import { appendFile, mkdir, realpath, rm } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -39,8 +39,7 @@ export interface CLIContext {
 }
 
 const connectionOptions = {
-  server: { type: 'string' }, key: { type: 'string' },
-  'team-id': { type: 'string' }, 'runtime-id': { type: 'string' },
+  server: { type: 'string' }, key: { type: 'string' }, 'team-id': { type: 'string' },
   config: { type: 'string' }, 'insecure-localhost': { type: 'boolean' },
   help: { type: 'boolean', short: 'h' },
 } as const
@@ -70,26 +69,53 @@ export async function runCLI(args: string[], overrides: Partial<CLIContext> = {}
 }
 
 async function run(args: string[], context: CLIContext): Promise<number> {
-  const { values } = parseArgs({ args, options: connectionOptions, strict: true })
+  const { values } = parseArgs({ args, options: { ...connectionOptions, log: { type: 'string' } }, strict: true })
   if (values.help) {
-    context.stdout('Usage: memoh-runtime run [--server <url> --key <key> | --config <file>]\nReads saved enrollment when no connection is supplied. Never saves or changes a service.')
+    context.stdout('Usage: memoh-runtime run [--server <url> --key <key> | --config <file>] [--log <file>]\nReads saved enrollment when no connection is supplied. Never saves or changes a service.')
     return 0
   }
-  const enrollment = await resolveEnrollment(values, context)
+  const log = createLogFile(stringValue(values.log), context.stderr)
   const controller = new AbortController()
   const stop = () => controller.abort()
   process.once('SIGINT', stop)
   process.once('SIGTERM', stop)
   try {
+    const enrollment = await resolveEnrollment(values, context)
     await context.createSession({ ...enrollment, workspaceBase: context.home }, {
-      onStatus: (status, error) => context.stdout(error ? `${status}: ${error}` : status),
-      warn: context.stderr,
+      onStatus: (status, error) => { const line = error ? `${status}: ${error}` : status; context.stdout(line); log.write(line) },
+      warn: message => { context.stderr(message); log.write(message) },
     }).start(controller.signal)
+  } catch (error) {
+    log.write(`error: ${formatCLIError(error)}`)
+    throw error
   } finally {
     process.off('SIGINT', stop)
     process.off('SIGTERM', stop)
+    await log.flush()
   }
   return 0
+}
+
+// Task Scheduler cannot capture a task's output, so the service invocation on
+// Windows asks the process to keep its own log. Logging must never take the
+// runtime down, so write failures are reported once and otherwise ignored.
+function createLogFile(path: string | undefined, warn: (message: string) => void): { write(line: string): void, flush(): Promise<void> } {
+  let queue = Promise.resolve()
+  let reported = false
+  return {
+    write(line) {
+      if (!path) return
+      queue = queue.then(async () => {
+        try {
+          await mkdir(dirname(path), { recursive: true, mode: 0o700 })
+          await appendFile(path, `${new Date().toISOString()} ${line}\n`, { mode: 0o600 })
+        } catch (error) {
+          if (!reported) { reported = true; warn(`could not write log file ${path}: ${formatCLIError(error)}`) }
+        }
+      })
+    },
+    flush: () => queue,
+  }
 }
 
 async function enroll(args: string[], context: CLIContext): Promise<number> {
@@ -105,7 +131,12 @@ async function enroll(args: string[], context: CLIContext): Promise<number> {
   await withServiceLock(paths, async () => {
     // --replace is also the explicit repair path for a malformed saved file.
     if (!values.replace) {
-      const current = await readRuntimeEnrollmentIfExists(paths.configPath, context.home)
+      let current: RuntimeEnrollment | undefined
+      try {
+        current = await readRuntimeEnrollmentIfExists(paths.configPath, context.home)
+      } catch (error) {
+        throw new Error(`${formatCLIError(error)}; pass --replace to overwrite it`)
+      }
       if (current && !sameEnrollment(current, enrollment)) throw new Error('saved enrollment differs; pass --replace to replace it')
     }
     await writeRuntimeEnrollment(paths.configPath, enrollment)
@@ -140,7 +171,7 @@ async function service(args: string[], context: CLIContext): Promise<number> {
   }
   if (action === 'status') {
     const status = await manager.status()
-    context.stdout(values.json ? JSON.stringify(status) : `Memoh Runtime service: ${status.state} (${status.backend})`)
+    context.stdout(values.json ? JSON.stringify(status) : `Memoh Runtime service: ${status.state} (${status.backend})${status.detail ? `: ${status.detail}` : ''}`)
     return status.state === 'running' ? 0 : 1
   }
   await ensureDirectory(paths.controlHome)
@@ -164,6 +195,7 @@ async function service(args: string[], context: CLIContext): Promise<number> {
           await checkDirectory(paths.runtimeHome)
           await rm(paths.versionsDir, { recursive: true, force: true })
           await rm(paths.logsDir, { recursive: true, force: true })
+          await rm(paths.serviceDir, { recursive: true, force: true })
         }
         break
       case 'start':
@@ -185,14 +217,15 @@ async function service(args: string[], context: CLIContext): Promise<number> {
   })
   context.stdout(action === 'install' ? 'installed Memoh Runtime service (stopped); run service start to connect'
     : action === 'uninstall' ? 'uninstalled Memoh Runtime service; saved enrollment was retained'
-      : `${action === 'stop' ? 'stopped' : action === 'restart' ? 'restarted' : 'started'} Memoh Runtime service`)
+      : action === 'stop' ? 'stopped Memoh Runtime service; it starts again at the next login unless you run service uninstall'
+        : `${action === 'restart' ? 'restarted' : 'started'} Memoh Runtime service`)
   return 0
 }
 
 async function resolveEnrollment(values: Values, context: CLIContext): Promise<RuntimeEnrollment> {
   const explicitConfig = stringValue(values.config)
   if (explicitConfig) {
-    if (['server', 'key', 'team-id', 'runtime-id', 'insecure-localhost'].some(key => values[key] !== undefined)) throw new Error('--config cannot be combined with connection flags')
+    if (['server', 'key', 'team-id', 'insecure-localhost'].some(key => values[key] !== undefined)) throw new Error('--config cannot be combined with connection flags')
     return readRuntimeEnrollment(resolve(explicitConfig), context.home)
   }
   const serverUrl = stringValue(values.server) ?? context.env.MEMOH_RUNTIME_SERVER
@@ -200,12 +233,11 @@ async function resolveEnrollment(values: Values, context: CLIContext): Promise<R
   if (serverUrl || key) {
     if (!serverUrl || !key) throw new Error('--server and --key must be provided together')
     return normalizeRuntimeEnrollment({ serverUrl, key,
-      runtimeId: stringValue(values['runtime-id']) ?? context.env.MEMOH_RUNTIME_ID,
       teamId: stringValue(values['team-id']) ?? context.env.MEMOH_RUNTIME_TEAM_ID,
       insecureLocalhost: values['insecure-localhost'] === true || parseBooleanEnvironment(context.env.MEMOH_RUNTIME_INSECURE_LOCALHOST, 'MEMOH_RUNTIME_INSECURE_LOCALHOST') === true,
     }, context.home)
   }
-  if (['team-id', 'runtime-id', 'insecure-localhost'].some(key => values[key] !== undefined)) throw new Error('connection options require --server and --key')
+  if (['team-id', 'insecure-localhost'].some(key => values[key] !== undefined)) throw new Error('connection options require --server and --key')
   const input = context.env.MEMOH_RUNTIME_CONFIG ?? resolveRuntimePaths({ home: context.home }).configPath
   return readRuntimeEnrollment(resolve(input), context.home)
 }

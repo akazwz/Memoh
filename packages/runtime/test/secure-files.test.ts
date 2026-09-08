@@ -1,13 +1,13 @@
 import { execFile } from 'node:child_process'
 import * as fs from 'node:fs/promises'
 import { chmod, mkdtemp, readdir, realpath, rm, stat, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { tmpdir, userInfo } from 'node:os'
 import { dirname, join } from 'node:path'
 import { promisify } from 'node:util'
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { checkExecutable, readPrivateFile, writeFileAtomic } from '../src/secure-files'
+import { checkDirectory, checkExecutable, readPrivateFile, writeFileAtomic } from '../src/secure-files'
 import { secureWindowsDirectory } from '../src/daemon/windows'
 import { spawnCommand } from '../src/daemon/types'
 import { protectWindowsDirectory, protectWindowsFile } from '../src/windows-file-security'
@@ -113,5 +113,24 @@ describe('service executable trust', () => {
     const path = await executable()
     await promisify(execFile)('/bin/chmod', ['+a', 'everyone allow read,execute', path])
     await expect(checkExecutable(path)).resolves.toBeUndefined()
+  })
+
+  it.runIf(process.platform !== 'win32')('accepts a package manager prefix that is group-writable or owned by another account', async () => {
+    // Homebrew keeps its Cellar admin-writable; a shared /usr/local belongs to whoever installed it.
+    const path = await executable()
+    await chmod(dirname(path), 0o775)
+    await expect(checkExecutable(path)).resolves.toBeUndefined()
+    const rootOwned = await realpath('/bin/sh')
+    await expect(checkExecutable(rootOwned)).resolves.toBeUndefined()
+  })
+
+  it.runIf(process.platform === 'darwin')('ignores ACL entries the user granted to themselves', async () => {
+    const path = await executable()
+    await promisify(execFile)('/bin/chmod', ['+a', `${userInfo().username} allow write`, path])
+    await promisify(execFile)('/bin/chmod', ['+a', `${userInfo().username} allow write,delete`, dirname(path)])
+    await expect(checkExecutable(path)).resolves.toBeUndefined()
+    await expect(checkDirectory(dirname(path))).resolves.toBeUndefined()
+    await promisify(execFile)('/bin/chmod', ['+a', 'group:staff allow write', dirname(path)])
+    await expect(checkDirectory(dirname(path))).rejects.toThrow('writable extended ACL')
   })
 })

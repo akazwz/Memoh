@@ -13,7 +13,6 @@ import {
 } from '../src/runtime-config'
 
 const runtimeKey = `mrk_${'a'.repeat(64)}`
-const runtimeID = '11111111-1111-4111-8111-111111111111'
 const teamID = '22222222-2222-4222-8222-222222222222'
 const temporaryDirectories: string[] = []
 
@@ -26,7 +25,6 @@ describe('runtime enrollment configuration', () => {
     const root = await temporaryDirectory()
     const configPath = join(root, 'private', 'config.json')
     const enrollment = normalizeRuntimeEnrollment({
-      runtimeId: runtimeID.toUpperCase(),
       serverUrl: 'wss://memoh.example/api///',
       key: ` ${runtimeKey} `,
       teamId: teamID.toUpperCase(),
@@ -36,7 +34,6 @@ describe('runtime enrollment configuration', () => {
 
     await expect(readRuntimeEnrollment(configPath, root)).resolves.toEqual({
       schemaVersion: 1,
-      runtimeId: runtimeID,
       serverUrl: 'https://memoh.example/api',
       key: runtimeKey,
       teamId: teamID,
@@ -105,17 +102,14 @@ describe('runtime enrollment configuration', () => {
   })
 
   it('requires replacement for any enrollment change, including key rotation', () => {
-    const first = normalizeRuntimeEnrollment({ runtimeId: runtimeID, serverUrl: 'https://one.example', key: runtimeKey })
-    const reissued = normalizeRuntimeEnrollment({ runtimeId: runtimeID, serverUrl: 'https://one.example', key: `mrk_${'b'.repeat(64)}` })
-    const moved = normalizeRuntimeEnrollment({ runtimeId: runtimeID, serverUrl: 'https://two.example', key: runtimeKey })
-    const other = normalizeRuntimeEnrollment({
-      runtimeId: '33333333-3333-4333-8333-333333333333',
-      serverUrl: 'https://one.example',
-      key: runtimeKey,
-    })
+    const first = normalizeRuntimeEnrollment({ serverUrl: 'https://one.example', key: runtimeKey })
+    const reissued = normalizeRuntimeEnrollment({ serverUrl: 'https://one.example', key: `mrk_${'b'.repeat(64)}` })
+    const moved = normalizeRuntimeEnrollment({ serverUrl: 'https://two.example', key: runtimeKey })
+    const other = normalizeRuntimeEnrollment({ serverUrl: 'https://one.example', key: runtimeKey, teamId: teamID })
     expect(sameEnrollment(first, reissued)).toBe(false)
     expect(sameEnrollment(first, moved)).toBe(false)
     expect(sameEnrollment(first, other)).toBe(false)
+    expect(sameEnrollment(first, normalizeRuntimeEnrollment({ serverUrl: 'wss://one.example/', key: runtimeKey }))).toBe(true)
   })
 })
 
