@@ -25,9 +25,8 @@ import (
 // The write side belongs to the reservation itself: StartRun adds the member in
 // the same transaction that reserves the run, RenewLease moves its score in the
 // same script that extends the lease, and ReleaseRun and DeleteRunRef remove
-// it from the stored ref's token. Runs started through the pre-ledger entry
-// points carry no token and are deliberately absent — there is no durable row
-// for a reaper to transition.
+// it from the stored ref's token. Backend-only reservation tests carry no
+// token and are absent from the index because they have no durable row.
 const leaseIndexMemberFields = 4
 
 // expiredLeaseCandidatesScript samples TIME inside the script so a reaper with a

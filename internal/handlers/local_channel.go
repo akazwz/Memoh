@@ -506,9 +506,8 @@ func (h *LocalChannelHandler) classifyWebSlash(text string, hasAttachments bool,
 		Surface:        surface,
 		IsGroup:        false,
 		Directed:       true,
-		SupportsMode:   false,
 		KnownCommand: func(resource string) bool {
-			if resource == "help" || resource == "skill" || resource == "permission" {
+			if resource == "help" || resource == "skill" || resource == "permission" || resource == "steer" || resource == "queue" {
 				return true
 			}
 			return h.commandHandler != nil && h.commandHandler.HasCommandResource(resource)
@@ -536,6 +535,9 @@ func (h *LocalChannelHandler) classifyWebSlashForSession(ctx context.Context, te
 			Invocation:   decision.Invocation,
 			AgentCommand: selector,
 		}
+	}
+	if decision.Kind == slash.DecisionCommandAction && (decision.Command.Resource == "steer" || decision.Command.Resource == "queue") {
+		return decision
 	}
 	if isReservedWebACPControl(selector) ||
 		(decision.Invocation != nil && isReservedWebACPControl(decision.Invocation.Parsed.Resource)) {
@@ -642,6 +644,8 @@ func webActionID(resource, action string) string {
 		return "skill.list"
 	case resource == "permission":
 		return "permission"
+	case resource == "steer" || resource == "queue":
+		return resource
 	default:
 		return ""
 	}
@@ -659,6 +663,40 @@ func sendWSCommandResult(writer *wsWriter, msg wsClientMessage, actionID string,
 	event.Type = "command_result"
 	event.Result = result
 	writer.SendJSON(event)
+}
+
+// Queue commands share REST admission and invocation identity. They never start
+// a parallel chat turn or pass the command selector to the model.
+func (h *LocalChannelHandler) executeWSQueueCommand(ctx context.Context, writer *wsWriter, msg wsClientMessage, botID, actionID, text string) {
+	var err error
+	switch {
+	case strings.TrimSpace(msg.SessionID) == "" || strings.TrimSpace(text) == "":
+		err = apperror.New(apperror.CodeQueueRequestInvalid, nil)
+	default:
+		var payload []byte
+		payload, err = marshalQueuePayload(text)
+		if err == nil {
+			if actionID == "steer" {
+				_, err = h.agentService.EnqueueSteer(ctx, botID, msg.SessionID, msg.InvocationID, payload)
+			} else {
+				_, err = h.agentService.EnqueueFollowUp(ctx, botID, msg.SessionID, msg.InvocationID, payload)
+			}
+		}
+		err = queueAdmissionError(err)
+	}
+	if err != nil {
+		public, ok := apperror.PublicFrom(err, "")
+		if !ok {
+			h.logger.Error("web queue command failed", slog.Any("error", err))
+			public, _ = apperror.PublicFrom(apperror.New(apperror.CodeQueueAdmissionUnavailable, nil), "")
+		}
+		event := commandEvent(msg.InvocationID, msg.ComposerScope, msg.SessionID, actionID)
+		event.Type = "command_error"
+		event.Error = &CommandActionError{Code: string(public.Code), Message: public.Detail}
+		writer.SendJSON(event)
+		return
+	}
+	sendWSCommandResult(writer, msg, actionID, &CommandActionResult{Kind: "queue_accepted"})
 }
 
 // StreamMessages godoc
@@ -1438,6 +1476,8 @@ type wsRunAdmissionBuilder func(context.Context, sessionruntime.RunHandle) (sess
 type wsAdmittedTurn struct {
 	TurnID   string
 	Position *int64
+	Handle   sessionruntime.RunHandle
+	InjectCh chan turn.InjectMessage
 }
 
 // wsSubmission is the canonical form of what a client sent. Its bytes decide
@@ -1702,6 +1742,7 @@ func (h *LocalChannelHandler) startWSStream(baseCtx, connCtx context.Context, wr
 	sendWSRunAccepted(writer, ref, admission.Accepted)
 
 	eventCh := make(chan application.WSStreamEvent, 64)
+	injectCh := make(chan turn.InjectMessage, 16)
 	forwarded := make(chan struct{})
 	releaseCompaction := h.agentService.DeferSessionCompaction(botID, ref.SessionID, ref.RunID)
 	go func() {
@@ -1711,8 +1752,9 @@ func (h *LocalChannelHandler) startWSStream(baseCtx, connCtx context.Context, wr
 				defer onFinish()
 			}
 			defer close(eventCh)
-			return runner(streamCtx, ref, wsAdmittedTurn{TurnID: admission.TurnID, Position: admission.TurnPosition}, eventCh, abortCh)
+			return runner(streamCtx, ref, wsAdmittedTurn{TurnID: admission.TurnID, Position: admission.TurnPosition, Handle: admission.Handle, InjectCh: injectCh}, eventCh, abortCh)
 		}()
+		close(injectCh)
 		// Every event this run produced has to be published before the run is
 		// declared finished, or a subscriber is shown the terminal state and then
 		// handed output that supposedly preceded it. The forwarder cannot outlive
@@ -2036,6 +2078,10 @@ func (h *LocalChannelHandler) HandleWebSocket(c echo.Context) error {
 						continue
 					}
 				}
+				if actionID == "steer" || actionID == "queue" {
+					h.executeWSQueueCommand(streamBaseCtx, writer, msg, botID, actionID, decision.Invocation.Rest)
+					continue
+				}
 				skillActivationAllowed := true
 				if strings.TrimSpace(sessionID) != "" && !permissionAction {
 					supported, supportErr := h.wsSessionSupportsRequestedSkills(streamBaseCtx, sessionID)
@@ -2330,6 +2376,9 @@ func (h *LocalChannelHandler) HandleWebSocket(c echo.Context) error {
 						WorkspaceTargetID:       workspaceTargetID,
 						ToolHTTPURL:             buildACPMCPToolsURL(c, botID),
 						AgentCommand:            decision.AgentCommand,
+						RunHandle:               admittedTurn.Handle,
+						InjectCh:                admittedTurn.InjectCh,
+						QueueSteerEnabled:       admittedTurn.InjectCh != nil,
 					}
 					if preparedActivationReq != nil {
 						req.Messages = preparedActivationReq.Messages
@@ -2409,6 +2458,8 @@ func (h *LocalChannelHandler) HandleWebSocket(c echo.Context) error {
 					input.RunID = runRef.RunID
 					input.TurnID = admittedTurn.TurnID
 					input.TurnPosition = admittedTurn.Position
+					input.RunHandle = admittedTurn.Handle
+					input.InjectCh = admittedTurn.InjectCh
 					input.OnModelPreferenceSettled = func() {
 						writer.SendJSON(wsOutboundEvent{
 							Type:         "model_preference_settled",
@@ -2510,6 +2561,8 @@ func (h *LocalChannelHandler) HandleWebSocket(c echo.Context) error {
 					input.RunID = runRef.RunID
 					input.TurnID = admittedTurn.TurnID
 					input.TurnPosition = admittedTurn.Position
+					input.RunHandle = admittedTurn.Handle
+					input.InjectCh = admittedTurn.InjectCh
 					input.Attachments = editAdmission.preparedAttachments()
 					input.OnModelPreferenceSettled = func() {
 						writer.SendJSON(wsOutboundEvent{

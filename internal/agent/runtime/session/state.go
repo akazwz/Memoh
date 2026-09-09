@@ -72,7 +72,7 @@ func decisionEventID(event native.StreamEvent) string {
 	return strings.TrimSpace(event.ToolCallID)
 }
 
-func runtimeRunPatch(snapshot Snapshot, status, runError, steer, lease bool) RuntimeDelta {
+func runtimeRunPatch(snapshot Snapshot, status, runError, lease bool) RuntimeDelta {
 	run := snapshot.CurrentRunView
 	if run == nil {
 		return RuntimeDelta{}
@@ -92,10 +92,6 @@ func runtimeRunPatch(snapshot Snapshot, status, runError, steer, lease bool) Run
 		value := run.Error
 		patch.Error = &value
 	}
-	if steer && run.Steer != nil {
-		value := *run.Steer
-		patch.Steer = &value
-	}
 	if lease {
 		value := time.Time{}
 		if run.OwnerLeaseExpiresAt != nil {
@@ -114,6 +110,10 @@ func (*Manager) leaseExpired(run *CurrentRunView, now time.Time) bool {
 	}
 	return true
 }
+
+// IsActiveRunStatus reports whether a projected run status still occupies the
+// session: accepted, running, or waiting for a decision.
+func IsActiveRunStatus(status string) bool { return isActiveRunStatus(status) }
 
 func isActiveRunStatus(status string) bool {
 	return strings.EqualFold(status, RunStatusAdmitting) ||
@@ -235,7 +235,10 @@ func normalizeRunAdmission(admission RunAdmissionView) (RunAdmissionView, error)
 	if err != nil {
 		return RunAdmissionView{}, err
 	}
-	return RunAdmissionView{RequestUserTurn: requestUserTurn, Operation: operation}, nil
+	return RunAdmissionView{
+		RequestUserTurn: requestUserTurn,
+		Operation:       operation,
+	}, nil
 }
 
 func normalizeRequestUserTurn(turn *chatview.UITurn) (*chatview.UITurn, error) {

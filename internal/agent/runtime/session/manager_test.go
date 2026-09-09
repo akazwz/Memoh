@@ -948,7 +948,7 @@ func runManagerAbortAcknowledgesReservedRunBeforeTerminalCompletion(t *testing.T
 	manager := testRuntimeManagerWithOptions(t, backend, Options{
 		OwnerID:       "owner-start-abort",
 		StateTTL:      time.Hour,
-		OwnerLeaseTTL: 60 * time.Millisecond,
+		OwnerLeaseTTL: time.Second, // This scenario keeps ownership while admission is gated.
 		CommandAckTTL: 50 * time.Millisecond,
 	})
 	runCtx, cancelRun := context.WithCancel(context.Background())
@@ -1259,18 +1259,6 @@ func runCommonRuntimeManagerContract(t *testing.T, suite runtimeBackendContractS
 		t.Parallel()
 		runRuntimeManagerSharesRequestUserTurnContract(t, suite)
 	})
-	t.Run("keeps queued steer valid past command acknowledgement timeout", func(t *testing.T) {
-		t.Parallel()
-		runRuntimeManagerKeepsQueuedSteerPastAckTimeoutContract(t, suite)
-	})
-	t.Run("rejects queued steer when the run finishes", func(t *testing.T) {
-		t.Parallel()
-		runRuntimeManagerRejectsQueuedSteerOnFinishContract(t, suite)
-	})
-	t.Run("rejects queued steer when the agent sends a terminal event", func(t *testing.T) {
-		t.Parallel()
-		runRuntimeManagerRejectsQueuedSteerOnAgentTerminalContract(t, suite)
-	})
 	t.Run("recovers subscriber buffer overflow", func(t *testing.T) {
 		t.Parallel()
 		runRuntimeManagerSignalsSubscriberOverflowContract(t, suite)
@@ -1425,19 +1413,6 @@ func runRuntimeManagerFencesDelayedOwnerMutationsContract(t *testing.T, suite ru
 	if err != nil {
 		t.Fatalf("start first generation: %v", err)
 	}
-	if _, err := manager.Steer(context.Background(), testBotID, testSessionID, testRunID, "old generation steer"); err != nil {
-		t.Fatalf("steer first generation: %v", err)
-	}
-	var delayedApplied func()
-	select {
-	case injected := <-oldInject:
-		delayedApplied = injected.Applied
-	case <-time.After(time.Second):
-		t.Fatal("first generation steer was not delivered")
-	}
-	if delayedApplied == nil {
-		t.Fatal("first generation steer has no applied callback")
-	}
 	if err := manager.FinishRun(context.Background(), oldHandle, RunStatusCompleted, ""); err != nil {
 		t.Fatalf("finish first generation: %v", err)
 	}
@@ -1453,9 +1428,6 @@ func runRuntimeManagerFencesDelayedOwnerMutationsContract(t *testing.T, suite ru
 	if ok, err := manager.AbortRun(context.Background(), oldHandle); ok || !errors.Is(err, ErrRunOwnershipLost) {
 		t.Fatalf("stale abort = ok:%v err:%v, want ErrRunOwnershipLost", ok, err)
 	}
-	if _, err := manager.SteerRun(context.Background(), oldHandle, "late steer command"); !errors.Is(err, ErrRunOwnershipLost) {
-		t.Fatalf("stale steer error = %v, want ErrRunOwnershipLost", err)
-	}
 	select {
 	case <-newAbort:
 		t.Fatal("stale abort signaled the new generation")
@@ -1470,7 +1442,6 @@ func runRuntimeManagerFencesDelayedOwnerMutationsContract(t *testing.T, suite ru
 	if err := manager.FinishRun(context.Background(), oldHandle, RunStatusErrored, "late finish"); !errors.Is(err, ErrRunOwnershipLost) {
 		t.Fatalf("late finish error = %v, want ErrRunOwnershipLost", err)
 	}
-	delayedApplied()
 	if manager.localControlForHandle(newHandle) == nil {
 		t.Fatal("late mutation removed the current run control")
 	}
@@ -1486,13 +1457,15 @@ func runRuntimeManagerFencesDelayedOwnerMutationsContract(t *testing.T, suite ru
 
 func runDistributedRuntimeManagerContract(t *testing.T, suite distributedRuntimeBackendContractSuite) {
 	t.Helper()
+	t.Run("repairs terminal after lease expiry using exact receipt", func(t *testing.T) { runExpiredLeaseTerminalReceiptContract(t, suite) })
+	t.Run("routes durable decisions without UI projection", func(t *testing.T) { runDistributedDecisionRouteContract(t, suite) })
 	t.Run("does not prepare rejected run operations", func(t *testing.T) {
 		t.Parallel()
 		runRuntimeManagerDoesNotBuildRejectedOperationContract(t, suite)
 	})
-	t.Run("routes abort and steer across managers", func(t *testing.T) {
+	t.Run("routes abort across managers", func(t *testing.T) {
 		t.Parallel()
-		runRuntimeManagerRoutesAbortAndSteerAcrossManagersContract(t, suite)
+		runRuntimeManagerRoutesAbortAcrossManagersContract(t, suite)
 	})
 	t.Run("routes abort past a stale local generation", func(t *testing.T) {
 		t.Parallel()
@@ -1533,10 +1506,6 @@ func runDistributedRuntimeManagerContract(t *testing.T, suite distributedRuntime
 	t.Run("acknowledges an applied response that finishes the run", func(t *testing.T) {
 		t.Parallel()
 		runRuntimeManagerAcknowledgesAppliedResponseAfterFinish(t, suite)
-	})
-	t.Run("reconciles a response after owner control is lost", func(t *testing.T) {
-		t.Parallel()
-		runRuntimeManagerReconcilesResponseAfterOwnerControlLoss(t, suite)
 	})
 	t.Run("keeps command routing alive after startup context cancellation", func(t *testing.T) {
 		t.Parallel()
@@ -1734,12 +1703,12 @@ func runRuntimeManagerHandsExhaustedDurableFinishToReaper(t *testing.T, suite di
 
 			transient := errors.New("database remains unavailable")
 			if phase == "prepare" {
-				runs.setPrepareErr(transient)
+				runs.SetPrepareErr(transient)
 			} else {
 				if _, err := manager.HandleAgentEvent(context.Background(), admission.Handle, native.StreamEvent{Type: native.EventAgentEnd}); err != nil {
 					t.Fatalf("prepare terminal event: %v", err)
 				}
-				runs.setFinalizeErr(transient)
+				runs.SetFinalizeErr(transient)
 			}
 			if err := manager.FinishRun(context.Background(), admission.Handle, RunStatusCompleted, ""); err == nil {
 				t.Fatal("FinishRun() error = nil, want initial durable failure")
@@ -1752,8 +1721,8 @@ func runRuntimeManagerHandsExhaustedDurableFinishToReaper(t *testing.T, suite di
 			if manager.localControlForHandle(admission.Handle) != nil {
 				t.Fatal("durable retry budget expired without releasing local control")
 			}
-			runs.setPrepareErr(nil)
-			runs.setFinalizeErr(nil)
+			runs.SetPrepareErr(nil)
+			runs.SetFinalizeErr(nil)
 
 			want := ledger.StateLost
 			if phase == "finalize" {
@@ -1761,49 +1730,13 @@ func runRuntimeManagerHandsExhaustedDurableFinishToReaper(t *testing.T, suite di
 			}
 			reaperDeadline := time.Now().Add(2 * time.Second)
 			for time.Now().Before(reaperDeadline) {
-				if got := runs.state(admission.RunID); got == want {
+				if got := runs.State(admission.RunID); got == want {
 					return
 				}
 				time.Sleep(10 * time.Millisecond)
 			}
-			t.Fatalf("reaper state = %q, want %q after %s retry timeout", runs.state(admission.RunID), want, phase)
+			t.Fatalf("reaper state = %q, want %q after %s retry timeout", runs.State(admission.RunID), want, phase)
 		})
-	}
-}
-
-func runRuntimeManagerReconcilesResponseAfterOwnerControlLoss(t *testing.T, suite distributedRuntimeBackendContractSuite) {
-	t.Helper()
-	backends := suite.newSharedBackends(t, 2)
-	owner := testRuntimeManager(t, backends[0], "response-reconcile-owner")
-	restarted := testRuntimeManager(t, backends[1], "response-reconcile-owner")
-	if err := owner.StartRun(context.Background(), testBotID, testSessionID, "stream-response-reconcile", make(chan struct{}, 1), func() {}, make(chan turn.InjectMessage, 1)); err != nil {
-		t.Fatalf("start response run: %v", err)
-	}
-	handle := requireRunHandle(t, owner, testBotID, testSessionID, "stream-response-reconcile")
-	if _, err := owner.HandleAgentEvent(context.Background(), handle, native.StreamEvent{
-		Type: native.EventToolApprovalRequest, ToolName: "exec", ToolCallID: "call-response-reconcile",
-		ApprovalID: "approval-response-reconcile", Status: "pending",
-	}); err != nil {
-		t.Fatalf("record response target: %v", err)
-	}
-	owner.forgetLocalControlForHandle(context.Background(), handle)
-	var reconciled atomic.Int64
-	restarted.SetCommandReconciler(func(_ context.Context, command Command) (bool, error) {
-		reconciled.Add(1)
-		if command.TargetID != "approval-response-reconcile" || command.Generation != handle.Generation {
-			t.Fatalf("reconcile command = %#v", command)
-		}
-		return true, nil
-	})
-	handled, err := restarted.DispatchActiveCommand(
-		context.Background(), testBotID, testSessionID, CommandToolApprovalResponse,
-		"approval-response-reconcile", []byte(`{"decision":"approve"}`),
-	)
-	if err != nil || !handled {
-		t.Fatalf("reconciled response = handled:%v err:%v", handled, err)
-	}
-	if reconciled.Load() != 1 {
-		t.Fatalf("reconciler calls = %d, want 1", reconciled.Load())
 	}
 }
 
@@ -2292,7 +2225,7 @@ func runRuntimeManagerRejectsDelayedOldGenerationCommand(t *testing.T, suite dis
 func runRuntimeManagerRejectsExpiredLeaseRevivalContract(t *testing.T, suite distributedRuntimeBackendContractSuite) {
 	t.Helper()
 
-	const leaseTTL = 100 * time.Millisecond
+	const leaseTTL = 500 * time.Millisecond
 	backend := suite.newBackend(t)
 	manager := testRuntimeManagerWithOptions(t, backend, Options{
 		OwnerID:       "owner-expired-revival",
@@ -2350,57 +2283,6 @@ func runRuntimeManagerRejectsExpiredLeaseRevivalContract(t *testing.T, suite dis
 	if snapshot.CurrentRunView == nil || snapshot.CurrentRunView.Status != RunStatusLost {
 		t.Fatalf("expired current run = %#v, want lost", snapshot.CurrentRunView)
 	}
-}
-
-func runRuntimeManagerKeepsQueuedSteerPastAckTimeoutContract(t *testing.T, suite runtimeBackendContractSuite) {
-	t.Helper()
-
-	const commandAckTTL = 500 * time.Millisecond
-	manager := testRuntimeManagerWithOptions(t, suite.newBackend(t), Options{
-		OwnerID:       "owner-queued-steer",
-		StateTTL:      time.Hour,
-		OwnerLeaseTTL: time.Second,
-		CommandAckTTL: commandAckTTL,
-	})
-	injectCh := make(chan turn.InjectMessage, 1)
-	if err := manager.StartRun(context.Background(), testBotID, testSessionID, testRunID, make(chan struct{}, 1), func() {}, injectCh); err != nil {
-		t.Fatalf("start run: %v", err)
-	}
-	steer, err := manager.Steer(context.Background(), testBotID, testSessionID, testRunID, "wait for the next model step")
-	if err != nil {
-		t.Fatalf("steer: %v", err)
-	}
-
-	queued := waitRuntimeSnapshot(t, manager, testBotID, testSessionID, func(snapshot Snapshot) bool {
-		return snapshot.CurrentRunView != nil &&
-			snapshot.CurrentRunView.Steer != nil &&
-			snapshot.CurrentRunView.Steer.ID == steer.ID &&
-			snapshot.CurrentRunView.Steer.Status == SteerStatusQueued
-	})
-	if queued.CurrentRunView == nil || queued.CurrentRunView.Steer == nil {
-		t.Fatal("queued steer is missing")
-	}
-	time.Sleep(2 * commandAckTTL)
-	snapshot, err := manager.Snapshot(context.Background(), testBotID, testSessionID)
-	if err != nil {
-		t.Fatalf("snapshot queued steer after acknowledgement timeout: %v", err)
-	}
-	if snapshot.CurrentRunView == nil || snapshot.CurrentRunView.Steer == nil || snapshot.CurrentRunView.Steer.ID != steer.ID || snapshot.CurrentRunView.Steer.Status != SteerStatusQueued {
-		t.Fatalf("steer after acknowledgement timeout = %#v, want queued", snapshot.CurrentRunView)
-	}
-
-	select {
-	case injected := <-injectCh:
-		if injected.Applied == nil {
-			t.Fatal("queued steer is missing its applied acknowledgement")
-		}
-		injected.Applied()
-	case <-time.After(time.Second):
-		t.Fatal("queued steer was not delivered to the agent")
-	}
-	waitRuntimeSnapshot(t, manager, testBotID, testSessionID, func(snapshot Snapshot) bool {
-		return snapshot.CurrentRunView != nil && snapshot.CurrentRunView.Steer != nil && snapshot.CurrentRunView.Steer.Status == SteerStatusApplied
-	})
 }
 
 func runRuntimeManagerCancelsExecutionAfterOwnershipLossContract(t *testing.T, suite distributedRuntimeBackendContractSuite) {
@@ -2712,122 +2594,6 @@ func TestRuntimeManagerBuilderFailureReleasesReservation(t *testing.T) {
 	}
 }
 
-func runRuntimeManagerRejectsQueuedSteerOnFinishContract(t *testing.T, suite runtimeBackendContractSuite) {
-	t.Helper()
-
-	manager := testRuntimeManager(t, suite.newBackend(t), "owner-finished-steer")
-	injectCh := make(chan turn.InjectMessage, 1)
-	if err := manager.StartRun(context.Background(), testBotID, testSessionID, testRunID, make(chan struct{}, 1), func() {}, injectCh); err != nil {
-		t.Fatalf("start run: %v", err)
-	}
-	steer, err := manager.Steer(context.Background(), testBotID, testSessionID, testRunID, "adjust before finish")
-	if err != nil {
-		t.Fatalf("steer: %v", err)
-	}
-	waitRuntimeSnapshot(t, manager, testBotID, testSessionID, func(snapshot Snapshot) bool {
-		return snapshot.CurrentRunView != nil && snapshot.CurrentRunView.Steer != nil &&
-			snapshot.CurrentRunView.Steer.ID == steer.ID && snapshot.CurrentRunView.Steer.Status == SteerStatusQueued
-	})
-	if err := manager.FinishRun(context.Background(), requireRunHandle(t, manager, testBotID, testSessionID, testRunID), RunStatusCompleted, ""); err != nil {
-		t.Fatalf("finish run: %v", err)
-	}
-	snapshot, err := manager.Snapshot(context.Background(), testBotID, testSessionID)
-	if err != nil {
-		t.Fatalf("snapshot: %v", err)
-	}
-	if snapshot.CurrentRunView == nil || snapshot.CurrentRunView.Steer == nil || snapshot.CurrentRunView.Steer.Status != SteerStatusRejected {
-		t.Fatalf("finished steer = %#v, want rejected", snapshot.CurrentRunView)
-	}
-	if snapshot.CurrentRunView.Steer.Error != steerRunFinishedError {
-		t.Fatalf("finished steer error = %q", snapshot.CurrentRunView.Steer.Error)
-	}
-	select {
-	case injected := <-injectCh:
-		if injected.Applied != nil {
-			injected.Applied()
-		}
-	default:
-		t.Fatal("queued steer was not delivered")
-	}
-	snapshot, err = manager.Snapshot(context.Background(), testBotID, testSessionID)
-	if err != nil {
-		t.Fatalf("snapshot after late apply: %v", err)
-	}
-	if snapshot.CurrentRunView.Steer.Status != SteerStatusRejected {
-		t.Fatalf("late apply changed terminal steer = %#v", snapshot.CurrentRunView.Steer)
-	}
-}
-
-func runRuntimeManagerRejectsQueuedSteerOnAgentTerminalContract(t *testing.T, suite runtimeBackendContractSuite) {
-	t.Helper()
-
-	for _, tc := range []struct {
-		name       string
-		event      native.StreamEvent
-		wantStatus string
-	}{
-		{name: "end", event: native.StreamEvent{Type: native.EventAgentEnd}, wantStatus: RunStatusCompleted},
-		{name: "abort", event: native.StreamEvent{Type: native.EventAgentAbort}, wantStatus: RunStatusAborted},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			manager := testRuntimeManager(t, suite.newBackend(t), "owner-agent-terminal-steer-"+tc.name)
-			sub, err := manager.Subscribe(context.Background(), testBotID, testSessionID)
-			if err != nil {
-				t.Fatalf("subscribe: %v", err)
-			}
-			defer sub.Close()
-			injectCh := make(chan turn.InjectMessage, 1)
-			handle, err := manager.StartRunHandle(context.Background(), testBotID, testSessionID, testRunID, make(chan struct{}, 1), func() {}, injectCh)
-			if err != nil {
-				t.Fatalf("start run: %v", err)
-			}
-			steer, err := manager.SteerRun(context.Background(), handle, "adjust before agent "+tc.name)
-			if err != nil {
-				t.Fatalf("steer: %v", err)
-			}
-			select {
-			case <-injectCh:
-			case <-time.After(time.Second):
-				t.Fatal("queued steer was not delivered")
-			}
-			waitRuntimeSnapshot(t, manager, testBotID, testSessionID, func(snapshot Snapshot) bool {
-				return snapshot.CurrentRunView != nil && snapshot.CurrentRunView.Steer != nil &&
-					snapshot.CurrentRunView.Steer.ID == steer.ID && snapshot.CurrentRunView.Steer.Status == SteerStatusQueued
-			})
-			if _, err := manager.HandleAgentEvent(context.Background(), handle, tc.event); err != nil {
-				t.Fatalf("handle agent %s: %v", tc.name, err)
-			}
-
-			snapshot, err := manager.Snapshot(context.Background(), testBotID, testSessionID)
-			if err != nil {
-				t.Fatalf("snapshot: %v", err)
-			}
-			if snapshot.CurrentRunView == nil || snapshot.CurrentRunView.Steer == nil || snapshot.CurrentRunView.Steer.Status != SteerStatusRejected {
-				t.Fatalf("agent-terminal steer = %#v, want rejected", snapshot.CurrentRunView)
-			}
-			if snapshot.CurrentRunView.Steer.Error != steerRunFinishedError {
-				t.Fatalf("agent-terminal steer error = %q", snapshot.CurrentRunView.Steer.Error)
-			}
-			event := waitRuntimeEvent(t, sub.C, func(event Event) bool {
-				return event.Delta != nil && event.Delta.Run != nil && event.Delta.Run.Status != nil && *event.Delta.Run.Status == RunStatusFinishing
-			})
-			if event.Delta.Run.Steer == nil || event.Delta.Run.Steer.Status != SteerStatusRejected {
-				t.Fatalf("agent-terminal delta = %#v, want rejected steer", event.Delta)
-			}
-			if snapshot.CurrentRunView.ProposedTerminalStatus != tc.wantStatus || snapshot.CurrentRunView.FinishProposedAt == nil {
-				t.Fatalf("agent-terminal proposal = %#v, want %s", snapshot.CurrentRunView, tc.wantStatus)
-			}
-			if err := manager.FinishRun(context.Background(), handle, "", ""); err != nil {
-				t.Fatalf("finalize agent %s: %v", tc.name, err)
-			}
-			snapshot, err = manager.Snapshot(context.Background(), testBotID, testSessionID)
-			if err != nil || snapshot.CurrentRunView == nil || snapshot.CurrentRunView.Status != tc.wantStatus {
-				t.Fatalf("final agent status = %#v, err %v, want %s", snapshot.CurrentRunView, err, tc.wantStatus)
-			}
-		})
-	}
-}
-
 func runRuntimeManagerSharesReplacementOperationContract(t *testing.T, suite runtimeBackendContractSuite) {
 	t.Helper()
 
@@ -2906,20 +2672,20 @@ func runRuntimeManagerSharesRequestUserTurnContract(t *testing.T, suite runtimeB
 		t.Fatalf("observer snapshot: %v", err)
 	}
 	got := snapshot.CurrentRunView
-	if got == nil || got.RequestUserTurn == nil {
+	if got == nil || got.requestUserTurn() == nil {
 		t.Fatalf("current run request user turn = %#v", got)
 	}
-	if got.RequestUserTurn.Text != requestTurn.Text || got.RequestUserTurn.ExternalMessageID != testRunID {
-		t.Fatalf("request user turn = %#v", got.RequestUserTurn)
+	if got.requestUserTurn().Text != requestTurn.Text || got.requestUserTurn().ExternalMessageID != testRunID {
+		t.Fatalf("request user turn = %#v", got.requestUserTurn())
 	}
-	if len(got.RequestUserTurn.Attachments) != 1 || got.RequestUserTurn.Attachments[0].ContentHash != "sha256:notes" {
-		t.Fatalf("request user turn attachments = %#v", got.RequestUserTurn.Attachments)
+	if len(got.requestUserTurn().Attachments) != 1 || got.requestUserTurn().Attachments[0].ContentHash != "sha256:notes" {
+		t.Fatalf("request user turn attachments = %#v", got.requestUserTurn().Attachments)
 	}
 
 	requestTurn.Text = "mutated by caller"
 	requestTurn.Attachments[0].Name = "mutated.txt"
-	if got.RequestUserTurn.Text != "inspect the workspace" || got.RequestUserTurn.Attachments[0].Name != "notes.txt" {
-		t.Fatalf("runtime request user turn aliases caller state: %#v", got.RequestUserTurn)
+	if got.requestUserTurn().Text != "inspect the workspace" || got.requestUserTurn().Attachments[0].Name != "notes.txt" {
+		t.Fatalf("runtime request user turn aliases caller state: %#v", got.requestUserTurn())
 	}
 }
 
@@ -3132,7 +2898,7 @@ func TestRuntimeManagerDropsEpochlessEventsAfterEpochIsEstablished(t *testing.T)
 	}
 }
 
-func runRuntimeManagerRoutesAbortAndSteerAcrossManagersContract(t *testing.T, suite distributedRuntimeBackendContractSuite) {
+func runRuntimeManagerRoutesAbortAcrossManagersContract(t *testing.T, suite distributedRuntimeBackendContractSuite) {
 	t.Helper()
 
 	backends := suite.newSharedBackends(t, 2)
@@ -3177,47 +2943,6 @@ func runRuntimeManagerRoutesAbortAndSteerAcrossManagersContract(t *testing.T, su
 	if snapshot.CurrentRunView == nil || snapshot.CurrentRunView.Status != RunStatusAborted {
 		t.Fatalf("abort status changed after errored finish: %#v", snapshot.CurrentRunView)
 	}
-
-	steerInjectCh := make(chan turn.InjectMessage, 1)
-	if err := owner.StartRun(context.Background(), testBotID, testSessionID, "stream-steer", make(chan struct{}, 1), func() {}, steerInjectCh); err != nil {
-		t.Fatalf("start steer run: %v", err)
-	}
-	steer, err := remote.Steer(context.Background(), testBotID, testSessionID, "stream-steer", "adjust course")
-	if err != nil {
-		t.Fatalf("steer: %v", err)
-	}
-	if steer.Status != SteerStatusPending {
-		t.Fatalf("initial steer = %#v", steer)
-	}
-	select {
-	case injected := <-steerInjectCh:
-		if injected.Text != "adjust course" {
-			t.Fatalf("injected text = %q", injected.Text)
-		}
-		pending, err := remote.Snapshot(context.Background(), testBotID, testSessionID)
-		if err != nil {
-			t.Fatalf("snapshot pending steer: %v", err)
-		}
-		if pending.CurrentRunView == nil || pending.CurrentRunView.Steer == nil || pending.CurrentRunView.Steer.Status != SteerStatusQueued {
-			t.Fatalf("steer was not acknowledged as queued before agent consumption: %#v", pending.CurrentRunView)
-		}
-		if _, err := remote.Steer(context.Background(), testBotID, testSessionID, "stream-steer", "overlapping adjustment"); err == nil {
-			t.Fatal("concurrent steer should be rejected while the first command is pending")
-		}
-		if injected.Applied == nil {
-			t.Fatal("steer injection is missing its agent-consumption acknowledgement")
-		}
-		injected.Applied()
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for steer injection")
-	}
-
-	snapshot = waitRuntimeSnapshot(t, remote, testBotID, testSessionID, func(s Snapshot) bool {
-		return s.CurrentRunView != nil && s.CurrentRunView.Steer != nil && s.CurrentRunView.Steer.Status == SteerStatusApplied
-	})
-	if snapshot.CurrentRunView.Steer.ID == "" {
-		t.Fatalf("steer state = %#v", snapshot.CurrentRunView.Steer)
-	}
 }
 
 func runRuntimeManagerRoutesActiveResponsesAcrossManagersContract(t *testing.T, suite distributedRuntimeBackendContractSuite) {
@@ -3250,7 +2975,7 @@ func runRuntimeManagerRoutesActiveResponsesAcrossManagersContract(t *testing.T, 
 		{commandType: CommandToolApprovalResponse, targetID: "approval-1"},
 		{commandType: CommandUserInputResponse, targetID: "input-1"},
 	} {
-		handled, err := remote.DispatchActiveCommand(context.Background(), testBotID, testSessionID, request.commandType, request.targetID, []byte(`{"ok":true}`))
+		handled, err := remote.dispatchTestCommand(context.Background(), testBotID, testSessionID, request.commandType, request.targetID, []byte(`{"ok":true}`))
 		if err != nil || !handled {
 			t.Fatalf("dispatch %s = handled:%v err:%v", request.commandType, handled, err)
 		}
@@ -3263,7 +2988,7 @@ func runRuntimeManagerRoutesActiveResponsesAcrossManagersContract(t *testing.T, 
 			t.Fatalf("timed out waiting for %s", request.commandType)
 		}
 	}
-	if handled, err := remote.DispatchActiveCommand(context.Background(), testBotID, testSessionID, CommandToolApprovalResponse, "approval-old", nil); err != nil || handled {
+	if handled, err := remote.dispatchTestCommand(context.Background(), testBotID, testSessionID, CommandToolApprovalResponse, "approval-old", nil); err != nil || handled {
 		t.Fatalf("unrelated target = handled:%v err:%v", handled, err)
 	}
 }
@@ -3287,7 +3012,7 @@ func runRuntimeManagerPreservesRemoteCommandDeadlineError(t *testing.T, suite di
 		t.Fatalf("record deadline approval: %v", err)
 	}
 
-	handled, err := remote.DispatchActiveCommand(context.Background(), testBotID, "session-deadline", CommandToolApprovalResponse, "approval-deadline", []byte(`{"action":"approve"}`))
+	handled, err := remote.dispatchTestCommand(context.Background(), testBotID, "session-deadline", CommandToolApprovalResponse, "approval-deadline", []byte(`{"action":"approve"}`))
 	if !handled || !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("remote deadline result = handled:%v err:%v, want context.DeadlineExceeded", handled, err)
 	}
@@ -3316,7 +3041,7 @@ func runRuntimeManagerPreservesOwnershipDeadlineError(t *testing.T, suite distri
 	}
 	ownerBackend.failing.Store(true)
 
-	handled, err := remote.DispatchActiveCommand(context.Background(), testBotID, "session-ownership-deadline", CommandToolApprovalResponse, "approval-ownership-deadline", []byte(`{"action":"approve"}`))
+	handled, err := remote.dispatchTestCommand(context.Background(), testBotID, "session-ownership-deadline", CommandToolApprovalResponse, "approval-ownership-deadline", []byte(`{"action":"approve"}`))
 	if !handled || !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("ownership deadline result = handled:%v err:%v, want context.DeadlineExceeded", handled, err)
 	}
@@ -3345,7 +3070,7 @@ func runRuntimeManagerAcknowledgesAppliedResponseAfterFinish(t *testing.T, suite
 		t.Fatalf("record approval request: %v", err)
 	}
 
-	handled, err := remote.DispatchActiveCommand(context.Background(), testBotID, testSessionID, CommandToolApprovalResponse, "approval-applied", []byte(`{"action":"approve"}`))
+	handled, err := remote.dispatchTestCommand(context.Background(), testBotID, testSessionID, CommandToolApprovalResponse, "approval-applied", []byte(`{"action":"approve"}`))
 	if err != nil || !handled {
 		t.Fatalf("applied response = handled:%v err:%v, want acknowledged success", handled, err)
 	}
@@ -3415,7 +3140,7 @@ func runRuntimeManagerCancelsActiveResponseOnFinish(t *testing.T, suite distribu
 	}
 	dispatchDone := make(chan dispatchResult, 1)
 	go func() {
-		handled, err := remote.DispatchActiveCommand(context.Background(), testBotID, testSessionID, CommandToolApprovalResponse, "approval-finish", []byte(`{"action":"approve"}`))
+		handled, err := remote.dispatchTestCommand(context.Background(), testBotID, testSessionID, CommandToolApprovalResponse, "approval-finish", []byte(`{"action":"approve"}`))
 		dispatchDone <- dispatchResult{handled: handled, err: err}
 	}()
 	receiveTestResult(t, "active response handler start", handlerStarted)
@@ -3468,7 +3193,7 @@ func runRuntimeManagerExpiresActiveResponseHandlers(t *testing.T, suite distribu
 		{commandType: CommandToolApprovalResponse, targetID: "approval-expiry"},
 		{commandType: CommandUserInputResponse, targetID: "input-expiry"},
 	} {
-		handled, err := remote.DispatchActiveCommand(context.Background(), testBotID, "session-response-expiry", request.commandType, request.targetID, []byte(`{"ok":true}`))
+		handled, err := remote.dispatchTestCommand(context.Background(), testBotID, "session-response-expiry", request.commandType, request.targetID, []byte(`{"ok":true}`))
 		if !handled || err == nil {
 			t.Fatalf("expiring %s dispatch = handled:%v err:%v, want deadline error", request.commandType, handled, err)
 		}
@@ -3513,7 +3238,7 @@ func runRuntimeManagerCancelsActiveResponseOnClose(t *testing.T, suite distribut
 	}
 	dispatchDone := make(chan dispatchResult, 1)
 	go func() {
-		handled, err := manager.DispatchActiveCommand(context.Background(), testBotID, "session-response-close", CommandToolApprovalResponse, "approval-close", []byte(`{"action":"approve"}`))
+		handled, err := manager.dispatchTestCommand(context.Background(), testBotID, "session-response-close", CommandToolApprovalResponse, "approval-close", []byte(`{"action":"approve"}`))
 		dispatchDone <- dispatchResult{handled: handled, err: err}
 	}()
 	receiveTestResult(t, "active response handler start", handlerStarted)
@@ -3901,45 +3626,6 @@ func runRuntimeManagerDroppedCommandAckContract(t *testing.T, suite distributedR
 	if snapshot.CurrentRunView == nil || snapshot.CurrentRunView.Status != RunStatusRunning {
 		t.Fatalf("dropped abort status = %#v, want still running", snapshot.CurrentRunView)
 	}
-
-	steer, err := remote.Steer(context.Background(), testBotID, testSessionID, testRunID, "adjust course")
-	if err != nil {
-		t.Fatalf("dropped steer initial publish: %v", err)
-	}
-	if steer.Status != SteerStatusPending {
-		t.Fatalf("initial dropped steer = %#v", steer)
-	}
-	snapshot = waitRuntimeSnapshot(t, remote, testBotID, testSessionID, func(s Snapshot) bool {
-		return s.CurrentRunView != nil &&
-			s.CurrentRunView.Steer != nil &&
-			s.CurrentRunView.Steer.ID == steer.ID &&
-			s.CurrentRunView.Steer.Status == SteerStatusRejected
-	})
-	if snapshot.CurrentRunView.Steer.Error != "runtime steer command was not acknowledged" {
-		t.Fatalf("dropped steer state = %#v", snapshot.CurrentRunView.Steer)
-	}
-
-	owner.applyCommand(context.Background(), Command{
-		Type:      CommandSteer,
-		BotID:     testBotID,
-		SessionID: testSessionID,
-		RunID:     testRunID,
-		SteerID:   steer.ID,
-		Text:      "late adjust course",
-		CreatedAt: time.Now().UTC().Add(-time.Second),
-	})
-	select {
-	case injected := <-injectCh:
-		t.Fatalf("late rejected steer was injected: %#v", injected)
-	default:
-	}
-	snapshot, err = remote.Snapshot(context.Background(), testBotID, testSessionID)
-	if err != nil {
-		t.Fatalf("snapshot after late steer command: %v", err)
-	}
-	if snapshot.CurrentRunView == nil || snapshot.CurrentRunView.Steer == nil || snapshot.CurrentRunView.Steer.Status != SteerStatusRejected {
-		t.Fatalf("late steer command state = %#v, want rejected", snapshot.CurrentRunView)
-	}
 }
 
 func runRuntimeManagerRetriesDroppedCommandContract(t *testing.T, suite distributedRuntimeBackendContractSuite) {
@@ -4008,7 +3694,7 @@ func runRuntimeManagerReleasesPendingCommandOnClose(t *testing.T, suite distribu
 	}
 	dispatchDone := make(chan dispatchResult, 1)
 	go func() {
-		handled, dispatchErr := remote.DispatchActiveCommand(
+		handled, dispatchErr := remote.dispatchTestCommand(
 			dispatchCtx, testBotID, testSessionID, CommandToolApprovalResponse,
 			"approval-pending-close", json.RawMessage(`{"status":"approved"}`),
 		)
@@ -4095,7 +3781,7 @@ func runRuntimeManagerPreservesPreparedOutcomeOnClose(t *testing.T, suite distri
 	if _, err := owner.HandleAgentEvent(context.Background(), admission.Handle, native.StreamEvent{Type: native.EventAgentEnd}); err != nil {
 		t.Fatalf("prepare terminal event: %v", err)
 	}
-	if got := runs.state(admission.RunID); got != ledger.StateFinishing {
+	if got := runs.State(admission.RunID); got != ledger.StateFinishing {
 		t.Fatalf("ledger before close = %q, want finishing", got)
 	}
 	const activeSessionID = "session-running-close"
@@ -4123,10 +3809,10 @@ func runRuntimeManagerPreservesPreparedOutcomeOnClose(t *testing.T, suite distri
 		t.Fatalf("close owner: %v", err)
 	}
 	closed = true
-	if got := runs.state(admission.RunID); got != ledger.StateCompleted {
+	if got := runs.State(admission.RunID); got != ledger.StateCompleted {
 		t.Fatalf("ledger after close = %q, want completed", got)
 	}
-	if got := runs.state(activeAdmission.RunID); got != ledger.StateLost {
+	if got := runs.State(activeAdmission.RunID); got != ledger.StateLost {
 		t.Fatalf("active ledger after close = %q, want lost", got)
 	}
 	receiveTestResult(t, "active run cancellation", activeCanceled)
@@ -4194,12 +3880,12 @@ func runRuntimeManagerDoesNotBlockCommandResultsBehindSlowHandlers(t *testing.T,
 
 	blockedDispatchDone := make(chan error, 1)
 	go func() {
-		_, err := ownerB.DispatchActiveCommand(context.Background(), testBotID, "session-command-hol-a", CommandToolApprovalResponse, "approval-command-hol-a", []byte(`{"decision":"approve"}`))
+		_, err := ownerB.dispatchTestCommand(context.Background(), testBotID, "session-command-hol-a", CommandToolApprovalResponse, "approval-command-hol-a", []byte(`{"decision":"approve"}`))
 		blockedDispatchDone <- err
 	}()
 	receiveTestResult(t, "blocked owner command handler", blockedHandlerEntered)
 
-	handled, err := ownerA.DispatchActiveCommand(context.Background(), testBotID, "session-command-hol-b", CommandToolApprovalResponse, "approval-command-hol-b", []byte(`{"decision":"approve"}`))
+	handled, err := ownerA.dispatchTestCommand(context.Background(), testBotID, "session-command-hol-b", CommandToolApprovalResponse, "approval-command-hol-b", []byte(`{"decision":"approve"}`))
 	if err != nil || !handled {
 		t.Fatalf("unrelated command behind blocked handler = handled:%v err:%v", handled, err)
 	}

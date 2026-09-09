@@ -3,7 +3,9 @@ package application
 import (
 	"encoding/json"
 
+	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/turn"
+	messagepkg "github.com/felinics/memoh/internal/chat/message"
 )
 
 // ChatRequest is the application-layer input used while orchestrating a chat
@@ -21,6 +23,9 @@ type ChatRequest struct {
 	// that must agree on "which turn is this" — the compaction barrier, the ACP
 	// session, interactive tool headers — keys on it.
 	RunID string `json:"-"`
+	// RunHandle is the server-owned execution capability for durable step and
+	// queue commits. Transport callers cannot supply it.
+	RunHandle sessionruntime.RunHandle `json:"-"`
 	// TurnID and TurnPosition are the turn admission already allocated for this
 	// run. They travel with the request so the persisted user turn lands under
 	// the id the client was handed at run_accepted, instead of the history layer
@@ -63,8 +68,12 @@ type ChatRequest struct {
 	RuntimeType               string                `json:"-"`
 	SkipMemoryExtraction      bool                  `json:"-"`
 	SkipHistoryTurn           bool                  `json:"-"`
-	SkipTitleGeneration       bool                  `json:"-"`
-	ForceFreshRuntime         bool                  `json:"-"`
+	// TurnReplacement is set only for an admitted retry/edit run. Its step
+	// output stays hidden until the queue coordinator reaches the true final
+	// boundary and publishes this replacement in its own transaction.
+	TurnReplacement     *messagepkg.TurnReplacement `json:"-"`
+	SkipTitleGeneration bool                        `json:"-"`
+	ForceFreshRuntime   bool                        `json:"-"`
 	// AgentCommand is the exact agent-command selector the Web admission layer
 	// matched against a live ACP runtime. The session pool re-validates it
 	// against the final session at prompt time; it never crosses the turn
@@ -81,6 +90,13 @@ type ChatRequest struct {
 	// InjectCh receives user messages between tool rounds. Remote transports
 	// use turn.RunHandle.Inject instead.
 	InjectCh <-chan turn.InjectMessage `json:"-"`
+	// QueueSteerEnabled enables the fenced native queue consumer.
+	QueueSteerEnabled bool `json:"-"`
+	StepIndexOffset   int  `json:"-"`
+	// PublishRuntimeEvents is set for server-owned continuations, which do not
+	// have a client runHandle pump to publish native events into the session
+	// runtime projection.
+	PublishRuntimeEvents bool `json:"-"`
 
 	Query             string                       `json:"query"`
 	Model             string                       `json:"model,omitempty"`

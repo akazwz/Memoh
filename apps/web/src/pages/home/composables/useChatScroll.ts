@@ -232,7 +232,7 @@ export function useChatScroll(options: UseChatScrollOptions) {
   // applies it when the new prompt renders (tryApplyPin). Streaming then grows
   // below the fold without moving the view — follow re-engages only when the
   // user scrolls back down to the bottom.
-  function pinAfterSend(): () => void {
+  function armPin(anchorId: string | null): () => void {
     const attemptId = ++pinAttemptId
     const previousFollowEnabled = followEnabled
     const previousPinPending = pinPending
@@ -244,7 +244,7 @@ export function useChatScroll(options: UseChatScrollOptions) {
 
     followEnabled = false
     pinPending = true
-    pinAnchorId = lastUserMessage()?.id ?? null
+    pinAnchorId = anchorId ?? lastUserMessage()?.id ?? null
     // Arm only — do NOT clear / set reserves here.
     //
     // sendMessage pushes the optimistic user turn only after several awaits
@@ -293,6 +293,39 @@ export function useChatScroll(options: UseChatScrollOptions) {
         })
       })
     }
+  }
+
+  function pinAfterSend(): () => void {
+    return armPin(lastUserMessage()?.id ?? null)
+  }
+
+  // A steer is projected into the transcript before this method is called.
+  // Its prompt is therefore already the newest user message; the anchor must
+  // be supplied explicitly so tryApplyPin waits for that prompt rather than
+  // treating the steer itself as the old turn.
+  function pinAfterSteer(anchorId: string): () => void {
+    const rollback = armPin(anchorId.trim() || null)
+    void nextTick(() => {
+      if (!pinPending) return
+      onContentChanged()
+    })
+    return rollback
+  }
+
+  // A follow-up continuation is a new user turn created by the server after
+  // the previous run reaches its final boundary. It must use the same
+  // position-aware reserve handover as a normal send; otherwise the previous
+  // turn's pin reserve remains between the two turns and the continuation
+  // appears far below its predecessor. A pending send pin owns this boundary
+  // already, so this is intentionally a no-op in that case.
+  function pinAfterFollowUp(anchorId: string): () => void {
+    if (pinPending) return () => {}
+    const rollback = armPin(anchorId.trim() || null)
+    void nextTick(() => {
+      if (!pinPending) return
+      onContentChanged()
+    })
+    return rollback
   }
 
   function startSmoothScroll(root: HTMLElement, getTarget: () => number) {
@@ -926,6 +959,8 @@ export function useChatScroll(options: UseChatScrollOptions) {
     markEscaped,
     followBottom,
     pinAfterSend,
+    pinAfterSteer,
+    pinAfterFollowUp,
 
     // lifecycle hooks — call sites live in chat-pane.vue's own onActivated/onDeactivated
     onActivatedRestoreScroll,

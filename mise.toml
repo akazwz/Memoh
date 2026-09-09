@@ -202,14 +202,14 @@ go test \
 """
 
 [tasks."test:session-runtime:acceptance:cluster:destructive"]
-description = "Run the isolated owner-restart decision black-box serially against the cluster topology"
+description = "Run isolated owner, decision, steer, and terminal-proposal crash acceptance serially"
 env = { MEMOH_SESSION_RUNTIME_ACCEPTANCE = "1", MEMOH_SESSION_RUNTIME_ACCEPTANCE_REQUIRED = "1", MEMOH_SESSION_RUNTIME_ACCEPTANCE_MODE = "cluster", MEMOH_SESSION_RUNTIME_ACCEPTANCE_CRASH = "1" }
 run = """
 go test \
   -tags=integration \
   -count=1 \
   -timeout=5m \
-  -run '^TestSRDEC001DecisionPersistsRunAndTurnAcrossRestart$' \
+  -run '^Test(SRDEC001DecisionPersistsRunAndTurnAcrossRestart|QueueSteerDecisionSurvivesOwnerRestart|SRDUR001AcceptedInputSurvivesOwnerCrashAsLedgerFact|SRDUR002PreparedFinishSurvivesProcessCrash)$' \
   ./internal/agent/runtime/session/acceptance
 """
 

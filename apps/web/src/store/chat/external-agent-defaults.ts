@@ -79,7 +79,8 @@ export function createExternalAgentDefaults(deps: {
         deps.rememberDefault(bid, null)
         return null
       }
-      const input = {
+      const input: ExternalAgentSessionInput = {
+        runtime: runtime === 'codex' || runtime === 'claude-code' ? runtime : 'acp',
         botAgentId: settings.default_bot_agent_id?.trim() || undefined,
         agentId,
         projectPath: settings.chat_acp_project_path?.trim()

@@ -160,6 +160,16 @@ func (q *fakeUserInputQueries) GetUserInputRequest(_ context.Context, id pgtype.
 	return *row, nil
 }
 
+func (q *fakeUserInputQueries) GetInteractiveUserInputRequest(_ context.Context, arg sqlc.GetInteractiveUserInputRequestParams) (sqlc.UserInputRequest, error) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	row, ok := q.rows[storeUUIDKey(arg.ID)]
+	if !ok || !storeRowIsLivePending(row, time.Now()) || row.BotID != arg.BotID {
+		return sqlc.UserInputRequest{}, pgx.ErrNoRows
+	}
+	return *row, nil
+}
+
 func (q *fakeUserInputQueries) GetRespondableUserInputRequest(_ context.Context, arg sqlc.GetRespondableUserInputRequestParams) (sqlc.UserInputRequest, error) {
 	q.mu.Lock()
 	defer q.mu.Unlock()

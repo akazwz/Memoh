@@ -23,6 +23,8 @@ func MenuCommands(t *i18n.Localizer) []MenuCommand {
 		{"help", t.T("menu.help")},
 		{"new", t.T("menu.new")},
 		{"stop", t.T("menu.stop")},
+		{"queue", t.T("menu.queue")},
+		{"steer", t.T("menu.steer")},
 		{"status", t.T("menu.status")},
 		{"context", t.T("menu.context")},
 		{"model", t.T("menu.model")},

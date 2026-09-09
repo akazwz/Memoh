@@ -832,27 +832,29 @@ func TestLocalChannelWSMessageAuthorizesSessionBeforeSlashCommand(t *testing.T) 
 	}
 	defer func() { _ = client.Close() }()
 
-	if err := client.WriteJSON(map[string]any{
-		"type":          "message",
-		"invocation_id": "invocation-1",
-		"session_id":    sessionID,
-		"text":          "/help",
-	}); err != nil {
-		t.Fatalf("write ws message: %v", err)
-	}
+	for _, text := range []string{"/help", "/steer direction", "/queue later"} {
+		if err := client.WriteJSON(map[string]any{
+			"type":          "message",
+			"invocation_id": "invocation-1",
+			"session_id":    sessionID,
+			"text":          text,
+		}); err != nil {
+			t.Fatalf("write ws message: %v", err)
+		}
 
-	var event map[string]any
-	if err := client.ReadJSON(&event); err != nil {
-		t.Fatalf("read ws event: %v", err)
-	}
-	if got := event["type"]; got != "error" {
-		t.Fatalf("event type = %#v, want error; event=%#v", got, event)
-	}
-	if got := event["message"]; got != "session not found" {
-		t.Fatalf("event message = %#v, want session not found; event=%#v", got, event)
-	}
-	if _, ok := event["result"]; ok {
-		t.Fatalf("unexpected command result before session authorization: %#v", event)
+		var event map[string]any
+		if err := client.ReadJSON(&event); err != nil {
+			t.Fatalf("read ws event: %v", err)
+		}
+		if got := event["type"]; got != "error" {
+			t.Fatalf("event type = %#v, want error; event=%#v", got, event)
+		}
+		if got := event["message"]; got != "session not found" {
+			t.Fatalf("event message = %#v, want session not found; event=%#v", got, event)
+		}
+		if _, ok := event["result"]; ok {
+			t.Fatalf("unexpected command result before session authorization: %#v", event)
+		}
 	}
 }
 
@@ -1723,5 +1725,55 @@ func TestExtractAssetRefsFromProcessedEvent_CarriesToolCallID(t *testing.T) {
 	}
 	if got, _ := refs[0].Metadata["tool_call_id"].(string); got != "call-42" {
 		t.Fatalf("tool_call_id metadata = %q, want call-42", got)
+	}
+}
+
+func TestWebQueueSlashClassification(t *testing.T) {
+	const sessionID = "22222222-2222-2222-2222-222222222222"
+	for _, selector := range []string{"steer", "queue"} {
+		t.Run(selector, func(t *testing.T) {
+			h := &LocalChannelHandler{}
+			for _, args := range []string{"", "change direction", "--flag \"a  b\"\n第二行"} {
+				decision := h.classifyWebSlash("/"+selector+" "+args, false, slash.SurfaceWebWS)
+				if decision.Kind != slash.DecisionCommandAction || decision.Invocation.Rest != args {
+					t.Fatalf("queue classification lost command/payload: %#v", decision)
+				}
+			}
+			h.acpRuntimeStatus = testACPRuntimeStatusReader{statuses: map[string]acpagent.RuntimeStatus{
+				sessionID: liveACPCommandStatus(sessionID, selector),
+			}}
+			if decision := h.classifyWebSlashForSession(context.Background(), "/"+selector+" args", false, sessionID); decision.AgentCommand != selector {
+				t.Fatalf("live ACP authority lost: %#v", decision)
+			}
+			h.acpRuntimeStatus = testACPRuntimeStatusReader{statuses: map[string]acpagent.RuntimeStatus{
+				sessionID: liveACPCommandStatus(sessionID, "other"),
+			}}
+			if decision := h.classifyWebSlashForSession(context.Background(), "/"+selector+" args", false, sessionID); decision.Kind != slash.DecisionCommandAction {
+				t.Fatalf("unclaimed queue command misclassified as skill: %#v", decision)
+			}
+		})
+	}
+}
+
+func TestWebQueueCommandErrorsUsePublicCatalog(t *testing.T) {
+	h := &LocalChannelHandler{logger: slog.Default()}
+	for _, tc := range []struct {
+		session, text string
+		code          apperror.Code
+	}{
+		{"", "payload", apperror.CodeQueueRequestInvalid},
+		{"session", " ", apperror.CodeQueueRequestInvalid},
+		{"session", "payload", apperror.CodeQueueAdmissionUnavailable},
+	} {
+		for _, action := range []string{"steer", "queue"} {
+			event := decodeWSTestEvent(t, func(w *wsWriter) {
+				h.executeWSQueueCommand(context.Background(), w, wsClientMessage{SessionID: tc.session, InvocationID: "invocation"}, "bot", action, tc.text)
+			})
+			public, _ := apperror.PublicFrom(apperror.New(tc.code, nil), "")
+			failure := event["error"].(map[string]any)
+			if event["type"] != "command_error" || event["terminal"] != true || failure["code"] != string(tc.code) || failure["message"] != public.Detail {
+				t.Fatalf("unexpected queue error envelope: %#v", event)
+			}
+		}
 	}
 }

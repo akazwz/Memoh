@@ -7,12 +7,14 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"testing"
 	"time"
 
 	"github.com/gorilla/websocket"
 )
 
 type wsEvent struct {
+	Error        map[string]any `json:"error,omitempty"`
 	Type         string         `json:"type"`
 	RunID        string         `json:"run_id,omitempty"`
 	TurnID       string         `json:"turn_id,omitempty"`
@@ -199,10 +201,24 @@ func eventState(event wsEvent) string {
 	if event.State != "" {
 		return event.State
 	}
-	if state := firstNestedString("state", event.Data, event.Snapshot, event.Delta); state != "" {
-		return state
+	for _, object := range []map[string]any{event.Data, event.Snapshot, event.Delta} {
+		for _, name := range []string{"current_run_view", "run"} {
+			if run, ok := object[name].(map[string]any); ok {
+				if state, ok := run["status"].(string); ok && state != "" {
+					return state
+				}
+				if state, ok := run["state"].(string); ok && state != "" {
+					return state
+				}
+			}
+		}
+		for _, name := range []string{"state", "status"} {
+			if state, ok := object[name].(string); ok && state != "" {
+				return state
+			}
+		}
 	}
-	return firstNestedString("status", event.Data, event.Snapshot, event.Delta)
+	return ""
 }
 
 func eventEpoch(event wsEvent) string {
@@ -317,4 +333,22 @@ func nestedNumber(object map[string]any, key string) (float64, bool) {
 
 func nestedNonEmptyString(object map[string]any, key string) bool {
 	return nestedString(object, key) != ""
+}
+
+func TestEventStateIgnoresNestedToolStatus(t *testing.T) {
+	for _, container := range []string{"current_run_view", "run"} {
+		for _, status := range []string{"waiting_decision", "completed"} {
+			event := wsEvent{Delta: map[string]any{
+				container:         map[string]any{"status": status},
+				"message_upserts": []any{map[string]any{"approval": map[string]any{"status": "pending", "state": "failed"}}},
+			}}
+			if got := eventState(event); got != status {
+				t.Fatalf("run state=%q, want %q", got, status)
+			}
+			delete(event.Delta, container)
+			if got := eventState(event); got != "" {
+				t.Fatalf("tool state leaked: %q", got)
+			}
+		}
+	}
 }

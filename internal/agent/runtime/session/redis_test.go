@@ -344,7 +344,7 @@ func runRedisDurableCommandResultContract(t *testing.T, redisURL string) {
 		t.Fatalf("record approval: %v", err)
 	}
 
-	handledResult, err := remote.DispatchActiveCommand(context.Background(), testBotID, sessionID, CommandToolApprovalResponse, approvalID, []byte(`{"decision":"approve"}`))
+	handledResult, err := remote.dispatchTestCommand(context.Background(), testBotID, sessionID, CommandToolApprovalResponse, approvalID, []byte(`{"decision":"approve"}`))
 	if err != nil || !handledResult {
 		t.Fatalf("dispatch with dropped pubsub result = handled:%v err:%v", handledResult, err)
 	}
@@ -364,7 +364,7 @@ func runRedisDurableCommandResultContract(t *testing.T, redisURL string) {
 		OwnerID: "durable-result-restarted", StateTTL: time.Minute,
 		OwnerLeaseTTL: time.Second, CommandAckTTL: 750 * time.Millisecond,
 	})
-	handledResult, err = restarted.DispatchActiveCommand(context.Background(), testBotID, sessionID, CommandToolApprovalResponse, approvalID, []byte(`{"decision":"approve"}`))
+	handledResult, err = restarted.dispatchTestCommand(context.Background(), testBotID, sessionID, CommandToolApprovalResponse, approvalID, []byte(`{"decision":"approve"}`))
 	if err != nil || !handledResult {
 		t.Fatalf("dispatch after requester restart = handled:%v err:%v", handledResult, err)
 	}
@@ -374,13 +374,13 @@ func runRedisDurableCommandResultContract(t *testing.T, redisURL string) {
 	}); err != nil {
 		t.Fatalf("record barrier approval: %v", err)
 	}
-	if handledResult, err = restarted.DispatchActiveCommand(context.Background(), testBotID, sessionID, CommandToolApprovalResponse, barrierApprovalID, []byte(`{"decision":"approve"}`)); err != nil || !handledResult {
+	if handledResult, err = restarted.dispatchTestCommand(context.Background(), testBotID, sessionID, CommandToolApprovalResponse, barrierApprovalID, []byte(`{"decision":"approve"}`)); err != nil || !handledResult {
 		t.Fatalf("dispatch barrier command = handled:%v err:%v", handledResult, err)
 	}
 	if barrier := receiveTestResult(t, "barrier command handler", handled); barrier.TargetID != barrierApprovalID {
 		t.Fatalf("stable retry executed before barrier: %#v", barrier)
 	}
-	handledResult, err = restarted.DispatchActiveCommand(context.Background(), testBotID, sessionID, CommandToolApprovalResponse, approvalID, []byte(`{"decision":"reject"}`))
+	handledResult, err = restarted.dispatchTestCommand(context.Background(), testBotID, sessionID, CommandToolApprovalResponse, approvalID, []byte(`{"decision":"reject"}`))
 	if !handledResult || !errors.Is(err, ErrCommandPayloadConflict) {
 		t.Fatalf("conflicting stable retry = handled:%v err:%v, want payload conflict", handledResult, err)
 	}
@@ -392,7 +392,7 @@ func runRedisDurableCommandResultContract(t *testing.T, redisURL string) {
 		t.Fatalf("record owner-local approval: %v", err)
 	}
 	for attempt := range 2 {
-		handledResult, err = owner.DispatchActiveCommand(context.Background(), testBotID, sessionID, CommandToolApprovalResponse, localApprovalID, []byte(`{"decision":"approve"}`))
+		handledResult, err = owner.dispatchTestCommand(context.Background(), testBotID, sessionID, CommandToolApprovalResponse, localApprovalID, []byte(`{"decision":"approve"}`))
 		if err != nil || !handledResult {
 			t.Fatalf("owner-local dispatch %d = handled:%v err:%v", attempt, handledResult, err)
 		}
@@ -406,13 +406,13 @@ func runRedisDurableCommandResultContract(t *testing.T, redisURL string) {
 	}); err != nil {
 		t.Fatalf("record owner-local barrier approval: %v", err)
 	}
-	if handledResult, err = owner.DispatchActiveCommand(context.Background(), testBotID, sessionID, CommandToolApprovalResponse, localBarrierApprovalID, []byte(`{"decision":"approve"}`)); err != nil || !handledResult {
+	if handledResult, err = owner.dispatchTestCommand(context.Background(), testBotID, sessionID, CommandToolApprovalResponse, localBarrierApprovalID, []byte(`{"decision":"approve"}`)); err != nil || !handledResult {
 		t.Fatalf("dispatch owner-local barrier = handled:%v err:%v", handledResult, err)
 	}
 	if barrier := receiveTestResult(t, "owner-local barrier command handler", handled); barrier.TargetID != localBarrierApprovalID {
 		t.Fatalf("owner-local stable retry executed before barrier: %#v", barrier)
 	}
-	handledResult, err = owner.DispatchActiveCommand(context.Background(), testBotID, sessionID, CommandToolApprovalResponse, localApprovalID, []byte(`{"decision":"reject"}`))
+	handledResult, err = owner.dispatchTestCommand(context.Background(), testBotID, sessionID, CommandToolApprovalResponse, localApprovalID, []byte(`{"decision":"reject"}`))
 	if !handledResult || !errors.Is(err, ErrCommandPayloadConflict) {
 		t.Fatalf("owner-local conflicting retry = handled:%v err:%v, want payload conflict", handledResult, err)
 	}
@@ -491,7 +491,7 @@ func runRedisBoundedCommandWorkersContract(t *testing.T, redisURL string) {
 	for i := range commandCount {
 		i := i
 		go func() {
-			handled, err := remote.DispatchActiveCommand(
+			handled, err := remote.dispatchTestCommand(
 				context.Background(), testBotID, fmt.Sprintf("session-bounded-worker-%d", i),
 				CommandToolApprovalResponse, fmt.Sprintf("approval-bounded-worker-%d", i), []byte(`{"decision":"approve"}`),
 			)
@@ -541,7 +541,7 @@ func runRedisBoundedCommandWorkersContract(t *testing.T, redisURL string) {
 	if busyIndex < 0 {
 		t.Fatal("missing busy command index")
 	}
-	handled, err := remote.DispatchActiveCommand(
+	handled, err := remote.dispatchTestCommand(
 		context.Background(), testBotID, fmt.Sprintf("session-bounded-worker-%d", busyIndex),
 		CommandToolApprovalResponse, fmt.Sprintf("approval-bounded-worker-%d", busyIndex), []byte(`{"decision":"approve"}`),
 	)
@@ -626,7 +626,7 @@ func runRedisDuplicateCommandSaturationContract(t *testing.T, redisURL string) {
 	results := make(chan dispatchResult, 3)
 	dispatch := func(name, sessionID, approvalID string) {
 		go func() {
-			handled, err := remote.DispatchActiveCommand(context.Background(), testBotID, sessionID, CommandToolApprovalResponse, approvalID, []byte(`{"decision":"approve"}`))
+			handled, err := remote.dispatchTestCommand(context.Background(), testBotID, sessionID, CommandToolApprovalResponse, approvalID, []byte(`{"decision":"approve"}`))
 			results <- dispatchResult{name: name, handled: handled, err: err}
 		}()
 	}
@@ -637,7 +637,7 @@ func runRedisDuplicateCommandSaturationContract(t *testing.T, redisURL string) {
 	if err != nil || snapshotB.CurrentRunView == nil {
 		t.Fatalf("load queued run B: %v %#v", err, snapshotB.CurrentRunView)
 	}
-	commandBID := activeCommandID(testBotID, sessionB, snapshotB.CurrentRunView, CommandToolApprovalResponse, approvalB)
+	commandBID := testCommandID(testBotID, sessionB, snapshotB.CurrentRunView, CommandToolApprovalResponse, approvalB)
 	dispatch("queued-b", sessionB, approvalB)
 	deadline := time.Now().Add(time.Second)
 	for {
@@ -658,7 +658,7 @@ func runRedisDuplicateCommandSaturationContract(t *testing.T, redisURL string) {
 	if err != nil || snapshotA.CurrentRunView == nil {
 		t.Fatalf("load active run A: %v %#v", err, snapshotA.CurrentRunView)
 	}
-	commandAID := activeCommandID(testBotID, sessionA, snapshotA.CurrentRunView, CommandToolApprovalResponse, approvalA)
+	commandAID := testCommandID(testBotID, sessionA, snapshotA.CurrentRunView, CommandToolApprovalResponse, approvalA)
 	deadline = time.Now().Add(time.Second)
 	for {
 		remote.mu.Lock()
@@ -751,7 +751,7 @@ func runRedisExpiredActiveResponseTransportContract(t *testing.T, redisURL strin
 		}
 		dispatchDone := make(chan dispatchResult, 1)
 		go func() {
-			handled, err := remote.DispatchActiveCommand(context.Background(), testBotID, "session-expired-command", request.commandType, request.targetID, []byte(`{"ok":true}`))
+			handled, err := remote.dispatchTestCommand(context.Background(), testBotID, "session-expired-command", request.commandType, request.targetID, []byte(`{"ok":true}`))
 			dispatchDone <- dispatchResult{handled: handled, err: err}
 		}()
 		var command Command
@@ -863,19 +863,8 @@ func runRedisSubscriptionReconnectContract(t *testing.T, redisURL string) {
 	if next.Type != EventRuntimeDelta || next.Seq != checkpoint.Seq+1 {
 		t.Fatalf("post-reconnect event = %#v, want continuous delta after seq %d", next, checkpoint.Seq)
 	}
-	if _, err := remote.Steer(context.Background(), testBotID, "session-reconnect", "stream-reconnect", "steer after reconnect"); err != nil {
-		t.Fatalf("steer after reconnect: %v", err)
-	}
-	select {
-	case injected := <-injectCh:
-		if injected.Text != "steer after reconnect" {
-			t.Fatalf("injected text = %q", injected.Text)
-		}
-		if injected.Applied != nil {
-			injected.Applied()
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("remote steer was not delivered after Pub/Sub reconnect")
+	if applied, err := remote.Abort(context.Background(), testBotID, "session-reconnect", "stream-reconnect"); err != nil || !applied {
+		t.Fatalf("remote abort after Pub/Sub reconnect: applied=%v err=%v", applied, err)
 	}
 }
 

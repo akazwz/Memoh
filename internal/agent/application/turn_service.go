@@ -56,6 +56,11 @@ func (s *Service) StartTurn(ctx context.Context, cmd turn.StartTurnCommand) (tur
 	}
 
 	injectCh := make(chan turn.InjectMessage, 16)
+	// A busy thread is reported as ErrSessionBusy. Whether to park the command
+	// in the follow-up queue is the ingress's decision (EnqueueDeferredTurn):
+	// only a caller whose user sees the run through the session runtime
+	// subscription can drop its handle, because a run started from the queue
+	// has no other consumer for its output.
 	admission, err := s.admitTurnRun(runCtx, cmd, cancel, cancelCause, injectCh)
 	if err != nil {
 		cancel()
@@ -70,9 +75,11 @@ func (s *Service) StartTurn(ctx context.Context, cmd turn.StartTurnCommand) (tur
 
 	req := chatRequestFromCommand(cmd)
 	req.RunID = admission.RunID
+	req.RunHandle = admission.Handle
 	req.TurnID = admission.TurnID
 	req.TurnPosition = &admission.TurnPosition
 	req.InjectCh = injectCh
+	req.QueueSteerEnabled = injectCh != nil
 	req.OutboundAssetCollector = func() []turn.OutboundAssetRef {
 		assetMu.Lock()
 		defer assetMu.Unlock()

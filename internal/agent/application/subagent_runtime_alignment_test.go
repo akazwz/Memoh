@@ -3,7 +3,6 @@ package application
 import (
 	"context"
 	"errors"
-	"sync"
 	"testing"
 	"time"
 
@@ -13,6 +12,7 @@ import (
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/runtime/session/ledger"
 	tools "github.com/felinics/memoh/internal/agent/tool"
+	"github.com/felinics/memoh/internal/testutil/sessionledger"
 )
 
 type abortAlignmentProvider struct {
@@ -57,174 +57,10 @@ type abortAlignmentFence struct{}
 
 func (abortAlignmentFence) Activate(context.Context, string, string, int64) error { return nil }
 
-type abortAlignmentLedger struct {
-	mu    sync.Mutex
-	run   ledger.Run
-	token int64
-}
-
-var (
-	_ sessionruntime.FenceActivator = abortAlignmentFence{}
-	_ ledger.Store                  = (*abortAlignmentLedger)(nil)
-)
-
-func (s *abortAlignmentLedger) Admit(_ context.Context, params ledger.AdmitParams) (ledger.Run, bool, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.run.RunID != "" {
-		if s.run.SessionID == params.SessionID && s.run.InvocationID == params.InvocationID {
-			return s.run, false, nil
-		}
-		if s.run.SessionID == params.SessionID && s.run.State.Active() {
-			return ledger.Run{}, false, ledger.ErrSessionBusy
-		}
-	}
-	s.run = ledger.Run{
-		RunID:            params.RunID,
-		BotID:            params.BotID,
-		SessionID:        params.SessionID,
-		InvocationID:     params.InvocationID,
-		TurnID:           params.TurnID,
-		TurnPosition:     1,
-		State:            ledger.StateAccepted,
-		Input:            append([]byte(nil), params.Input...),
-		InputFingerprint: params.InputFingerprint,
-		CreatedAt:        time.Now(),
-	}
-	return s.run, true, nil
-}
-
-func (s *abortAlignmentLedger) Get(_ context.Context, runID string) (ledger.Run, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.run.RunID != runID {
-		return ledger.Run{}, ledger.ErrRunNotFound
-	}
-	return s.run, nil
-}
-
-func (s *abortAlignmentLedger) GetByInvocation(_ context.Context, sessionID, invocationID string) (ledger.Run, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.run.SessionID != sessionID || s.run.InvocationID != invocationID {
-		return ledger.Run{}, ledger.ErrRunNotFound
-	}
-	return s.run, nil
-}
-
-func (s *abortAlignmentLedger) ActiveRun(_ context.Context, sessionID string) (ledger.Run, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.run.SessionID != sessionID || !s.run.State.Active() {
-		return ledger.Run{}, ledger.ErrRunNotFound
-	}
-	return s.run, nil
-}
-
-func (s *abortAlignmentLedger) LatestRun(_ context.Context, sessionID string) (ledger.Run, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.run.SessionID != sessionID {
-		return ledger.Run{}, ledger.ErrRunNotFound
-	}
-	return s.run, nil
-}
-
-func (s *abortAlignmentLedger) NextFencingToken(context.Context) (int64, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.token++
-	return s.token, nil
-}
-
-func (s *abortAlignmentLedger) Claim(_ context.Context, params ledger.ClaimParams) (ledger.Run, bool, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.run.RunID != params.RunID || s.run.State != ledger.StateAccepted {
-		return ledger.Run{}, false, nil
-	}
-	s.run.State = ledger.StateRunning
-	s.run.OwnerID = params.OwnerID
-	s.run.FencingToken = params.FencingToken
-	s.run.LiveGeneration = params.LiveGeneration
-	s.run.OwnerSince = time.Now()
-	return s.run, true, nil
-}
-
-func (s *abortAlignmentLedger) SetWaitingDecision(_ context.Context, runID string, token int64) (ledger.Run, bool, error) {
-	return s.transition(runID, token, ledger.StateWaitingDecision)
-}
-
-func (s *abortAlignmentLedger) Resume(_ context.Context, runID string, token int64) (ledger.Run, bool, error) {
-	return s.transition(runID, token, ledger.StateRunning)
-}
-
-func (s *abortAlignmentLedger) transition(runID string, token int64, state ledger.State) (ledger.Run, bool, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.run.RunID != runID || s.run.FencingToken != token || s.run.State.Terminal() || s.run.State == ledger.StateFinishing {
-		return ledger.Run{}, false, nil
-	}
-	s.run.State = state
-	return s.run, true, nil
-}
-
-func (s *abortAlignmentLedger) PrepareFinish(_ context.Context, params ledger.PrepareFinishParams) (ledger.Run, bool, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.run.RunID != params.RunID || s.run.FencingToken != params.FencingToken || s.run.State.Terminal() ||
-		(s.run.State == ledger.StateWaitingDecision && !params.AllowWaitingDecision) {
-		return s.run, false, nil
-	}
-	if s.run.State != ledger.StateFinishing {
-		s.run.State = ledger.StateFinishing
-		s.run.ProposedState = params.State
-		s.run.ProposedErrorCode = params.ErrorCode
-		s.run.ProposedErrorMessage = params.ErrorMessage
-		s.run.FinishProposedAt = time.Now()
-	}
-	return s.run, true, nil
-}
-
-func (s *abortAlignmentLedger) Finalize(_ context.Context, params ledger.FinalizeParams) (ledger.Run, bool, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.run.RunID != params.RunID || s.run.FencingToken != params.FencingToken || s.run.State.Terminal() {
-		return s.run, false, nil
-	}
-	if s.run.State == ledger.StateFinishing {
-		s.run.State = s.run.ProposedState
-		s.run.ErrorCode = s.run.ProposedErrorCode
-		s.run.ErrorMessage = s.run.ProposedErrorMessage
-	} else {
-		s.run.State = params.State
-		s.run.ErrorCode = params.ErrorCode
-		s.run.ErrorMessage = params.ErrorMessage
-	}
-	s.run.UpdatedAt = time.Now()
-	return s.run, true, nil
-}
-
-func (s *abortAlignmentLedger) RequestAbort(_ context.Context, runID string) (ledger.Run, bool, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.run.RunID != runID || s.run.State.Terminal() || s.run.State == ledger.StateFinishing {
-		return s.run, false, nil
-	}
-	s.run.AbortRequestedAt = time.Now()
-	return s.run, true, nil
-}
-
-func (*abortAlignmentLedger) StaleGenerationRuns(context.Context, ledger.StaleGenerationQuery) ([]ledger.Run, error) {
-	return nil, nil
-}
-
-func (*abortAlignmentLedger) OrphanedRuns(context.Context, ledger.OrphanQuery) ([]ledger.Run, error) {
-	return nil, nil
-}
+func newAbortAlignmentLedger() *sessionledger.Store { return sessionledger.New() }
 
 func TestSpawnAbortAlignsManagerLedgerAndLifecycle(t *testing.T) {
-	runs := &abortAlignmentLedger{}
+	runs := newAbortAlignmentLedger()
 	manager := sessionruntime.NewManager(sessionruntime.NewMemoryBackend(), sessionruntime.Options{
 		OwnerID:       "abort-alignment-owner",
 		OwnerLeaseTTL: time.Minute,
@@ -301,7 +137,7 @@ func TestSpawnAbortAlignsManagerLedgerAndLifecycle(t *testing.T) {
 }
 
 func TestSpawnWatchdogRetryKeepsManagerRunActive(t *testing.T) {
-	runs := &abortAlignmentLedger{}
+	runs := newAbortAlignmentLedger()
 	manager := sessionruntime.NewManager(sessionruntime.NewMemoryBackend(), sessionruntime.Options{
 		OwnerID:       "watchdog-retry-owner",
 		OwnerLeaseTTL: time.Minute,

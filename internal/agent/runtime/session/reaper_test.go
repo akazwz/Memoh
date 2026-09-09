@@ -110,7 +110,7 @@ func newTestReaperWithLiveness(t *testing.T, runs *fakeLedger, live LivenessBack
 func TestReaperMarksExpiredLeaseLost(t *testing.T) {
 	t.Parallel()
 	runs := newFakeLedger()
-	runs.insertClaimed("run-expired", "session-expired", 5, "generation-1")
+	runs.InsertClaimed("run-expired", "session-expired", 5, "generation-1")
 	live := newFakeLiveness("generation-1")
 	live.setCandidates(LeaseCandidate{
 		Key:          Key{BotID: testBotID, SessionID: "session-expired"},
@@ -122,10 +122,10 @@ func TestReaperMarksExpiredLeaseLost(t *testing.T) {
 
 	reaper.tick(context.Background())
 
-	if got := runs.state("run-expired"); got != "lost" {
+	if got := runs.State("run-expired"); got != "lost" {
 		t.Fatalf("state = %q, want lost", got)
 	}
-	if got := runs.errorCode("run-expired"); got != runErrorOwnerLeaseExpired {
+	if got := runs.ErrorCode("run-expired"); got != runErrorOwnerLeaseExpired {
 		t.Fatalf("error code = %q, want %q", got, runErrorOwnerLeaseExpired)
 	}
 	if len(live.releasedCandidates()) != 1 || len(live.indexed()) != 0 {
@@ -147,7 +147,7 @@ func TestReaperFinalizesDurableFinishProposalInsteadOfMarkingOwnerLost(t *testin
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			runs := newFakeLedger()
-			runs.insertClaimed("run-finishing-"+tt.name, "session-finishing-"+tt.name, 5, "generation-1")
+			runs.InsertClaimed("run-finishing-"+tt.name, "session-finishing-"+tt.name, 5, "generation-1")
 			prepared, applied, err := runs.PrepareFinish(context.Background(), ledger.PrepareFinishParams{
 				RunID:        "run-finishing-" + tt.name,
 				FencingToken: 5,
@@ -170,10 +170,10 @@ func TestReaperFinalizesDurableFinishProposalInsteadOfMarkingOwnerLost(t *testin
 
 			reaper.tick(context.Background())
 
-			if got := runs.state("run-finishing-" + tt.name); got != tt.proposed {
+			if got := runs.State("run-finishing-" + tt.name); got != tt.proposed {
 				t.Fatalf("state = %q, want proposed %q rather than lost", got, tt.proposed)
 			}
-			if got := runs.errorCode("run-finishing-" + tt.name); got != tt.errorCode {
+			if got := runs.ErrorCode("run-finishing-" + tt.name); got != tt.errorCode {
 				t.Fatalf("error code = %q, want %q", got, tt.errorCode)
 			}
 			if len(observed) != 1 || observed[0].State != string(tt.proposed) {
@@ -201,11 +201,11 @@ func TestReaperObservesAppliedAndAlreadyTerminalOutcomes(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			runs := newFakeLedger()
-			runs.insertClaimed("run-observed", "session-observed", 5, "generation-1")
+			runs.InsertClaimed("run-observed", "session-observed", 5, "generation-1")
 			if tt.abortRequested {
-				runs.mu.Lock()
-				runs.runs["run-observed"].AbortRequestedAt = time.Now()
-				runs.mu.Unlock()
+				runs.Mu.Lock()
+				runs.Runs["run-observed"].AbortRequestedAt = time.Now()
+				runs.Mu.Unlock()
 			}
 			if tt.seedState != "" {
 				if _, applied, err := runs.Finalize(context.Background(), ledger.FinalizeParams{
@@ -241,7 +241,7 @@ func TestReaperObservesAppliedAndAlreadyTerminalOutcomes(t *testing.T) {
 func TestReaperDoesNotObserveNewerActiveOwner(t *testing.T) {
 	t.Parallel()
 	runs := newFakeLedger()
-	runs.insertClaimed("run-newer-owner", "session-newer-owner", 6, "generation-1")
+	runs.InsertClaimed("run-newer-owner", "session-newer-owner", 6, "generation-1")
 	live := newFakeLiveness("generation-1")
 	live.setCandidates(LeaseCandidate{
 		Key: Key{BotID: testBotID, SessionID: "session-newer-owner"}, RunID: "run-newer-owner", FencingToken: 5,
@@ -257,7 +257,7 @@ func TestReaperDoesNotObserveNewerActiveOwner(t *testing.T) {
 	if len(observed) != 0 {
 		t.Fatalf("newer active owner emitted terminal observations: %+v", observed)
 	}
-	if got := runs.state("run-newer-owner"); got != ledger.StateRunning {
+	if got := runs.State("run-newer-owner"); got != ledger.StateRunning {
 		t.Fatalf("ledger state = %q, want running", got)
 	}
 }
@@ -265,11 +265,11 @@ func TestReaperDoesNotObserveNewerActiveOwner(t *testing.T) {
 func TestReaperRetriesWaitingDecisionRecoveryAfterTokenHandoff(t *testing.T) {
 	t.Parallel()
 	runs := newFakeLedger()
-	runs.insertClaimed("run-waiting-handoff", "session-waiting-handoff", 5, "generation-1")
-	runs.mu.Lock()
-	runs.runs["run-waiting-handoff"].State = ledger.StateWaitingDecision
-	runs.runs["run-waiting-handoff"].FencingToken = 6
-	runs.mu.Unlock()
+	runs.InsertClaimed("run-waiting-handoff", "session-waiting-handoff", 5, "generation-1")
+	runs.Mu.Lock()
+	runs.Runs["run-waiting-handoff"].State = ledger.StateWaitingDecision
+	runs.Runs["run-waiting-handoff"].FencingToken = 6
+	runs.Mu.Unlock()
 	live := newFakeLiveness("generation-1")
 	live.setCandidates(LeaseCandidate{
 		Key:   Key{BotID: testBotID, SessionID: "session-waiting-handoff"},
@@ -287,7 +287,7 @@ func TestReaperRetriesWaitingDecisionRecoveryAfterTokenHandoff(t *testing.T) {
 	if len(recovered) != 1 || recovered[0].FencingToken != 5 {
 		t.Fatalf("recovery calls = %+v, want the stale candidate retried once", recovered)
 	}
-	if got := runs.state("run-waiting-handoff"); got != ledger.StateWaitingDecision {
+	if got := runs.State("run-waiting-handoff"); got != ledger.StateWaitingDecision {
 		t.Fatalf("ledger state = %q, want waiting_decision", got)
 	}
 	if len(live.indexed()) != 0 || len(live.releasedCandidates()) != 1 {
@@ -330,8 +330,8 @@ func TestReaperRunsTerminalReconcilerOnlyAsLeader(t *testing.T) {
 func TestReaperKeepsCandidateWhenTerminalWriteFails(t *testing.T) {
 	t.Parallel()
 	runs := newFakeLedger()
-	runs.insertClaimed("run-retry", "session-retry", 5, "generation-1")
-	runs.setFinalizeErr(errors.New("database is unreachable"))
+	runs.InsertClaimed("run-retry", "session-retry", 5, "generation-1")
+	runs.SetFinalizeErr(errors.New("database is unreachable"))
 	live := newFakeLiveness("generation-1")
 	live.setCandidates(LeaseCandidate{
 		Key:          Key{BotID: testBotID, SessionID: "session-retry"},
@@ -344,13 +344,13 @@ func TestReaperKeepsCandidateWhenTerminalWriteFails(t *testing.T) {
 	if len(live.indexed()) != 1 {
 		t.Fatal("failed transition must leave the candidate indexed for the next tick")
 	}
-	if got := runs.state("run-retry"); got != "running" {
+	if got := runs.State("run-retry"); got != "running" {
 		t.Fatalf("state = %q, want running", got)
 	}
 
-	runs.setFinalizeErr(nil)
+	runs.SetFinalizeErr(nil)
 	reaper.tick(context.Background())
-	if got := runs.state("run-retry"); got != "lost" {
+	if got := runs.State("run-retry"); got != "lost" {
 		t.Fatalf("state after retry = %q, want lost", got)
 	}
 	if len(live.indexed()) != 0 {
@@ -363,7 +363,7 @@ func TestReaperKeepsCandidateWhenTerminalWriteFails(t *testing.T) {
 func TestReaperStaleTokenCannotCondemnReclaimedRun(t *testing.T) {
 	t.Parallel()
 	runs := newFakeLedger()
-	runs.insertClaimed("run-reclaimed", "session-reclaimed", 9, "generation-1")
+	runs.InsertClaimed("run-reclaimed", "session-reclaimed", 9, "generation-1")
 	live := newFakeLiveness("generation-1")
 	live.setCandidates(LeaseCandidate{
 		Key:          Key{BotID: testBotID, SessionID: "session-reclaimed"},
@@ -374,7 +374,7 @@ func TestReaperStaleTokenCannotCondemnReclaimedRun(t *testing.T) {
 
 	reaper.tick(context.Background())
 
-	if got := runs.state("run-reclaimed"); got != "running" {
+	if got := runs.State("run-reclaimed"); got != "running" {
 		t.Fatalf("state = %q, want running; a stale token must not condemn a reclaimed run", got)
 	}
 }
@@ -384,24 +384,24 @@ func TestReaperStaleTokenCannotCondemnReclaimedRun(t *testing.T) {
 func TestReaperRecoversRunsFromLostBackendGeneration(t *testing.T) {
 	t.Parallel()
 	runs := newFakeLedger()
-	runs.insertClaimed("run-stale-a", "session-stale-a", 1, "generation-old")
-	runs.insertClaimed("run-stale-b", "session-stale-b", 2, "generation-old")
-	runs.insertClaimed("run-stale-c", "session-stale-c", 3, "generation-old")
-	runs.insertClaimed("run-current", "session-current", 4, "generation-new")
+	runs.InsertClaimed("run-stale-a", "session-stale-a", 1, "generation-old")
+	runs.InsertClaimed("run-stale-b", "session-stale-b", 2, "generation-old")
+	runs.InsertClaimed("run-stale-c", "session-stale-c", 3, "generation-old")
+	runs.InsertClaimed("run-current", "session-current", 4, "generation-new")
 	live := newFakeLiveness("generation-new")
 	reaper := newTestReaper(t, runs, live)
 
 	reaper.tick(context.Background())
 
 	for _, runID := range []string{"run-stale-a", "run-stale-b", "run-stale-c"} {
-		if got := runs.state(runID); got != "lost" {
+		if got := runs.State(runID); got != "lost" {
 			t.Fatalf("%s state = %q, want lost", runID, got)
 		}
-		if got := runs.errorCode(runID); got != runErrorBackendLost {
+		if got := runs.ErrorCode(runID); got != runErrorBackendLost {
 			t.Fatalf("%s error code = %q, want %q", runID, got, runErrorBackendLost)
 		}
 	}
-	if got := runs.state("run-current"); got != "running" {
+	if got := runs.State("run-current"); got != "running" {
 		t.Fatalf("current generation run = %q, want running", got)
 	}
 }
@@ -411,14 +411,14 @@ func TestReaperRecoversRunsFromLostBackendGeneration(t *testing.T) {
 func TestReaperDefersRecoveryUntilBackendLossGrace(t *testing.T) {
 	t.Parallel()
 	runs := newFakeLedger()
-	runs.insertClaimed("run-blip", "session-blip", 1, "generation-old")
+	runs.InsertClaimed("run-blip", "session-blip", 1, "generation-old")
 	live := newFakeLiveness("generation-new")
 	reaper := newTestReaper(t, runs, live)
 	reaper.generationObservedAt = time.Now()
 
 	reaper.tick(context.Background())
 
-	if got := runs.state("run-blip"); got != "running" {
+	if got := runs.State("run-blip"); got != "running" {
 		t.Fatalf("state = %q, want running during the grace period", got)
 	}
 }
@@ -428,16 +428,16 @@ func TestReaperDefersRecoveryUntilBackendLossGrace(t *testing.T) {
 func TestReaperRepairsOrphanedAdmissions(t *testing.T) {
 	t.Parallel()
 	runs := newFakeLedger()
-	runs.insertOrphan("run-orphan", "session-orphan", "inv-orphan", "fingerprint")
+	runs.InsertOrphan("run-orphan", "session-orphan", "inv-orphan", "fingerprint")
 	live := newFakeLiveness("generation-1")
 	reaper := newTestReaper(t, runs, live)
 
 	reaper.tick(context.Background())
 
-	if got := runs.state("run-orphan"); got != "lost" {
+	if got := runs.State("run-orphan"); got != "lost" {
 		t.Fatalf("state = %q, want lost", got)
 	}
-	if got := runs.errorCode("run-orphan"); got != runErrorAdmissionOrphaned {
+	if got := runs.ErrorCode("run-orphan"); got != runErrorAdmissionOrphaned {
 		t.Fatalf("error code = %q, want %q", got, runErrorAdmissionOrphaned)
 	}
 }
@@ -447,8 +447,8 @@ func TestReaperRepairsOrphanedAdmissions(t *testing.T) {
 func TestReaperFollowerDoesNothing(t *testing.T) {
 	t.Parallel()
 	runs := newFakeLedger()
-	runs.insertClaimed("run-follower", "session-follower", 1, "generation-old")
-	runs.insertOrphan("run-follower-orphan", "session-follower-orphan", "inv", "fingerprint")
+	runs.InsertClaimed("run-follower", "session-follower", 1, "generation-old")
+	runs.InsertOrphan("run-follower-orphan", "session-follower-orphan", "inv", "fingerprint")
 	live := newFakeLiveness("generation-new")
 	live.leader = false
 	live.setCandidates(LeaseCandidate{RunID: "run-follower", FencingToken: 1})
@@ -456,10 +456,10 @@ func TestReaperFollowerDoesNothing(t *testing.T) {
 
 	reaper.tick(context.Background())
 
-	if got := runs.state("run-follower"); got != "running" {
+	if got := runs.State("run-follower"); got != "running" {
 		t.Fatalf("state = %q, want running", got)
 	}
-	if got := runs.state("run-follower-orphan"); got != "accepted" {
+	if got := runs.State("run-follower-orphan"); got != "accepted" {
 		t.Fatalf("orphan state = %q, want accepted", got)
 	}
 }
@@ -469,7 +469,7 @@ func TestReaperFollowerDoesNothing(t *testing.T) {
 func TestReaperTransitionsAreIdempotentAcrossLeaders(t *testing.T) {
 	t.Parallel()
 	runs := newFakeLedger()
-	runs.insertClaimed("run-failover", "session-failover", 3, "generation-old")
+	runs.InsertClaimed("run-failover", "session-failover", 3, "generation-old")
 	live := newFakeLiveness("generation-new")
 	first := newTestReaper(t, runs, live)
 	second := newTestReaper(t, runs, live)
@@ -477,10 +477,10 @@ func TestReaperTransitionsAreIdempotentAcrossLeaders(t *testing.T) {
 	first.tick(context.Background())
 	second.tick(context.Background())
 
-	if got := runs.state("run-failover"); got != "lost" {
+	if got := runs.State("run-failover"); got != "lost" {
 		t.Fatalf("state = %q, want lost", got)
 	}
-	writes := runs.terminalWrites()
+	writes := runs.TerminalWrites()
 	if len(writes) != 1 {
 		t.Fatalf("terminal writes = %d, want 1; the repeat must not apply", len(writes))
 	}

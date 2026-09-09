@@ -541,7 +541,7 @@ func (f *fakeTriggeredAdmitter) Admit(_ context.Context, input sessionruntime.Ad
 	}, nil
 }
 
-func (*fakeTriggeredAdmitter) FinishRun(context.Context, sessionruntime.RunHandle, string, string) error {
+func (*fakeTriggeredAdmitter) FinishRunWithErrorCode(context.Context, sessionruntime.RunHandle, string, string) error {
 	return nil
 }
 

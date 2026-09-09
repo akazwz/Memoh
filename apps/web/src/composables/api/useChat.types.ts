@@ -417,14 +417,6 @@ export interface RuntimeCursor {
   seq: number
 }
 
-export interface RuntimeSteerState {
-  id: string
-  status: string
-  text?: string
-  error?: string
-  created_at: string
-  updated_at: string
-}
 
 export interface RuntimeRunOperation {
   kind: 'retry' | 'edit'
@@ -446,12 +438,27 @@ export interface RuntimeCurrentRunView {
   updated_at: string
   messages: UIMessage[]
   request_user_turn?: UIUserTurn
+  // Ordered inputs already admitted into this run. The first entry is the
+  // request turn when present; later entries are applied steers.
+  user_turns?: UIUserTurn[]
+  // Live steer claims projected at their exact assistant-message
+  // boundary. Claimed entries are provisional; applied entries reference the
+  // settled history turn that replaces them.
+  steer_turns?: RuntimeSteerTurnView[]
   error_code?: string
   error?: string
   proposed_terminal_status?: RuntimeRunStatus
   finish_proposed_at?: string
-  steer?: RuntimeSteerState
   operation?: RuntimeRunOperation
+}
+
+export interface RuntimeSteerTurnView {
+  item_id: string
+  status: 'claimed' | 'applied'
+  text: string
+  turn_id?: string
+  after_message_id: number
+  timestamp: string
 }
 
 export interface RuntimeSnapshot {
@@ -468,7 +475,6 @@ export interface RuntimeCurrentRunPatch {
   status?: RuntimeRunStatus
   error_code?: string
   error?: string
-  steer?: RuntimeSteerState
   updated_at?: string
   owner_lease_expires_at?: string
 }
@@ -488,6 +494,9 @@ export interface RuntimeProgressAppend {
 export interface RuntimeDelta {
   current_run_view?: RuntimeCurrentRunView
   run?: RuntimeCurrentRunPatch
+  user_turn_upserts?: UIUserTurn[]
+  steer_turn_upserts?: RuntimeSteerTurnView[]
+  steer_turn_removals?: string[]
   message_appends?: RuntimeMessageAppend[]
   progress_appends?: RuntimeProgressAppend[]
   message_upserts?: UIMessage[]

@@ -26,7 +26,7 @@ func TestFinishRunStopsInjectSendsWithoutClosingBorrowedChannel(t *testing.T) {
 		steerDone := make(chan struct{})
 		go func() {
 			<-start
-			_, _ = manager.Steer(context.Background(), testBotID, sessionID, runID, "race teardown")
+			_, _ = ctrl.sendInject(context.Background(), turn.InjectMessage{Text: "race teardown"})
 			close(steerDone)
 		}()
 		close(start)

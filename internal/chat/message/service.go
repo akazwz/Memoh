@@ -941,16 +941,10 @@ func resolveRuntimeSnapshotWithQueries(ctx context.Context, queries dbstore.Quer
 	return sessionMode, runtimeType
 }
 
+// Database rows already carry the backfilled, constrained descriptor. Legacy
+// request/import normalization belongs at those input boundaries.
 func sessionSnapshotFromRow(row sqlc.BotSession) (string, string) {
-	sessionMode := normalizeSessionMode(row.SessionMode)
-	if sessionMode == "" {
-		sessionMode = legacySessionMode(row.Type)
-	}
-	runtimeType := normalizeRuntimeType(row.RuntimeType)
-	if runtimeType == "" {
-		runtimeType = legacyRuntimeType(row.Type)
-	}
-	return sessionMode, runtimeType
+	return row.SessionMode, row.RuntimeType
 }
 
 func normalizeSessionMode(mode string) string {
@@ -972,24 +966,6 @@ func normalizeRuntimeType(runtimeType string) string {
 		return ""
 	}
 	return string(kind)
-}
-
-func legacySessionMode(typ string) string {
-	switch strings.TrimSpace(typ) {
-	case "acp_agent":
-		return "chat"
-	case "discuss", "schedule", "subagent":
-		return strings.TrimSpace(typ)
-	default:
-		return "chat"
-	}
-}
-
-func legacyRuntimeType(typ string) string {
-	if strings.TrimSpace(typ) == "acp_agent" {
-		return "acp_agent"
-	}
-	return "model"
 }
 
 // List returns all messages for a bot.

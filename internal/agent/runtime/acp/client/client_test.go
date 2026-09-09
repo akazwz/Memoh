@@ -28,6 +28,7 @@ import (
 	"github.com/felinics/memoh/internal/config"
 	"github.com/felinics/memoh/internal/mcp"
 	"github.com/felinics/memoh/internal/runtimefence"
+	sessiontest "github.com/felinics/memoh/internal/testutil/sessionruntime"
 	"github.com/felinics/memoh/internal/workspace/bridge"
 	pb "github.com/felinics/memoh/internal/workspace/bridgepb"
 	"github.com/felinics/memoh/internal/workspace/bridgesvc"
@@ -2500,7 +2501,7 @@ func TestACPWorkspaceEffectsRejectStaleRedisOwner(t *testing.T) {
 		t.Fatalf("create stale owner backend: %v", err)
 	}
 	t.Cleanup(func() { _ = rawOwnerBackend.Close() })
-	owner := sessionruntime.NewManager(nonClosingDistributedBackend{DistributedBackend: rawOwnerBackend}, sessionruntime.Options{
+	owner := sessiontest.New(nonClosingDistributedBackend{DistributedBackend: rawOwnerBackend, LivenessBackend: rawOwnerBackend}, sessionruntime.Options{
 		OwnerID: "acp-workspace-owner-a", StateTTL: time.Minute, OwnerLeaseTTL: 100 * time.Millisecond,
 	})
 	if err := owner.Start(ctx); err != nil {
@@ -2510,7 +2511,7 @@ func TestACPWorkspaceEffectsRejectStaleRedisOwner(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create takeover backend: %v", err)
 	}
-	takeover := sessionruntime.NewManager(backendB, sessionruntime.Options{
+	takeover := sessiontest.New(backendB, sessionruntime.Options{
 		OwnerID: "acp-workspace-owner-b", StateTTL: time.Minute, OwnerLeaseTTL: 100 * time.Millisecond,
 	})
 	if err := takeover.Start(ctx); err != nil {
@@ -2524,7 +2525,7 @@ func TestACPWorkspaceEffectsRejectStaleRedisOwner(t *testing.T) {
 		streamA   = "stream-acp-workspace-owner-a"
 		streamB   = "stream-acp-workspace-owner-b"
 	)
-	ownerHandle, err := owner.StartRunHandle(ctx, botID, sessionID, streamA, make(chan struct{}, 1), func() {}, make(chan turn.InjectMessage, 1))
+	ownerHandle, err := sessiontest.Start(ctx, owner, botID, sessionID, streamA, make(chan struct{}, 1), func() {}, make(chan turn.InjectMessage, 1))
 	if err != nil {
 		t.Fatalf("start stale owner run: %v", err)
 	}
@@ -2549,7 +2550,7 @@ func TestACPWorkspaceEffectsRejectStaleRedisOwner(t *testing.T) {
 	if _, err := takeover.Snapshot(ctx, botID, sessionID); err != nil {
 		t.Fatalf("reconcile expired owner: %v", err)
 	}
-	if err := takeover.StartRun(ctx, botID, sessionID, streamB, make(chan struct{}, 1), func() {}, make(chan turn.InjectMessage, 1)); err != nil {
+	if _, err := sessiontest.Start(ctx, takeover, botID, sessionID, streamB, make(chan struct{}, 1), func() {}, make(chan turn.InjectMessage, 1)); err != nil {
 		t.Fatalf("start takeover run: %v", err)
 	}
 
@@ -2590,6 +2591,7 @@ func TestACPWorkspaceEffectsRejectStaleRedisOwner(t *testing.T) {
 }
 
 type nonClosingDistributedBackend struct {
+	sessionruntime.LivenessBackend
 	sessionruntime.DistributedBackend
 }
 

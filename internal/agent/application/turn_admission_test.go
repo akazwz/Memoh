@@ -33,7 +33,7 @@ func (f *fakeTurnAdmitter) Admit(_ context.Context, input sessionruntime.AdmitIn
 	}, nil
 }
 
-func (*fakeTurnAdmitter) FinishRun(context.Context, sessionruntime.RunHandle, string, string) error {
+func (*fakeTurnAdmitter) FinishRunWithErrorCode(context.Context, sessionruntime.RunHandle, string, string) error {
 	return nil
 }
 

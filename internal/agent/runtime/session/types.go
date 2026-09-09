@@ -31,16 +31,11 @@ const (
 	RunStatusErrored         = "errored"
 	RunStatusLost            = "lost"
 
-	SteerStatusPending  = "pending"
-	SteerStatusQueued   = "queued"
-	SteerStatusApplied  = "applied"
-	SteerStatusRejected = "rejected"
-
 	RunOperationRetry = "retry"
 	RunOperationEdit  = "edit"
 
 	CommandAbort                = "abort"
-	CommandSteer                = "steer_current_run"
+	CommandSteerWake            = "steer_wake"
 	CommandToolApprovalResponse = "tool_approval_response"
 	CommandUserInputResponse    = "user_input_response"
 	CommandHistoryReset         = "history_reset"
@@ -169,15 +164,19 @@ func (r RunRef) identityMatches(other RunRef) bool {
 // RunHandle identifies one admitted run. A run id can be reused by a client that
 // replays an old reservation, so owner-side mutations also carry the generation.
 type RunHandle struct {
-	BotID      string
-	SessionID  string
-	RunID      string
+	BotID     string
+	SessionID string
+	RunID     string
+	// OwnerID identifies the live execution owner for queue claims. It is
+	// intentionally carried with the handle so claim CAS checks use the same
+	// owner identity as the session runtime.
+	OwnerID    string
 	TurnID     string
 	Generation string
 	// FencingToken is the ledger ownership token for this run. Callers need it
 	// to fence their own durable writes, which is why it travels with the
 	// handle rather than staying inside the runtime. It is zero for runs
-	// started through the pre-ledger entry points.
+	// created by backend-only reservation tests.
 	FencingToken int64
 }
 
@@ -199,6 +198,7 @@ func (h RunHandle) normalized() RunHandle {
 	h.BotID = strings.TrimSpace(h.BotID)
 	h.SessionID = strings.TrimSpace(h.SessionID)
 	h.RunID = strings.TrimSpace(h.RunID)
+	h.OwnerID = strings.TrimSpace(h.OwnerID)
 	h.TurnID = strings.TrimSpace(h.TurnID)
 	h.Generation = strings.TrimSpace(h.Generation)
 	return h
@@ -265,21 +265,42 @@ type CurrentRunView struct {
 	// while waiting for the acceptance that names the two. Subscribers that did
 	// not originate the run see an id unknown to them and treat the turn as
 	// foreign — which is the correct standalone rendering for cross-device runs.
-	InvocationID           string               `json:"invocation_id,omitempty"`
-	Generation             string               `json:"generation"`
-	Status                 string               `json:"status"`
-	OwnerID                string               `json:"owner_id,omitempty"`
-	OwnerLeaseExpiresAt    *time.Time           `json:"owner_lease_expires_at,omitempty"`
-	StartedAt              time.Time            `json:"started_at"`
-	UpdatedAt              time.Time            `json:"updated_at"`
-	Messages               []chatview.UIMessage `json:"messages"`
-	RequestUserTurn        *chatview.UITurn     `json:"request_user_turn,omitempty"`
-	ErrorCode              string               `json:"error_code,omitempty"`
-	Error                  string               `json:"error,omitempty"`
-	ProposedTerminalStatus string               `json:"proposed_terminal_status,omitempty"`
-	FinishProposedAt       *time.Time           `json:"finish_proposed_at,omitempty"`
-	Steer                  *SteerState          `json:"steer,omitempty"`
-	Operation              *RunOperationView    `json:"operation,omitempty"`
+	InvocationID        string               `json:"invocation_id,omitempty"`
+	Generation          string               `json:"generation"`
+	Status              string               `json:"status"`
+	OwnerID             string               `json:"owner_id,omitempty"`
+	OwnerLeaseExpiresAt *time.Time           `json:"owner_lease_expires_at,omitempty"`
+	StartedAt           time.Time            `json:"started_at"`
+	UpdatedAt           time.Time            `json:"updated_at"`
+	Messages            []chatview.UIMessage `json:"messages"`
+	// UserTurns is the authoritative ordered set of user inputs already
+	// admitted into this run, including the original input and applied steers.
+	// The legacy request_user_turn is derived only at the JSON boundary.
+	UserTurns []chatview.UITurn `json:"user_turns,omitempty"`
+	// SteerSupported is published only by an installed step-boundary consumer.
+	// Missing on old owners and on runtimes without that execution capability.
+	SteerSupported bool `json:"steer_supported,omitempty"`
+	// The snapshot outlives the lease key and retains the exact persistence
+	// fence needed to reconcile a durable terminal after owner expiry.
+	FencingToken int64 `json:"fencing_token,omitempty"`
+	// SteerTurns locates live queue inputs inside the run's assistant message
+	// stream. Claimed entries are provisional runtime state; applied entries
+	// point at the history turn written by the application.
+	SteerTurns             []SteerTurnView   `json:"steer_turns,omitempty"`
+	ErrorCode              string            `json:"error_code,omitempty"`
+	Error                  string            `json:"error,omitempty"`
+	ProposedTerminalStatus string            `json:"proposed_terminal_status,omitempty"`
+	FinishProposedAt       *time.Time        `json:"finish_proposed_at,omitempty"`
+	Operation              *RunOperationView `json:"operation,omitempty"`
+}
+
+type SteerTurnView struct {
+	ItemID         string    `json:"item_id" validate:"required" format:"uuid"`
+	Status         string    `json:"status" validate:"required" enums:"claimed,applied"`
+	Text           string    `json:"text" validate:"required"`
+	TurnID         string    `json:"turn_id,omitempty" format:"uuid"`
+	AfterMessageID int       `json:"after_message_id"`
+	Timestamp      time.Time `json:"timestamp" validate:"required" format:"date-time"`
 }
 
 // RunAdmissionView is the canonical state published when a reserved run
@@ -295,15 +316,6 @@ type RunOperationView struct {
 	Kind                 string           `json:"kind" validate:"required" enums:"retry,edit"`
 	ReplaceFromMessageID string           `json:"replace_from_message_id" validate:"required"`
 	ReplacementUserTurn  *chatview.UITurn `json:"replacement_user_turn,omitempty"`
-}
-
-type SteerState struct {
-	ID        string    `json:"id"`
-	Status    string    `json:"status"`
-	Text      string    `json:"text,omitempty"`
-	Error     string    `json:"error,omitempty"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
 }
 
 type Event struct {
@@ -322,22 +334,24 @@ type Event struct {
 // RuntimeDelta carries only the state changed by one committed runtime
 // transition. Full snapshots are reserved for hydration and gap recovery.
 type RuntimeDelta struct {
-	CurrentRunView  *CurrentRunView         `json:"current_run_view,omitempty"`
-	Run             *CurrentRunPatch        `json:"run,omitempty"`
-	MessageAppends  []RuntimeMessageAppend  `json:"message_appends,omitempty"`
-	ProgressAppends []RuntimeProgressAppend `json:"progress_appends,omitempty"`
-	MessageUpserts  []chatview.UIMessage    `json:"message_upserts,omitempty"`
-	ResetMessages   bool                    `json:"reset_messages,omitempty"`
+	CurrentRunView    *CurrentRunView         `json:"current_run_view,omitempty"`
+	Run               *CurrentRunPatch        `json:"run,omitempty"`
+	UserTurnUpserts   []chatview.UITurn       `json:"user_turn_upserts,omitempty"`
+	SteerTurnUpserts  []SteerTurnView         `json:"steer_turn_upserts,omitempty"`
+	SteerTurnRemovals []string                `json:"steer_turn_removals,omitempty"`
+	MessageAppends    []RuntimeMessageAppend  `json:"message_appends,omitempty"`
+	ProgressAppends   []RuntimeProgressAppend `json:"progress_appends,omitempty"`
+	MessageUpserts    []chatview.UIMessage    `json:"message_upserts,omitempty"`
+	ResetMessages     bool                    `json:"reset_messages,omitempty"`
 }
 
 type CurrentRunPatch struct {
-	RunID               string      `json:"run_id"`
-	Status              *string     `json:"status,omitempty"`
-	ErrorCode           *string     `json:"error_code,omitempty"`
-	Error               *string     `json:"error,omitempty"`
-	Steer               *SteerState `json:"steer,omitempty"`
-	UpdatedAt           *time.Time  `json:"updated_at,omitempty"`
-	OwnerLeaseExpiresAt *time.Time  `json:"owner_lease_expires_at,omitempty"`
+	RunID               string     `json:"run_id"`
+	Status              *string    `json:"status,omitempty"`
+	ErrorCode           *string    `json:"error_code,omitempty"`
+	Error               *string    `json:"error,omitempty"`
+	UpdatedAt           *time.Time `json:"updated_at,omitempty"`
+	OwnerLeaseExpiresAt *time.Time `json:"owner_lease_expires_at,omitempty"`
 }
 
 type RuntimeMessageAppend struct {
@@ -366,8 +380,6 @@ type Command struct {
 	// before routing. Owner-side execution must not consult the live UI
 	// projection again: it is derived state and may lag the durable decision.
 	DecisionResolved bool            `json:"decision_resolved,omitempty"`
-	SteerID          string          `json:"steer_id,omitempty"`
-	Text             string          `json:"text,omitempty"`
 	Payload          json.RawMessage `json:"payload,omitempty"`
 	PayloadHash      string          `json:"payload_hash,omitempty"`
 	ErrorCode        string          `json:"error_code,omitempty"`

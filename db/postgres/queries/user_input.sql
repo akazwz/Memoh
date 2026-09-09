@@ -90,6 +90,18 @@ SELECT *
 FROM user_input_requests
 WHERE team_id = public.memoh_current_team_id() AND id = $1;
 
+-- name: GetInteractiveUserInputRequest :one
+-- Channel-native controls may advance the interaction without carrying the
+-- runtime fence. The eventual submit remains fence-protected; this lookup
+-- only admits a live, pending request in the requested bot scope.
+SELECT *
+FROM user_input_requests
+WHERE team_id = public.memoh_current_team_id()
+  AND bot_id = sqlc.arg(bot_id)
+  AND id = sqlc.arg(id)
+  AND status = 'pending'
+  AND (expires_at IS NULL OR expires_at > now());
+
 -- name: ListPendingUserInputsByRun :many
 SELECT *
 FROM user_input_requests
@@ -260,6 +272,24 @@ WHERE team_id = public.memoh_current_team_id()
     runtime_fencing_token = sqlc.narg(runtime_fencing_token)::bigint
     OR (runtime_fencing_token IS NULL AND (expires_at IS NULL OR expires_at > now()))
   )
+RETURNING *;
+
+-- name: CancelPendingUserInputsByRun :many
+-- A lost run must only invalidate decisions it created. Session-wide
+-- cancellation would also expire a newer run's ask_user request after a
+-- stale owner is reaped.
+UPDATE user_input_requests
+SET status = 'canceled',
+    result_json = sqlc.arg(result_json),
+    responded_at = now(),
+    canceled_at = now(),
+    updated_at = now()
+WHERE team_id = public.memoh_current_team_id()
+  AND bot_id = sqlc.arg(bot_id)
+  AND session_id = sqlc.arg(session_id)
+  AND run_id = sqlc.arg(run_id)
+  AND status = 'pending'
+  AND runtime_fencing_token IS NOT DISTINCT FROM sqlc.narg(runtime_fencing_token)::bigint
 RETURNING *;
 
 -- name: SupersedePendingUserInputsBySession :many

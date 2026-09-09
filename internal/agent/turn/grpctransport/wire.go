@@ -9,73 +9,98 @@ import (
 )
 
 const (
-	legacySessionIDKey  = "SessionID"
-	internalThreadIDKey = "ThreadID"
+	// turnDeferredStatusMessage is part of the private gRPC vocabulary. Keep it
+	// centralized because the client uses it to distinguish a deferred
+	// admission result from other ResourceExhausted failures.
+	turnDeferredStatusMessage = "turn deferred"
 )
 
 // The authenticated server-channel RPC predates the internal Thread
 // terminology. Keep its JSON field named SessionID so independently deployed
 // server and channel binaries remain compatible while the domain contract uses
 // ThreadID exclusively.
+// A tagged field at the same embedding depth shadows the domain ThreadID.
+// The output still contains SessionID only; the domain JSON used by queue
+// payloads is unchanged. Embedding avoids copying the command's field list.
+type outgoingThreadID struct {
+	SessionID string
+	ThreadID  *string `json:"ThreadID,omitempty"`
+}
+
+type incomingThreadID struct {
+	SessionID json.RawMessage `json:"SessionID"`
+	ThreadID  json.RawMessage `json:"ThreadID"`
+}
+
 func marshalStartTurnCommand(cmd turn.StartTurnCommand) ([]byte, error) {
-	return marshalLegacyThreadID(cmd)
+	return json.Marshal(struct {
+		turn.StartTurnCommand
+		outgoingThreadID
+	}{cmd, outgoingThreadID{SessionID: cmd.ThreadID}})
 }
 
 func unmarshalStartTurnCommand(data []byte, cmd *turn.StartTurnCommand) error {
-	return unmarshalLegacyThreadID(data, cmd)
+	if cmd == nil {
+		return json.Unmarshal(data, cmd)
+	}
+	wire := struct {
+		*turn.StartTurnCommand
+		incomingThreadID
+	}{StartTurnCommand: cmd}
+	return unmarshalLegacyThreadID(data, &wire, &wire.incomingThreadID, &cmd.ThreadID)
 }
 
 func marshalToolApprovalResponse(input turn.ToolApprovalResponse) ([]byte, error) {
-	return marshalLegacyThreadID(input)
+	return json.Marshal(struct {
+		turn.ToolApprovalResponse
+		outgoingThreadID
+	}{input, outgoingThreadID{SessionID: input.ThreadID}})
 }
 
 func unmarshalToolApprovalResponse(data []byte, input *turn.ToolApprovalResponse) error {
-	return unmarshalLegacyThreadID(data, input)
+	if input == nil {
+		return json.Unmarshal(data, input)
+	}
+	wire := struct {
+		*turn.ToolApprovalResponse
+		incomingThreadID
+	}{ToolApprovalResponse: input}
+	return unmarshalLegacyThreadID(data, &wire, &wire.incomingThreadID, &input.ThreadID)
 }
 
 func marshalUserInputResponse(input turn.UserInputResponse) ([]byte, error) {
-	return marshalLegacyThreadID(input)
+	return json.Marshal(struct {
+		turn.UserInputResponse
+		outgoingThreadID
+	}{input, outgoingThreadID{SessionID: input.ThreadID}})
 }
 
 func unmarshalUserInputResponse(data []byte, input *turn.UserInputResponse) error {
-	return unmarshalLegacyThreadID(data, input)
+	if input == nil {
+		return json.Unmarshal(data, input)
+	}
+	wire := struct {
+		*turn.UserInputResponse
+		incomingThreadID
+	}{UserInputResponse: input}
+	return unmarshalLegacyThreadID(data, &wire, &wire.incomingThreadID, &input.ThreadID)
 }
 
-func marshalLegacyThreadID(value any) ([]byte, error) {
-	data, err := json.Marshal(value)
-	if err != nil {
-		return nil, err
-	}
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(data, &fields); err != nil {
-		return nil, err
-	}
-	threadID, ok := fields[internalThreadIDKey]
-	if !ok {
-		return nil, errors.New("turn rpc: internal ThreadID field missing")
-	}
-	delete(fields, internalThreadIDKey)
-	fields[legacySessionIDKey] = threadID
-	return json.Marshal(fields)
-}
-
-func unmarshalLegacyThreadID(data []byte, value any) error {
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(data, &fields); err != nil {
+func unmarshalLegacyThreadID(data []byte, wire any, ids *incomingThreadID, threadID *string) error {
+	if err := json.Unmarshal(data, wire); err != nil {
 		return err
 	}
-	if _, hasLegacy := fields[legacySessionIDKey]; hasLegacy {
-		if _, hasInternal := fields[internalThreadIDKey]; hasInternal {
-			return errors.New("turn rpc: ambiguous SessionID and ThreadID fields")
-		}
-		fields[internalThreadIDKey] = fields[legacySessionIDKey]
-		delete(fields, legacySessionIDKey)
+	if ids.SessionID != nil && ids.ThreadID != nil {
+		return errors.New("turn rpc: ambiguous SessionID and ThreadID fields")
 	}
-	adapted, err := json.Marshal(fields)
-	if err != nil {
-		return err
+	value := ids.ThreadID
+	if ids.SessionID != nil {
+		value = ids.SessionID
 	}
-	return json.Unmarshal(adapted, value)
+	if value == nil {
+		return nil
+	}
+	return json.Unmarshal(value, threadID)
 }
 
 func eventFromProto(event *turnpb.EventResponse) turn.Event {

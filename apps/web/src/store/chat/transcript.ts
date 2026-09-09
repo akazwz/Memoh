@@ -24,6 +24,7 @@ import type { RuntimeTranscriptSlice } from './runtime-projection'
 import { createTranscriptHistory } from './transcript-history'
 import { createTranscriptDecisions } from './transcript-decisions'
 import { createTranscriptQueries } from './transcript-queries'
+import { markRuntimeTurn, reconcileRuntimeTurns } from './runtime-transcript-merge'
 
 export interface TranscriptDeps {
   currentBotId: Ref<string | null>
@@ -473,17 +474,6 @@ export function createTranscriptController({
     }
   }
 
-  function runtimeMessage(
-    normalized: ChatUserTurn | ChatAssistantTurn,
-    slice: RuntimeTranscriptSlice,
-  ): ChatUserTurn | ChatAssistantTurn {
-    normalized.turnId = slice.turnId
-    normalized.runtimeRunId = slice.runId
-    normalized.__optimistic = false
-    if (normalized.role === 'assistant') normalized.streaming = slice.streaming
-    return normalized
-  }
-
   function applyRuntimeTranscript(
     slice: RuntimeTranscriptSlice,
   ): boolean {
@@ -493,24 +483,26 @@ export function createTranscriptController({
     // finds it by turnId. The frame itself is the pairing — correct no matter
     // how it interleaves with run_accepted, with no grace window to guess in.
     if (slice.invocationId) bindRuntimeTurn(slice.invocationId, slice.turnId, slice.runId)
+    let firstUser = true
     const incoming = slice.turns
       .map(normalizeTurn)
       .filter((turn): turn is ChatUserTurn | ChatAssistantTurn => turn.role !== 'system')
-      .map(turn => runtimeMessage(turn, slice))
-    const existing = messages.filter((turn): turn is ChatUserTurn | ChatAssistantTurn =>
-      turn.role !== 'system'
-      && turn.turnId === slice.turnId,
-    )
-    const resolved = (['user', 'assistant'] as const).flatMap((role) => {
-      const current = existing.find(turn => turn.role === role)
-      const next = incoming.find(turn => turn.role === role)
-      if (!next) return current ? [current] : []
-      if (!current) return [next]
-      const renderId = current.id
-      const settledPosition = current.turnPosition ?? next.turnPosition
-      Object.assign(current, next, { id: renderId, turnPosition: settledPosition })
-      return [current]
+      .map((turn) => {
+        // Older frames omit the original request's nested turn identity.
+        const originalUser = turn.role === 'user' && firstUser
+        if (originalUser) firstUser = false
+        return markRuntimeTurn(turn, slice, originalUser)
+      })
+    const assistants = incoming.filter((turn): turn is ChatAssistantTurn => turn.role === 'assistant')
+    for (const assistant of assistants) assistant.streaming = false
+    if (slice.streaming && assistants.length > 0) assistants[assistants.length - 1]!.streaming = true
+    const incomingKeys = new Set(incoming.map(turn => `${turn.role}\u0000${turn.turnId ?? ''}`))
+    const existing = messages.filter((turn): turn is ChatUserTurn | ChatAssistantTurn => {
+      if (turn.role === 'system') return false
+      if (turn.runtimeRunId === slice.runId || turn.turnId === slice.turnId) return true
+      return incomingKeys.has(`${turn.role}\u0000${turn.turnId ?? ''}`)
     })
+    const resolved = reconcileRuntimeTurns(existing, incoming)
 
     const operationAnchor = slice.operation?.replace_from_message_id?.trim() ?? ''
     const anchor = operationAnchor
@@ -536,6 +528,13 @@ export function createTranscriptController({
     for (let index = indices.length - 1; index >= 0; index -= 1) {
       messages.splice(indices[index]!, 1)
     }
+    // The runtime frame already orders a run's turns: request users first,
+    // then assistant segments split around each steer by after_message_id.
+    // Insert that block as delivered. Re-sorting the whole transcript here
+    // would fall back to timestamps wherever a live assistant turn has no
+    // turn_position yet, and a request user persisted at step commit carries
+    // a later timestamp than the assistant turn that started streaming
+    // before it, which rendered the reply above its own request.
     messages.splice(insertAt, 0, ...resolved)
     return true
   }

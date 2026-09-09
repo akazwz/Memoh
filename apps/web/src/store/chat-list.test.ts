@@ -881,7 +881,7 @@ describe('chat-list store', () => {
       const store = useChatStore()
 
       await store.selectBot('bot-1')
-      store.stageDefaultExternalAgentSession({ agentId: 'codex', projectPath: '/data', projectMode: 'project' })
+      store.stageDefaultExternalAgentSession({ runtime: 'acp', agentId: 'codex', projectPath: '/data', projectMode: 'project' })
       const onBeforeMessageSend = vi.fn()
       const result = await store.sendMessage('/new', undefined, { onBeforeMessageSend })
       expect(onBeforeMessageSend).not.toHaveBeenCalled()
@@ -1045,7 +1045,7 @@ describe('chat-list store', () => {
       const store = useChatStore()
 
       await store.selectBot('bot-1')
-      store.stageDefaultExternalAgentSession({ agentId: 'codex', projectPath: '/data', projectMode: 'project' })
+      store.stageDefaultExternalAgentSession({ runtime: 'acp', agentId: 'codex', projectPath: '/data', projectMode: 'project' })
       store.resetToEmptyComposer({ explicitSelection: true })
 
       api.fetchSessions.mockResolvedValueOnce({
@@ -1098,8 +1098,8 @@ describe('chat-list store', () => {
       const store = useChatStore()
 
       await store.selectBot('bot-1')
-      store.stageDefaultExternalAgentSession({ agentId: 'codex', projectPath: '/data', projectMode: 'project' })
-      store.stageExternalAgentSession({ agentId: 'claude-code', projectPath: '/data/other', projectMode: 'project' })
+      store.stageDefaultExternalAgentSession({ runtime: 'acp', agentId: 'codex', projectPath: '/data', projectMode: 'project' })
+      store.stageExternalAgentSession({ runtime: 'acp', agentId: 'claude-code', projectPath: '/data/other', projectMode: 'project' })
 
       api.fetchSessions.mockResolvedValueOnce({
         items: [{
@@ -1139,7 +1139,7 @@ describe('chat-list store', () => {
       const store = useChatStore()
 
       await store.selectBot('bot-1')
-      store.stageExternalAgentSession({ agentId: 'custom-agent' })
+      store.stageExternalAgentSession({ runtime: 'acp', agentId: 'custom-agent' })
       await store.ensurePendingACPRuntime()
 
       // The runtime ID is server generated; the client never invents one.
@@ -1187,7 +1187,7 @@ describe('chat-list store', () => {
       const store = useChatStore()
 
       await store.selectBot('bot-1')
-      store.stageExternalAgentSession({ agentId: 'codex' })
+      store.stageExternalAgentSession({ runtime: 'acp', agentId: 'codex' })
       await store.ensurePendingACPRuntime()
 
       api.fetchACPRuntimeByID.mockResolvedValueOnce({
@@ -1230,7 +1230,7 @@ describe('chat-list store', () => {
       const store = useChatStore()
 
       await store.selectBot('bot-1')
-      store.stageExternalAgentSession({ agentId: 'codex' })
+      store.stageExternalAgentSession({ runtime: 'acp', agentId: 'codex' })
       await store.ensurePendingACPRuntime()
       const recreated = await store.ensurePendingACPRuntime()
 
@@ -1255,12 +1255,12 @@ describe('chat-list store', () => {
       const store = useChatStore()
 
       await store.selectBot('bot-1')
-      store.stageExternalAgentSession({ agentId: 'codex' })
+      store.stageExternalAgentSession({ runtime: 'acp', agentId: 'codex' })
       const first = store.ensurePendingACPRuntime()
 
       // Switching agents mid-create must NOT reuse the codex create promise:
       // the new staging starts its own runtime immediately.
-      store.stageExternalAgentSession({ agentId: 'claude-code' })
+      store.stageExternalAgentSession({ runtime: 'acp', agentId: 'claude-code' })
       const second = await store.ensurePendingACPRuntime()
 
       expect(api.createACPRuntime).toHaveBeenCalledTimes(2)
@@ -1297,10 +1297,10 @@ describe('chat-list store', () => {
       const store = useChatStore()
 
       await store.selectBot('bot-1')
-      store.stageExternalAgentSession({ agentId: 'codex' })
+      store.stageExternalAgentSession({ runtime: 'acp', agentId: 'codex' })
       const first = store.ensurePendingACPRuntime()
 
-      store.stageExternalAgentSession({ agentId: 'codex', projectPath: '/data/other' })
+      store.stageExternalAgentSession({ runtime: 'acp', agentId: 'codex', projectPath: '/data/other' })
       await store.ensurePendingACPRuntime()
 
       expect(api.createACPRuntime).toHaveBeenCalledTimes(2)
@@ -1336,10 +1336,10 @@ describe('chat-list store', () => {
       const store = useChatStore()
 
       await store.selectBot('bot-1')
-      store.stageExternalAgentSession({ agentId: 'codex' })
+      store.stageExternalAgentSession({ runtime: 'acp', agentId: 'codex' })
       const first = store.ensurePendingACPRuntime()
 
-      store.stageExternalAgentSession({ agentId: 'claude-code' })
+      store.stageExternalAgentSession({ runtime: 'acp', agentId: 'claude-code' })
       await store.ensurePendingACPRuntime()
       expect(store.pendingACPRuntimeId).toBe('rt_claude')
 
@@ -1369,13 +1369,13 @@ describe('chat-list store', () => {
       const store = useChatStore()
 
       await store.selectBot('bot-1')
-      store.stageExternalAgentSession({ agentId: 'codex' })
+      store.stageExternalAgentSession({ runtime: 'acp', agentId: 'codex' })
       await store.ensurePendingACPRuntime()
       expect(store.pendingACPRuntimeId).toBe('rt_warm')
 
       // The model PATCH hangs; the user switches agents meanwhile.
       const pick = store.setPendingACPModel('gpt-5.1-codex-high')
-      store.stageExternalAgentSession({ agentId: 'claude-code' })
+      store.stageExternalAgentSession({ runtime: 'acp', agentId: 'claude-code' })
       await store.ensurePendingACPRuntime()
       expect(store.pendingACPRuntimeId).toBe('rt_claude')
 
@@ -1411,7 +1411,7 @@ describe('chat-list store', () => {
       const store = useChatStore()
 
       await store.selectBot('bot-1')
-      store.stageExternalAgentSession({ agentId: 'codex' })
+      store.stageExternalAgentSession({ runtime: 'acp', agentId: 'codex' })
       await store.ensurePendingACPRuntime()
 
       // ABA: pick hangs → user leaves ACP → re-stages the SAME agent. The
@@ -1419,7 +1419,7 @@ describe('chat-list store', () => {
       // late heal must not push the abandoned model onto the new runtime.
       const pick = store.setPendingACPModel('gpt-5.1-codex-high')
       store.clearPendingExternalAgentSession()
-      store.stageExternalAgentSession({ agentId: 'codex' })
+      store.stageExternalAgentSession({ runtime: 'acp', agentId: 'codex' })
       await store.ensurePendingACPRuntime()
       expect(store.pendingACPRuntimeId).toBe('rt_new')
 
@@ -1435,7 +1435,7 @@ describe('chat-list store', () => {
       const store = useChatStore()
 
       await store.selectBot('bot-1')
-      store.stageExternalAgentSession({ agentId: 'codex' })
+      store.stageExternalAgentSession({ runtime: 'acp', agentId: 'codex' })
 
       await expect(store.setPendingACPModel('gpt-5.1-codex-high')).rejects.toMatchObject({
         message: 'runtime create failed',
@@ -1468,7 +1468,7 @@ describe('chat-list store', () => {
       const store = useChatStore()
 
       await store.selectBot('bot-1')
-      store.stageExternalAgentSession({ agentId: 'codex' })
+      store.stageExternalAgentSession({ runtime: 'acp', agentId: 'codex' })
       await store.ensurePendingACPRuntime()
       expect(store.pendingACPRuntimeId).toBe('rt_warm')
 
@@ -1489,7 +1489,7 @@ describe('chat-list store', () => {
       const store = useChatStore()
 
       await store.selectBot('bot-1')
-      store.stageExternalAgentSession({ agentId: 'codex' })
+      store.stageExternalAgentSession({ runtime: 'acp', agentId: 'codex' })
       const ensurePromise = store.ensurePendingACPRuntime()
 
       // The user clears the staged agent while the runtime is still starting.
@@ -1851,7 +1851,7 @@ describe('chat-list store', () => {
       const store = useChatStore()
 
       await store.selectBot('bot-1')
-      store.stageExternalAgentSession({ agentId: 'codex' })
+      store.stageExternalAgentSession({ runtime: 'acp', agentId: 'codex' })
       await store.ensurePendingACPRuntime()
       expect(store.pendingACPRuntimeId).toBe('rt_warm')
 
@@ -3274,7 +3274,7 @@ describe('chat-list store', () => {
       const store = useChatStore()
 
       await store.selectBot('bot-1')
-      store.stageExternalAgentSession({ agentId: 'codex' })
+      store.stageExternalAgentSession({ runtime: 'acp', agentId: 'codex' })
       const result = await store.sendMessage('/help', undefined, {
         composerScope: 'bot-1:draft-a',
       })
@@ -4776,10 +4776,10 @@ describe('chat-list store', () => {
       store.bindChatView(targetB.viewId, targetB, true)
 
       store.focusChatView(targetA.viewId)
-      store.stageExternalAgentSession({ agentId: 'codex' }, {}, targetA)
+      store.stageExternalAgentSession({ runtime: 'acp', agentId: 'codex' }, {}, targetA)
       await store.ensurePendingACPRuntime(targetA)
       store.focusChatView(targetB.viewId)
-      store.stageExternalAgentSession({ agentId: 'claude' }, {}, targetB)
+      store.stageExternalAgentSession({ runtime: 'acp', agentId: 'claude' }, {}, targetB)
 
       expect(store.pendingExternalAgentStateFor(targetA)).toMatchObject({
         metadata: { acp_agent_id: 'codex' },
@@ -4872,13 +4872,13 @@ describe('chat-list store', () => {
       store.bindChatView(targetA.viewId, targetA, true)
       store.bindChatView(targetB.viewId, targetB, true)
       store.focusChatView(targetA.viewId)
-      store.stageExternalAgentSession({ agentId: 'custom-agent' }, {}, targetA)
+      store.stageExternalAgentSession({ runtime: 'acp', agentId: 'custom-agent' }, {}, targetA)
 
       const sending = store.sendMessage('from ACP A', undefined, { target: targetA })
       await flushPromises()
       store.focusChatView(targetB.viewId)
       store.selectDraft({ explicitSelection: true })
-      store.stageExternalAgentSession({ agentId: 'claude' }, {}, targetB)
+      store.stageExternalAgentSession({ runtime: 'acp', agentId: 'claude' }, {}, targetB)
       creation.reject(new Error('create failed'))
       await expect(sending).resolves.toMatchObject({ ok: false, stage: 'startup' })
 
@@ -4897,7 +4897,7 @@ describe('chat-list store', () => {
       store.bindChatView(targetA.viewId, targetA, true)
       store.bindChatView(targetB.viewId, targetB, true)
       store.focusChatView(targetA.viewId)
-      store.stageExternalAgentSession({ agentId: 'custom-agent' }, {}, targetA)
+      store.stageExternalAgentSession({ runtime: 'acp', agentId: 'custom-agent' }, {}, targetA)
       await store.ensurePendingACPRuntime(targetA)
       store.focusChatView(targetB.viewId)
       store.selectDraft({ explicitSelection: true })
@@ -4978,7 +4978,7 @@ describe('chat-list store', () => {
       const updating = store.updateCurrentSessionAgent({ agentId: 'custom-agent' }, targetA)
       store.focusChatView(targetB.viewId)
       store.selectDraft({ explicitSelection: true })
-      store.stageExternalAgentSession({ agentId: 'claude' }, {}, targetB)
+      store.stageExternalAgentSession({ runtime: 'acp', agentId: 'claude' }, {}, targetB)
       await store.ensurePendingACPRuntime(targetB)
       update.resolve({
         id: 'session-a',
@@ -5018,7 +5018,7 @@ describe('chat-list store', () => {
       await flushPromises()
       store.focusChatView(targetB.viewId)
       store.selectDraft({ explicitSelection: true })
-      store.stageExternalAgentSession({ agentId: 'claude' }, {}, targetB)
+      store.stageExternalAgentSession({ runtime: 'acp', agentId: 'claude' }, {}, targetB)
       settings.resolve({ data: {
         chat_runtime: 'codex',
         chat_acp_agent_id: '',
@@ -5138,7 +5138,7 @@ describe('chat-list store', () => {
 
       const command = store.sendMessage('/new codex', undefined, { target })
       await flushPromises()
-      store.stageExternalAgentSession({ agentId: 'claude' }, {}, target)
+      store.stageExternalAgentSession({ runtime: 'acp', agentId: 'claude' }, {}, target)
       await store.ensurePendingACPRuntime(target)
 
       settings.resolve({ data: {

@@ -79,8 +79,8 @@ func (m *Manager) prepareLedgerFinish(
 // then resolves a prepared proposal to its intended terminal outcome. A run
 // that never crossed the durable proposal boundary still becomes `lost`.
 //
-// A zero fencing token means the run was started through a pre-ledger entry
-// point and has no durable row to transition, not that fencing was skipped.
+// Backend-only reservation tests use zero fencing tokens and have no durable
+// row to transition. Production admission always supplies a positive token.
 func (m *Manager) finalizeLedgerRun(ctx context.Context, handle RunHandle, status, errorCode, message string) (TerminalRun, error) {
 	if m.runs == nil || handle.FencingToken <= 0 {
 		return TerminalRun{}, nil

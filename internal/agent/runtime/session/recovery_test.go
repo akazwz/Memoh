@@ -157,11 +157,11 @@ func (f *waitingDecisionRecoveryFence) ReclaimWaitingDecision(
 	previousToken, newToken int64,
 	decisions []runtimefence.PreservedDecision,
 ) error {
-	f.runs.mu.Lock()
+	f.runs.Mu.Lock()
 	f.decisions.mu.Lock()
 	defer f.decisions.mu.Unlock()
-	defer f.runs.mu.Unlock()
-	run := f.runs.runs[runID]
+	defer f.runs.Mu.Unlock()
+	run := f.runs.Runs[runID]
 	if run == nil || run.BotID != botID || run.SessionID != sessionID ||
 		run.State != ledger.StateWaitingDecision || run.FencingToken != previousToken {
 		return ErrRunOwnershipLost
@@ -209,13 +209,13 @@ func TestWaitingDecisionRecoveryRetriesAfterFenceCommitWhenLiveReservationFails(
 	)
 	key := Key{BotID: testBotID, SessionID: sessionID}
 	runs := newFakeLedger()
-	runs.insertClaimed(runID, sessionID, 5, "generation-old")
+	runs.InsertClaimed(runID, sessionID, 5, "generation-old")
 	if _, applied, err := runs.SetWaitingDecision(context.Background(), runID, 5); err != nil || !applied {
 		t.Fatalf("park run: applied=%v err=%v", applied, err)
 	}
-	runs.mu.Lock()
-	runs.token = 5
-	runs.mu.Unlock()
+	runs.Mu.Lock()
+	runs.Token = 5
+	runs.Mu.Unlock()
 	decisions := &fakeDecisionStore{target: DecisionTarget{
 		Type: CommandUserInputResponse, ID: decisionID,
 		BotID: testBotID, SessionID: sessionID, RunID: runID, TurnID: runID + "-turn",
@@ -298,13 +298,13 @@ func TestWaitingDecisionRecoveryPreservesParallelDecisions(t *testing.T) {
 	)
 	key := Key{BotID: testBotID, SessionID: sessionID}
 	runs := newFakeLedger()
-	runs.insertClaimed(runID, sessionID, 5, "generation-old")
+	runs.InsertClaimed(runID, sessionID, 5, "generation-old")
 	if _, applied, err := runs.SetWaitingDecision(context.Background(), runID, 5); err != nil || !applied {
 		t.Fatalf("park run: applied=%v err=%v", applied, err)
 	}
-	runs.mu.Lock()
-	runs.token = 5
-	runs.mu.Unlock()
+	runs.Mu.Lock()
+	runs.Token = 5
+	runs.Mu.Unlock()
 	decisions := &fakeDecisionStore{
 		target: DecisionTarget{
 			Type: CommandToolApprovalResponse, ID: "decision-approval",

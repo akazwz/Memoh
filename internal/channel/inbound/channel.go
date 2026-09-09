@@ -46,6 +46,9 @@ const (
 	silentReplyToken        = "NO_REPLY"
 	minDuplicateTextLength  = 10
 	processingStatusTimeout = 60 * time.Second
+	turnBusyRetryWindow     = 30 * time.Second
+	turnBusyRetryInitial    = 100 * time.Millisecond
+	turnBusyRetryMax        = time.Second
 )
 
 var whitespacePattern = regexp.MustCompile(`\s+`)
@@ -189,13 +192,13 @@ type ChannelInboundProcessor struct {
 	mediaService        mediaIngestor
 	reactor             channelReactor
 	commandHandler      CommandHandler
+	queueCommandHandler QueueCommandHandler
 	registry            *channel.Registry
 	logger              *slog.Logger
 	jwtSecret           string
 	tokenTTL            time.Duration
 	identity            *IdentityResolver
 	policy              PolicyService
-	dispatcher          *RouteDispatcher
 	acl                 chatACL
 	observer            channel.StreamObserver
 	speechService       speechSynthesizer
@@ -328,6 +331,14 @@ func (p *ChannelInboundProcessor) SetCommandHandler(handler CommandHandler) {
 	p.commandHandler = handler
 }
 
+// SetQueueCommandHandler configures live queue slash controls.
+func (p *ChannelInboundProcessor) SetQueueCommandHandler(handler QueueCommandHandler) {
+	if p == nil {
+		return
+	}
+	p.queueCommandHandler = handler
+}
+
 func (p *ChannelInboundProcessor) SetRequestedSkillResolver(resolver RequestedSkillResolver) {
 	if p == nil {
 		return
@@ -343,14 +354,6 @@ func (p *ChannelInboundProcessor) SetPipeline(pipeline *timeline.Pipeline, store
 	p.pipeline = pipeline
 	p.eventStore = store
 	p.discussDriver = driver
-}
-
-// SetDispatcher configures the per-route message dispatcher for inject/queue/parallel modes.
-func (p *ChannelInboundProcessor) SetDispatcher(dispatcher *RouteDispatcher) {
-	if p == nil {
-		return
-	}
-	p.dispatcher = dispatcher
 }
 
 // SetIMDisplayOptions configures the reader used to gate IM-facing stream
@@ -487,7 +490,7 @@ func (p *ChannelInboundProcessor) HandleInbound(ctx context.Context, cfg channel
 	isStatusCommand := invocationHasResource(invocation, "status", "context")
 	isToolApprovalCommand := invocationHasResource(invocation, "approve", "reject")
 	isUserInputResponseCommand := invocationHasResource(invocation, "respond")
-	isModeCommand := invocationHasResource(invocation, "now", "next", "btw")
+	isQueueCommand := invocationHasResource(invocation, "queue", "steer")
 	var pendingSkillIntent *slash.SkillIntent
 	switch slashDecision.Kind {
 	case slash.DecisionRejectNoop:
@@ -550,9 +553,7 @@ func (p *ChannelInboundProcessor) HandleInbound(ctx context.Context, cfg channel
 		return p.handleStatusCommand(ctx, cfg, msg, sender, identity, *invocation)
 	}
 
-	// Skip generic command handler for mode-prefix commands (/btw, /now, /next)
-	// so they pass through to mode detection below.
-	if pendingSkillIntent == nil && slashDecision.Kind == slash.DecisionCommandAction && p.commandHandler != nil && !isModeCommand && !isToolApprovalCommand && !isUserInputResponseCommand && invocation != nil && (isDirectedAtBot(msg) || slashDirected) {
+	if pendingSkillIntent == nil && slashDecision.Kind == slash.DecisionCommandAction && p.commandHandler != nil && !isToolApprovalCommand && !isUserInputResponseCommand && !isQueueCommand && invocation != nil && (isDirectedAtBot(msg) || slashDirected) {
 		loc := p.localizer(ctx, identity.BotID)
 		result, err := p.commandHandler.ExecuteResult(ctx, command.ExecuteInput{
 			BotID:             strings.TrimSpace(identity.BotID),
@@ -605,16 +606,6 @@ func (p *ChannelInboundProcessor) HandleInbound(ctx context.Context, cfg channel
 	replyAttachments := mapChannelToChatAttachments(replyAttachmentsFromMessage(msg.Message.Reply))
 	text = strings.TrimSpace(msg.Message.PlainText())
 
-	// Detect inbound mode from message prefix (/btw, /now, /next).
-	// Only applies to non-local channels; WebUI always uses the default flow.
-	// Must run after buildInboundQuery so the prefix is stripped from the final text.
-	inboundMode := ModeInject
-	if !isLocalChannelType(msg.Channel) {
-		if isModeCommand && invocation != nil {
-			text = invocation.CommandText
-		}
-		inboundMode, text = DetectMode(text)
-	}
 	threadID := extractThreadID(msg)
 
 	// Resolve or create the route via channel_routes.
@@ -724,16 +715,14 @@ func (p *ChannelInboundProcessor) HandleInbound(ctx context.Context, cfg channel
 	if isUserInputResponseCommand && invocation != nil && (isDirectedAtBot(msg) || slashDirected) {
 		return p.handleUserInputResponseCommand(ctx, msg, sender, identity, resolved.RouteID, sessionID, *invocation)
 	}
-	// Mode and skill commands remain control-plane messages even while an
-	// ask_user request is pending; they must not become text-question answers.
-	if pendingSkillIntent == nil && !isModeCommand {
+	if isQueueCommand && invocation != nil && (isDirectedAtBot(msg) || slashDirected) {
+		return p.handleQueueCommand(ctx, msg, sender, identity, resolved.RouteID, sessionID, sessionType, *invocation)
+	}
+	// Skill commands remain control-plane messages even while an ask_user
+	// request is pending; they must not become text-question answers.
+	if pendingSkillIntent == nil {
 		if handled, err := p.handlePlainTextUserInput(ctx, cfg, msg, sender, identity, resolved.RouteID, sessionID, text); handled || err != nil {
 			return err
-		}
-	}
-	if pendingSkillIntent != nil && p.dispatcher != nil && !isLocalChannelType(msg.Channel) && inboundMode != ModeParallel {
-		if p.dispatcher.IsActive(strings.TrimSpace(resolved.RouteID)) {
-			return p.sendSlashError(ctx, sender, msg, slash.CodeUnsupportedSkillSlashContext)
 		}
 	}
 
@@ -944,68 +933,6 @@ func (p *ChannelInboundProcessor) HandleInbound(ctx context.Context, cfg channel
 		return nil
 	}
 
-	routeID := strings.TrimSpace(resolved.RouteID)
-
-	// --- Dispatcher-based mode handling (inject / queue) ---
-	// For non-parallel modes, when a route already has an active agent stream,
-	// short-circuit here instead of starting a new stream.
-	if p.dispatcher != nil && !isLocalChannelType(msg.Channel) && inboundMode != ModeParallel {
-		if p.dispatcher.IsActive(routeID) {
-			if pendingSkillIntent != nil {
-				return p.sendSlashError(ctx, sender, msg, slash.CodeUnsupportedSkillSlashContext)
-			}
-			headerifiedText := turn.FormatUserHeader(turn.UserMessageHeaderInput{
-				MessageID:         strings.TrimSpace(msg.Message.ID),
-				ChannelIdentityID: strings.TrimSpace(identity.ChannelIdentityID),
-				DisplayName:       strings.TrimSpace(identity.DisplayName),
-				Channel:           msg.Channel.String(),
-				ConversationType:  strings.TrimSpace(msg.Conversation.Type),
-				ConversationName:  strings.TrimSpace(msg.Conversation.Name),
-				Target:            strings.TrimSpace(msg.ReplyTarget),
-				AttachmentPaths:   collectAttachmentPaths(attachments),
-				Time:              time.Now().UTC(),
-			}, text)
-
-			switch inboundMode {
-			case ModeInject:
-				// Don't persist here — the injected message will be interleaved
-				// at the correct position within the round by
-				// interleaveInjectedMessages in storeRound.
-				injected := p.dispatcher.Inject(routeID, InjectMessage{
-					Text:            text,
-					Attachments:     attachments,
-					HeaderifiedText: headerifiedText,
-				})
-				if injected {
-					p.sendModeConfirmation(ctx, sender, msg, identity, "inject")
-				} else {
-					if p.logger != nil {
-						p.logger.Warn("inject failed (channel full), falling through to new stream",
-							slog.String("route_id", routeID))
-					}
-					goto startStream
-				}
-				return nil
-
-			case ModeQueue:
-				p.persistPassiveMessage(ctx, identity, msg, text, attachments, routeID, sessionID, eventID)
-				p.dispatcher.Enqueue(routeID, QueuedTask{
-					Ctx:         ctx,
-					Cfg:         cfg,
-					Msg:         msg,
-					Sender:      sender,
-					Ident:       identity,
-					Text:        text,
-					Attachments: attachments,
-				})
-				p.sendModeConfirmation(ctx, sender, msg, identity, "queue")
-				return nil
-			}
-		}
-	}
-
-startStream:
-
 	// Issue chat token for reply routing.
 	chatToken := ""
 	if p.jwtSecret != "" && strings.TrimSpace(msg.ReplyTarget) != "" {
@@ -1142,19 +1069,6 @@ startStream:
 		return err
 	}
 
-	// Mark this route as active in the dispatcher so subsequent messages
-	// can be injected or queued. The dispatcher's queue is forwarded into
-	// the run handle after StartTurn. Parallel mode (/now) skips the
-	// dispatcher entirely — it must not interfere with the active flag or
-	// drain the queue of another stream.
-	var injectCh <-chan turn.InjectMessage
-	if p.dispatcher != nil && !isLocalChannelType(msg.Channel) && inboundMode != ModeParallel {
-		injectCh = p.dispatcher.MarkActive(routeID)
-		defer func() {
-			p.drainQueue(context.WithoutCancel(ctx), routeID)
-		}()
-	}
-
 	cmd := turn.StartTurnCommand{
 		SchemaVersion:             1,
 		TeamID:                    cfg.TeamID,
@@ -1215,7 +1129,7 @@ startStream:
 	p.activeStreams.Store(streamKey, streamCancel)
 	defer p.activeStreams.Delete(streamKey)
 
-	handle, startErr := p.turnSvc.StartTurn(streamCtx, cmd)
+	handle, startErr := p.startTurnWithBusyRetry(streamCtx, cmd)
 	if startErr != nil {
 		if errors.Is(startErr, turn.ErrDuplicateTurn) {
 			// Platform webhook redelivery of an already-claimed message:
@@ -1261,6 +1175,14 @@ startStream:
 			}
 			return startErr
 		}
+		if errors.Is(startErr, turn.ErrTurnDeferred) {
+			if statusNotifier != nil {
+				if notifyErr := p.notifyProcessingCompleted(ctx, statusNotifier, cfg, msg, statusInfo, statusHandle); notifyErr != nil {
+					p.logProcessingStatusError("processing_completed", msg, identity, notifyErr)
+				}
+			}
+			return nil
+		}
 		if p.logger != nil {
 			p.logger.Error(
 				"start turn failed",
@@ -1284,37 +1206,6 @@ startStream:
 	// Ordinal bookkeeping plus forwarding of outbound asset refs into the
 	// running turn; the resolver attaches them at persist time.
 	assets := &assetTracker{run: handle}
-
-	// Forward queued inject messages into the running turn.
-	if injectCh != nil {
-		go func() {
-			for {
-				select {
-				case m, ok := <-injectCh:
-					if !ok {
-						return
-					}
-					if injectErr := handle.Inject(streamCtx, m); injectErr != nil {
-						// The message is lost and this forwarder stops; later
-						// queued messages surface via drainQueue at turn end.
-						// Losing this silently would contradict the 👀 receipt
-						// the user already got.
-						if p.logger != nil {
-							p.logger.Warn(
-								"inject into running turn failed, message dropped",
-								slog.String("channel", msg.Channel.String()),
-								slog.String("route_id", routeID),
-								slog.Any("error", injectErr),
-							)
-						}
-						return
-					}
-				case <-streamCtx.Done():
-					return
-				}
-			}
-		}()
-	}
 
 	chunkCh, streamErrCh := handle.Events(), handle.Errs()
 
@@ -1499,6 +1390,63 @@ startStream:
 	return nil
 }
 
+// startTurnWithBusyRetry covers the race where a channel message arrives while
+// an ask_user/tool response is committing and the same session is still busy.
+//
+// Only local channel types (web, cli) park the complete command in the
+// follow-up queue. Their users observe the resulting run through the session
+// runtime subscription, so nobody needs this call's handle. A platform
+// channel delivers the reply by streaming this handle's events back to the
+// platform; a run started later from the queue would have no consumer and its
+// reply would never reach the user, so platform channels keep the bounded
+// retry and surface ErrSessionBusy when it expires.
+func (p *ChannelInboundProcessor) startTurnWithBusyRetry(ctx context.Context, cmd turn.StartTurnCommand) (turn.RunHandle, error) {
+	if p == nil || p.turnSvc == nil {
+		return nil, errors.New("channel inbound processor not configured")
+	}
+	deferrable := !cmd.NoDefer && isLocalChannelType(channel.ChannelType(cmd.CurrentChannel))
+	deadline := time.NewTimer(turnBusyRetryWindow)
+	defer deadline.Stop()
+	delay := turnBusyRetryInitial
+	for {
+		handle, err := p.turnSvc.StartTurn(ctx, cmd)
+		if !errors.Is(err, turn.ErrSessionBusy) {
+			return handle, err
+		}
+		if deferred, ok := p.turnSvc.(turn.DeferredTurnService); ok && deferrable {
+			if queueErr := deferred.EnqueueDeferredTurn(ctx, cmd); queueErr == nil {
+				return nil, turn.ErrTurnDeferred
+			}
+		}
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			stopTimer(timer)
+			return nil, ctx.Err()
+		case <-deadline.C:
+			stopTimer(timer)
+			return nil, err
+		case <-timer.C:
+		}
+		if delay < turnBusyRetryMax {
+			delay *= 2
+			if delay > turnBusyRetryMax {
+				delay = turnBusyRetryMax
+			}
+		}
+	}
+}
+
+func stopTimer(timer *time.Timer) {
+	if timer == nil || timer.Stop() {
+		return
+	}
+	select {
+	case <-timer.C:
+	default:
+	}
+}
+
 func turnIdempotencyKey(channelType channel.ChannelType, routeID, externalMessageID string) string {
 	externalMessageID = strings.TrimSpace(externalMessageID)
 	if externalMessageID == "" {
@@ -1511,31 +1459,72 @@ func turnIdempotencyKey(channelType channel.ChannelType, routeID, externalMessag
 	}, ":")
 }
 
-// sendModeConfirmation sends a lightweight acknowledgement to the user when
-// their message is injected or queued rather than triggering a new stream.
-func (p *ChannelInboundProcessor) sendModeConfirmation(
+func queueCommandIdempotencyKey(channelType channel.ChannelType, routeID, externalMessageID, operation string) string {
+	key := turnIdempotencyKey(channelType, routeID, externalMessageID)
+	if key == "" {
+		return ""
+	}
+	return key + ":queue:" + strings.ToLower(strings.TrimSpace(operation))
+}
+
+func (p *ChannelInboundProcessor) handleQueueCommand(
 	ctx context.Context,
-	_ channel.StreamReplySender,
 	msg channel.InboundMessage,
+	sender channel.StreamReplySender,
 	identity InboundIdentity,
-	mode string,
-) {
-	target := strings.TrimSpace(msg.ReplyTarget)
-	sourceMessageID := strings.TrimSpace(msg.Message.ID)
-	if target == "" || sourceMessageID == "" {
-		return
+	routeID, sessionID, sessionType string,
+	invocation command.Invocation,
+) error {
+	resource := strings.ToLower(strings.TrimSpace(invocation.Parsed.Resource))
+	if p == nil || p.queueCommandHandler == nil {
+		return p.sendSlashError(ctx, sender, msg, QueueCommandCodeUnavailable)
 	}
-	if p.reactor != nil {
-		emoji := "👀"
-		if mode == "queue" {
-			emoji = "📋"
+	if strings.TrimSpace(sessionID) == "" {
+		return p.sendSlashError(ctx, sender, msg, QueueCommandCodeNoActiveRun)
+	}
+	if strings.TrimSpace(sessionType) == sessionpkg.TypeDiscuss {
+		return p.sendSlashError(ctx, sender, msg, QueueCommandCodeUnsupported)
+	}
+	// A follow-up starts a run that the server owns; only local channels see
+	// that run's output through the session runtime subscription. A steer
+	// joins the run this channel is already streaming, so it stays available.
+	if resource == "queue" && !isLocalChannelType(msg.Channel) {
+		return p.sendSlashError(ctx, sender, msg, QueueCommandCodeFollowUpUnsupportedChannel)
+	}
+	invocationID := queueCommandIdempotencyKey(msg.Channel, routeID, msg.Message.ID, resource)
+	input := QueueCommandInput{
+		BotID:        strings.TrimSpace(identity.BotID),
+		SessionID:    strings.TrimSpace(sessionID),
+		InvocationID: invocationID,
+		Text:         strings.TrimSpace(invocation.Rest),
+	}
+	var err error
+	switch resource {
+	case "steer":
+		err = p.queueCommandHandler.EnqueueSteer(ctx, input)
+	case "queue":
+		err = p.queueCommandHandler.EnqueueFollowUp(ctx, input)
+	default:
+		return p.sendSlashError(ctx, sender, msg, QueueCommandCodeInvalid)
+	}
+	if err != nil {
+		code := QueueCommandErrorCode(err)
+		if code == "" {
+			code = QueueCommandCodeUnavailable
+			if p.logger != nil {
+				p.logger.Warn("queue command admission failed",
+					slog.String("bot_id", strings.TrimSpace(identity.BotID)),
+					slog.String("route_id", strings.TrimSpace(routeID)),
+					slog.String("operation", resource),
+					slog.Any("error", err))
+			}
 		}
-		_ = p.reactor.React(ctx, strings.TrimSpace(identity.BotID), msg.Channel, channel.ReactRequest{
-			Target:    target,
-			MessageID: sourceMessageID,
-			Emoji:     emoji,
-		})
+		return p.sendSlashError(ctx, sender, msg, code)
 	}
+	if resource == "steer" {
+		return p.sendSlashNotice(ctx, sender, msg, "queue.steerAccepted")
+	}
+	return p.sendSlashNotice(ctx, sender, msg, "queue.accepted")
 }
 
 func (p *ChannelInboundProcessor) accessDeniedRole(ctx context.Context, identity InboundIdentity) string {
@@ -1554,48 +1543,6 @@ func (p *ChannelInboundProcessor) accessDeniedRole(ctx context.Context, identity
 		return ""
 	}
 	return role
-}
-
-// drainQueue marks the route as done and processes any queued tasks.
-func (p *ChannelInboundProcessor) drainQueue(ctx context.Context, routeID string) {
-	if p.dispatcher == nil {
-		return
-	}
-	result := p.dispatcher.MarkDone(routeID)
-
-	for _, fn := range result.PendingPersists {
-		fn(ctx)
-	}
-
-	for _, task := range result.QueuedTasks {
-		if p.logger != nil {
-			p.logger.Info("processing queued task",
-				slog.String("route_id", routeID),
-				slog.String("query", strings.TrimSpace(task.Text)),
-			)
-		}
-		if err := p.HandleInbound(ctx, task.Cfg, task.Msg, task.Sender); err != nil { //nolint:contextcheck // ctx is already WithoutCancel from the defer caller
-			if p.logger != nil {
-				p.logger.Error("queued task processing failed",
-					slog.String("route_id", routeID),
-					slog.Any("error", err),
-				)
-			}
-		}
-	}
-}
-
-func collectAttachmentPaths(attachments []turn.Attachment) []string {
-	if len(attachments) == 0 {
-		return nil
-	}
-	paths := make([]string, 0, len(attachments))
-	for _, att := range attachments {
-		if p := strings.TrimSpace(att.Path); p != "" {
-			paths = append(paths, p)
-		}
-	}
-	return paths
 }
 
 func shouldTriggerAssistantResponse(msg channel.InboundMessage) bool {
@@ -1628,7 +1575,6 @@ func (p *ChannelInboundProcessor) classifyChannelSlash(text string, msg channel.
 		Surface:        slash.SurfaceChannel,
 		IsGroup:        !channel.IsPrivateConversationType(msg.Conversation.Type),
 		Directed:       isDirectedAtBot(msg),
-		SupportsMode:   !isLocalChannelType(msg.Channel),
 		BotAliases:     channelSlashAliases(msg, identity),
 		KnownCommand: func(resource string) bool {
 			return isChannelControlResource(resource) ||
@@ -1639,7 +1585,7 @@ func (p *ChannelInboundProcessor) classifyChannelSlash(text string, msg channel.
 
 func isChannelControlResource(resource string) bool {
 	switch strings.ToLower(strings.TrimSpace(resource)) {
-	case "start", "new", "stop", "status", "context", "approve", "reject", "respond":
+	case "start", "new", "stop", "status", "context", "approve", "reject", "respond", "queue", "steer":
 		return true
 	default:
 		return false
@@ -1746,6 +1692,17 @@ func (p *ChannelInboundProcessor) sendSlashError(ctx context.Context, sender cha
 	})
 }
 
+func (p *ChannelInboundProcessor) sendSlashNotice(ctx context.Context, sender channel.StreamReplySender, msg channel.InboundMessage, key string) error {
+	out := applyMessageFormat(channel.Message{Text: p.localizer(ctx, msg.BotID).T(key)}, p.channelCaps(msg.Channel))
+	if mid := strings.TrimSpace(msg.Message.ID); mid != "" {
+		out.Reply = &channel.ReplyRef{MessageID: mid}
+	}
+	return sender.Send(ctx, channel.OutboundMessage{
+		Target:  strings.TrimSpace(msg.ReplyTarget),
+		Message: out,
+	})
+}
+
 func slashChannelMessage(t *i18n.Localizer, code string) string {
 	if key := slashChannelMessageKey(code); key != "" {
 		return t.T(key)
@@ -1785,6 +1742,22 @@ func slashChannelMessageKey(code string) string {
 		return "slash.error.permissionDenied"
 	case slash.CodeReservedSkillMetadata:
 		return "slash.error.reservedSkillMetadata"
+	case QueueCommandCodeNoActiveRun:
+		return "queue.noActiveRun"
+	case QueueCommandCodeOverloaded:
+		return "queue.overloaded"
+	case QueueCommandCodeUnavailable:
+		return "queue.unavailable"
+	case QueueCommandCodeConflict:
+		return "queue.conflict"
+	case QueueCommandCodeInvalid:
+		return "queue.invalid"
+	case QueueCommandCodeUnsupported:
+		return "queue.unsupported"
+	case QueueCommandCodeCapacity:
+		return "queue.capacity"
+	case QueueCommandCodeFollowUpUnsupportedChannel:
+		return "queue.followUpUnsupportedChannel"
 	default:
 		return ""
 	}
@@ -3828,31 +3801,26 @@ func splitFirstCommandField(text string) (head, tail string) {
 	return text, ""
 }
 
-func (p *ChannelInboundProcessor) streamToolApprovalCommand(ctx context.Context, msg channel.InboundMessage, sender channel.StreamReplySender, identity InboundIdentity, routeID string, approvalRunner ToolApprovalRunner, input turn.ToolApprovalResponse) error {
-	return p.streamContinuationCommand(ctx, msg, sender, identity, routeID, func(runCtx context.Context, eventCh chan<- json.RawMessage) error {
+func (p *ChannelInboundProcessor) streamToolApprovalCommand(ctx context.Context, msg channel.InboundMessage, sender channel.StreamReplySender, identity InboundIdentity, _ string, approvalRunner ToolApprovalRunner, input turn.ToolApprovalResponse) error {
+	return p.streamContinuationCommand(ctx, msg, sender, identity, func(runCtx context.Context, eventCh chan<- json.RawMessage) error {
 		return approvalRunner.RespondToolApproval(runCtx, input, eventCh)
 	})
 }
 
-func (p *ChannelInboundProcessor) streamUserInputResponseCommand(ctx context.Context, msg channel.InboundMessage, sender channel.StreamReplySender, identity InboundIdentity, routeID string, userInputRunner UserInputRunner, input turn.UserInputResponse) error {
-	return p.streamContinuationCommand(ctx, msg, sender, identity, routeID, func(runCtx context.Context, eventCh chan<- json.RawMessage) error {
+func (p *ChannelInboundProcessor) streamUserInputResponseCommand(ctx context.Context, msg channel.InboundMessage, sender channel.StreamReplySender, identity InboundIdentity, _ string, userInputRunner UserInputRunner, input turn.UserInputResponse) error {
+	return p.streamContinuationCommand(ctx, msg, sender, identity, func(runCtx context.Context, eventCh chan<- json.RawMessage) error {
 		return userInputRunner.RespondUserInput(runCtx, input, eventCh)
 	})
 }
 
 type streamContinuationFunc func(context.Context, chan<- json.RawMessage) error
 
-func (p *ChannelInboundProcessor) streamContinuationCommand(ctx context.Context, msg channel.InboundMessage, sender channel.StreamReplySender, identity InboundIdentity, routeID string, run streamContinuationFunc) error {
+func (p *ChannelInboundProcessor) streamContinuationCommand(ctx context.Context, msg channel.InboundMessage, sender channel.StreamReplySender, identity InboundIdentity, run streamContinuationFunc) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	target := strings.TrimSpace(msg.ReplyTarget)
 	if target == "" {
 		return errors.New("reply target missing")
-	}
-	routeID = strings.TrimSpace(routeID)
-	if routeID != "" && p.dispatcher != nil && !isLocalChannelType(msg.Channel) {
-		p.dispatcher.MarkActive(routeID)
-		defer p.drainQueue(context.WithoutCancel(ctx), routeID)
 	}
 	sourceMessageID := strings.TrimSpace(msg.Message.ID)
 	replyRef := &channel.ReplyRef{Target: target}

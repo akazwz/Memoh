@@ -239,6 +239,11 @@ func (s *Server) mapError(operation string, err error) error {
 		return status.Error(codes.Aborted, "thread busy")
 	case errors.Is(err, turn.ErrDuplicateTurn):
 		return status.Error(codes.AlreadyExists, "duplicate turn")
+	case errors.Is(err, turn.ErrTurnDeferred):
+		// A deferred turn is an accepted admission result, not a failure.
+		// Preserve it across the process boundary so channel adapters can
+		// acknowledge the queued message.
+		return status.Error(codes.ResourceExhausted, turnDeferredStatusMessage)
 	case errors.Is(err, turn.ErrTeamNotServed):
 		return status.Error(codes.PermissionDenied, "team is not served")
 	case errors.Is(err, context.Canceled):

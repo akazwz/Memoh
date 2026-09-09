@@ -3,6 +3,7 @@ package native
 import (
 	"context"
 	"encoding/json"
+	"sync/atomic"
 	"time"
 
 	sdk "github.com/felinics/twilight/sdk"
@@ -177,6 +178,7 @@ type RunConfig struct {
 	providerAttemptState           *providerAttemptState
 	providerMessageProvenance      preparedMessageProvenance
 	preparedStepMessages           *stepMessageCapture
+	initialStepInputs              []sdk.Message
 	contextStepFailure             func(error)
 	SessionType                    string
 	LiveToolStream                 bool
@@ -196,6 +198,22 @@ type RunConfig struct {
 	Skills            []SkillEntry
 	LoopDetection     LoopDetectionConfig
 	Retry             RetryConfig
+	// StepIndexOffset lets an application-owned continuation of the same run
+	// keep durable step indexes monotonic when the SDK invocation is restarted
+	// after a final step accepted a steer item.
+	StepIndexOffset int
+	// ContinueAfterFinal is set by the durable coordinator when a final model
+	// step found steer input. Native runtime uses it to reopen the same run.
+	ContinueAfterFinal *atomic.Bool
+	NextModelInputs    *[]sdk.Message
+
+	// SteerWake announces queue changes; PendingSteer rechecks the authoritative
+	// queue. OnSteer checkpoints a stopped model attempt and claims its next input.
+	// These callbacks retain the run context, unlike the cancelled invocation.
+	SteerWake          <-chan struct{}
+	PendingSteer       func(context.Context) (bool, error)
+	OnSteer            func(context.Context, int, *sdk.StepResult) error
+	SuppressAgentStart bool
 
 	// PromptCacheTTL controls prompt caching for this run. Empty or
 	// unrecognized values default to 5m. Use "1h" for the long-cache tier
@@ -228,7 +246,8 @@ type RunConfig struct {
 
 	// OnStepInterrupted persists text/reasoning emitted by the current model
 	// call when cancellation arrives before finish-step. Tool-call steps never
-	// use this path.
+	// use this path. It retains the original run cancellation cause so the
+	// persistence adapter can reject ownership loss before detaching for IO.
 	OnStepInterrupted func(ctx context.Context, stepIndex int, step *sdk.StepResult) error
 
 	// BackgroundManager provides access to the background task system.

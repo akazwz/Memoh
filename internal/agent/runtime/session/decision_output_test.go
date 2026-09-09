@@ -26,7 +26,7 @@ func TestDecisionOutputConcurrentRetriesAndEarlyAcknowledgement(t *testing.T) {
 				token      = int64(7)
 			)
 			runs := newFakeLedger()
-			runs.insertClaimed(runID, sessionID, token, "live-generation")
+			runs.InsertClaimed(runID, sessionID, token, "live-generation")
 			if _, applied, err := runs.SetWaitingDecision(context.Background(), runID, token); err != nil || !applied {
 				t.Fatalf("park fake ledger run: applied=%v err=%v", applied, err)
 			}

@@ -42,6 +42,7 @@ func ServerLocalModule() fx.Option {
 		fx.Provide(
 			provideCommandHandler,
 			provideLocalCommandHandler,
+			provideLocalQueueCommandHandler,
 			provideLocalSkillResolver,
 			provideLocalChannelAudio,
 			provideLocalChannelSettings,
@@ -58,6 +59,7 @@ func RuntimeModule() fx.Option {
 		fx.Provide(
 			provideLocalMediaService,
 			provideRemoteCommandHandler,
+			provideRemoteQueueCommandHandler,
 			provideRemoteSkillResolver,
 			provideRemoteChannelAudio,
 			provideStandaloneChannelSettings,
@@ -92,6 +94,7 @@ func EmbeddedModule() fx.Option {
 		fx.Provide(
 			provideCommandHandler,
 			provideLocalCommandHandler,
+			provideLocalQueueCommandHandler,
 			provideLocalSkillResolver,
 			provideLocalChannelAudio,
 			provideLocalChannelSettings,
@@ -129,6 +132,10 @@ func provideChannelRuntimeInterface(runtime *channel.LocalRuntime) channel.Runti
 func provideEmailRuntimeInterface(manager *emailpkg.Manager) emailpkg.Runtime { return manager }
 
 func provideRemoteCommandHandler(client *serverruntime.Client) inbound.CommandHandler { return client }
+
+func provideRemoteQueueCommandHandler(client *serverruntime.Client) inbound.QueueCommandHandler {
+	return client
+}
 
 func provideRemoteSkillResolver(client *serverruntime.Client) inbound.RequestedSkillResolver {
 	return client

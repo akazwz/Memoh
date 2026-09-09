@@ -527,6 +527,18 @@
       "generic": "slash 命令执行失败。"
     }
   },
+  "queue": {
+    "steerAccepted": "已加入 steer 队列。",
+    "accepted": "已加入队列。",
+    "noActiveRun": "当前没有可接收此输入的回复。",
+    "overloaded": "队列正忙，请稍后重试。",
+    "unavailable": "队列暂不可用，请稍后重试。",
+    "conflict": "这条消息已用不同内容提交过。",
+    "invalid": "队列输入需要包含文本。",
+    "unsupported": "讨论会话暂不支持队列操作。",
+    "capacity": "该会话的队列已满，请等待待处理项执行后再添加。",
+    "followUpUnsupportedChannel": "该渠道暂不支持排队消息：渠道回复只能随你发送的消息投递。可用 /steer 补充当前回复，或在 Web 端排队。"
+  },
   "menu": {
     "start": "显示欢迎信息",
     "help": "查看可用命令",
@@ -547,6 +559,8 @@
     "skill": "查看技能",
     "fs": "浏览工作区文件",
     "access": "查看身份与权限",
-    "compact": "压缩对话上下文"
+    "compact": "压缩对话上下文",
+    "queue": "加入队列",
+    "steer": "引导当前回复"
   }
 }

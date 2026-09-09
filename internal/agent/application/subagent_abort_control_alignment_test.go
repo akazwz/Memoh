@@ -30,7 +30,7 @@ func (b *terminalLoadFaultBackend) Load(ctx context.Context, key sessionruntime.
 }
 
 func TestSpawnCleanEndRacingAbortControlAlignsAllTerminals(t *testing.T) {
-	runs := &abortAlignmentLedger{}
+	runs := newAbortAlignmentLedger()
 	backend := &terminalLoadFaultBackend{MemoryBackend: sessionruntime.NewMemoryBackend()}
 	manager := sessionruntime.NewManager(backend, sessionruntime.Options{
 		OwnerID:       "clean-end-abort-owner",

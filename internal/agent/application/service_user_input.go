@@ -2,19 +2,16 @@ package application
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"strings"
 
 	sdk "github.com/felinics/twilight/sdk"
 
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
-	"github.com/felinics/memoh/internal/agent/runtime/native"
+	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/bots"
 	sessionpkg "github.com/felinics/memoh/internal/chat/thread"
-	"github.com/felinics/memoh/internal/models"
 	"github.com/felinics/memoh/internal/workspace"
 )
 
@@ -70,6 +67,7 @@ type CommittedUserInputResponse struct {
 	request         userinput.Request
 	input           UserInputResponseInput
 	runID           string
+	runHandle       sessionruntime.RunHandle
 	activePrompt    *externalAgentActivePromptSubscription
 	isExternalAgent bool
 	ackOnly         bool
@@ -201,7 +199,7 @@ func (s *Service) continueCommittedUserInputResponse(
 	if s.continueUserInputFn != nil {
 		return s.continueUserInputFn(ctx, resolved, committed.input, toolResult, eventCh)
 	}
-	return s.storeUserInputResultAndContinue(ctx, resolved, committed.input, toolResult, runID, lifecycle, eventCh)
+	return s.storeUserInputResultAndContinue(ctx, resolved, committed.input, toolResult, runID, committed.runHandle, lifecycle, eventCh)
 }
 
 // isExternalAgentUserInputSession classifies a request by its session's runtime, the
@@ -341,6 +339,7 @@ func (s *Service) storeUserInputResultAndContinue(
 	input UserInputResponseInput,
 	result sdk.ToolResultPart,
 	runID string,
+	runHandle sessionruntime.RunHandle,
 	lifecycle *continuationLifecycleResult,
 	eventCh chan<- WSStreamEvent,
 ) error {
@@ -361,13 +360,17 @@ func (s *Service) storeUserInputResultAndContinue(
 		ReplyTarget:             req.ReplyTarget,
 		ConversationType:        req.ConversationType,
 		UserMessagePersisted:    true,
-		WorkspaceTargetID:       req.WorkspaceTargetID,
-		WorkspaceTarget:         target,
+		// This write contains only the ask_user tool result. There is no new
+		// user history message to extract, so memory work must not attempt to
+		// resolve an empty PersistedUserMessageID.
+		SkipMemoryExtraction: true,
+		WorkspaceTargetID:    req.WorkspaceTargetID,
+		WorkspaceTarget:      target,
 	}
 	if err := s.storeRoundWithOptions(ctx, storeReq, modelMessages, "", storeRoundOptions{AllowPendingToolCalls: true}); err != nil {
 		return err
 	}
-	return s.continueUserInputSession(ctx, req, input, runID, lifecycle, eventCh)
+	return s.continueUserInputSession(ctx, req, input, runID, runHandle, lifecycle, eventCh)
 }
 
 func (s *Service) continueUserInputSession(
@@ -375,6 +378,7 @@ func (s *Service) continueUserInputSession(
 	req userinput.Request,
 	input UserInputResponseInput,
 	runID string,
+	runHandle sessionruntime.RunHandle,
 	runtimeLifecycle *continuationLifecycleResult,
 	eventCh chan<- WSStreamEvent,
 ) error {
@@ -404,26 +408,10 @@ func (s *Service) continueUserInputSession(
 	if err != nil {
 		return err
 	}
-	terminal := s.contextLifecycleTerminal(ctx, cfg)
-	var lifecycleCause error
-	var lifecycleDeferred bool
-	var terminalEventSeen bool
-	defer func() {
-		if runtimeLifecycle != nil {
-			runtimeLifecycle.cause = lifecycleCause
-			runtimeLifecycle.deferred = lifecycleDeferred
-			if snapshot, ok := cfg.ContextLifecycle.Snapshot(); ok {
-				runtimeLifecycle.snapshot = &snapshot
-			}
-			return
-		}
-		if !lifecycleDeferred {
-			terminal(lifecycleCause)
-		}
-	}()
 
 	chatReq := ChatRequest{
 		RunID:                   cfg.RunID,
+		RunHandle:               runHandle,
 		BotID:                   input.BotID,
 		ChatID:                  input.BotID,
 		ThreadID:                req.SessionID,
@@ -432,116 +420,15 @@ func (s *Service) continueUserInputSession(
 		ReplyTarget:             req.ReplyTarget,
 		ConversationType:        req.ConversationType,
 		UserMessagePersisted:    true,
-		WorkspaceTargetID:       req.WorkspaceTargetID,
-		WorkspaceTarget:         workspaceTargetFromRunConfig(resolved.RunConfig),
+		// The user's answer is already represented by the persisted tool
+		// result above; the resumed invocation must not schedule a second
+		// user-message memory extraction with an empty message id.
+		SkipMemoryExtraction: true,
+		WorkspaceTargetID:    req.WorkspaceTargetID,
+		WorkspaceTarget:      workspaceTargetFromRunConfig(resolved.RunConfig),
 	}
 
-	reasoningTiming := newReasoningTimingTracker(nil)
-	configureNativeReasoningTiming(&cfg, reasoningTiming, nil)
-	idleCtx, idleCancel := s.withStreamIdleTimeout(ctx, reasoningEffortForIdle(cfg))
-	defer idleCancel.Stop()
-	stream := s.agent.Stream(idleCtx, cfg)
-	stored := false
-	failureEventForwarded := false
-	var hasVisibleOutput bool
-	for event := range stream {
-		idleCancel.Reset()
-		if event.Type == native.EventToolCallStart {
-			idleCancel.RecordToolCall()
-		}
-		if eventErr := agentStreamLifecycleError(event); eventErr != nil && lifecycleCause == nil {
-			lifecycleCause = eventErr
-		}
-		if event.IsTerminal() {
-			terminalEventSeen = true
-			lifecycleDeferred = pendingContinuationDecision(event)
-			if !lifecycleDeferred {
-				switch event.Type {
-				case native.EventAgentEnd:
-					lifecycleCause = nil
-				case native.EventAgentAbort:
-					if idleCancel.DidFire() {
-						lifecycleCause = context.Cause(idleCtx)
-					} else if context.Cause(ctx) != nil || lifecycleCause == nil {
-						lifecycleCause = agentAbortCause(ctx)
-					}
-				}
-			}
-		}
-		if hasVisibleAgentStreamOutput(event) {
-			hasVisibleOutput = true
-		}
-		if event.Type == native.EventAgentAbort && idleCancel.DidFire() && eventCh != nil {
-			if failureData, marshalErr := json.Marshal(agentFailureStreamEvent(context.Cause(idleCtx))); marshalErr == nil {
-				select {
-				case eventCh <- json.RawMessage(failureData):
-					failureEventForwarded = true
-				case <-ctx.Done():
-					lifecycleCause = context.Cause(ctx)
-					return lifecycleCause
-				}
-			}
-		}
-		data, err := json.Marshal(publicAgentStreamEvent(event))
-		if err != nil {
-			continue
-		}
-		if !stored && event.IsTerminal() && len(event.Messages) > 0 {
-			if snap, ok := extractTerminalSnapshot(data); ok {
-				snap.reasoningTiming = takeTerminalReasoningTiming(reasoningTiming, event.Type)
-				snap.visibleOutput = hasVisibleOutput
-				snap.failureCode = snapshotFailureCode(idleCancel.DidFire(), lifecycleCause)
-				lifecycleDeferred = lifecycleDeferred || snap.deferredToolID != ""
-				if snap.aborted && !lifecycleDeferred && lifecycleCause == nil {
-					lifecycleCause = agentAbortCause(ctx)
-				}
-				if storeErr := s.persistTerminalSnapshot(
-					context.WithoutCancel(ctx),
-					chatReq,
-					resolvedContext{runConfig: cfg, model: models.GetResponse{ID: resolved.ModelID}},
-					snap,
-				); storeErr != nil {
-					lifecycleCause = storeErr
-					lifecycleDeferred = false
-					return storeErr
-				}
-				stored = true
-			}
-		}
-		if eventCh != nil && shouldForwardAfterIdleFailure(event, failureEventForwarded) {
-			select {
-			case eventCh <- json.RawMessage(data):
-			case <-ctx.Done():
-				lifecycleCause = context.Cause(ctx)
-				return lifecycleCause
-			}
-		}
-	}
-	if idleCancel.DidFire() {
-		lifecycleCause = context.Cause(idleCtx)
-		if !stored {
-			if _, storeErr := s.persistTurnFailure(context.WithoutCancel(ctx), chatReq, resolvedContext{runConfig: cfg, model: models.GetResponse{ID: resolved.ModelID}}, snapshotFailureCode(true, lifecycleCause)); storeErr != nil {
-				s.logger.Error("user input timeout persist failed", slog.Any("error", storeErr))
-			}
-		}
-		if eventCh != nil && !failureEventForwarded {
-			if data, marshalErr := json.Marshal(agentFailureStreamEvent(lifecycleCause)); marshalErr == nil {
-				select {
-				case eventCh <- json.RawMessage(data):
-				case <-ctx.Done():
-				}
-			}
-		}
-		return lifecycleCause
-	}
-	if ctx.Err() != nil {
-		lifecycleCause = context.Cause(ctx)
-		return lifecycleCause
-	}
-	if lifecycleCause == nil && !lifecycleDeferred && !terminalEventSeen {
-		lifecycleCause = errors.New("agent continuation ended without a terminal event")
-	}
-	return nil
+	return s.runNativeDecisionContinuation(ctx, chatReq, cfg, resolved.ModelID, runtimeLifecycle, eventCh)
 }
 
 func withLocalWebUserInputReplyTarget(req userinput.Request) userinput.Request {

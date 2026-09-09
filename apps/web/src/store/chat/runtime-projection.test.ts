@@ -111,6 +111,156 @@ describe('runtime projection', () => {
     ])
   })
 
+  it('projects every applied steer as a distinct live user turn', () => {
+    const state = reduceRuntimeProjection(createEmptyRuntimeProjection(), snapshot(runView({
+      user_turns: [
+        {
+          turn_id: 'turn-1',
+          role: 'user',
+          text: 'original',
+          timestamp: '2026-07-27T08:00:00.000Z',
+        },
+        {
+          turn_id: 'turn-steer-1',
+          role: 'user',
+          text: 'first steer',
+          timestamp: '2026-07-27T08:00:01.000Z',
+        },
+        {
+          turn_id: 'turn-steer-2',
+          role: 'user',
+          text: 'second steer',
+          timestamp: '2026-07-27T08:00:02.000Z',
+        },
+      ],
+    })))
+
+    expect(state.transcript.turns.map(turn => [turn.role, turn.turn_id])).toEqual([
+      ['user', 'turn-1'],
+      ['user', 'turn-steer-1'],
+      ['user', 'turn-steer-2'],
+      ['assistant', 'turn-1'],
+    ])
+  })
+
+  it('upserts applied steer turns by durable turn identity', () => {
+    const initial = reduceRuntimeProjection(createEmptyRuntimeProjection(), snapshot())
+    const first = reduceRuntimeProjection(initial, delta(5, {
+      user_turn_upserts: [{
+        turn_id: 'turn-steer-1',
+        role: 'user',
+        text: 'first steer',
+        timestamp: '2026-07-27T08:00:01.000Z',
+      }],
+    }))
+    const replay = reduceRuntimeProjection(first, delta(6, {
+      user_turn_upserts: [{
+        turn_id: 'turn-steer-1',
+        role: 'user',
+        text: 'first steer',
+        timestamp: '2026-07-27T08:00:01.000Z',
+      }],
+    }))
+
+    expect(replay.currentRunView?.user_turns).toHaveLength(2)
+    expect(replay.transcript.turns.filter(turn => turn.role === 'user')).toHaveLength(2)
+  })
+
+  it('projects a claimed steer immediately at its assistant message boundary', () => {
+    const initial = reduceRuntimeProjection(createEmptyRuntimeProjection(), snapshot(runView({
+      messages: [
+        { id: 0, type: 'text', content: 'before' },
+        { id: 1, type: 'tool', name: 'exec', input: {}, tool_call_id: 'call-1', running: false },
+      ],
+    })))
+    const claimed = reduceRuntimeProjection(initial, delta(5, {
+      steer_turn_upserts: [{
+        item_id: 'steer-item-1',
+        status: 'claimed',
+        text: 'change direction',
+        after_message_id: 1,
+        timestamp: '2026-07-27T08:00:01.000Z',
+      }],
+    }))
+
+    expect(claimed.transcript.turns.map(turn => [turn.role, turn.turn_id])).toEqual([
+      ['user', 'turn-1'],
+      ['assistant', 'turn-1'],
+      ['user', 'queue-steer:steer-item-1'],
+      ['assistant', 'queue-steer:steer-item-1:assistant'],
+    ])
+    expect(claimed.transcript.turns[2]).toMatchObject({ text: 'change direction' })
+    expect(claimed.transcript.turns[3]).toMatchObject({ messages: [] })
+  })
+
+  it('replaces a claimed steer with its durable turn without adding another user', () => {
+    const claimed = reduceRuntimeProjection(createEmptyRuntimeProjection(), snapshot(runView({
+      messages: [{ id: 0, type: 'text', content: 'before' }],
+      steer_turns: [{
+        item_id: 'steer-item-1',
+        status: 'claimed',
+        text: 'change direction',
+        after_message_id: 0,
+        timestamp: '2026-07-27T08:00:01.000Z',
+      }],
+    })))
+    const applied = reduceRuntimeProjection(claimed, delta(5, {
+      user_turn_upserts: [{
+        turn_id: 'turn-steer-1',
+        turn_position: 2,
+        role: 'user',
+        text: 'change direction',
+        timestamp: '2026-07-27T08:00:02.000Z',
+      }],
+      steer_turn_upserts: [{
+        item_id: 'steer-item-1',
+        status: 'applied',
+        text: 'change direction',
+        turn_id: 'turn-steer-1',
+        after_message_id: 0,
+        timestamp: '2026-07-27T08:00:02.000Z',
+      }],
+    }))
+
+    const users = applied.transcript.turns.filter(turn => turn.role === 'user')
+    expect(users).toHaveLength(2)
+    expect(users[1]).toMatchObject({ turn_id: 'turn-steer-1', turn_position: 2 })
+    // History files the post-steer assistant output under the steer's turn;
+    // the live segment must carry that identity so the settled page replaces
+    // it instead of rendering a second copy beside it.
+    expect(applied.transcript.turns.map(turn => [turn.role, turn.turn_id])).toEqual([
+      ['user', 'turn-1'],
+      ['assistant', 'turn-1'],
+      ['user', 'turn-steer-1'],
+      ['assistant', 'turn-steer-1'],
+    ])
+  })
+
+  it('drops the empty trailing assistant segment once the run has settled', () => {
+    const state = reduceRuntimeProjection(createEmptyRuntimeProjection(), snapshot(runView({
+      status: 'completed',
+      messages: [{ id: 0, type: 'text', content: 'before' }],
+      user_turns: [
+        { turn_id: 'turn-1', role: 'user', text: 'hello', timestamp: '2026-07-27T08:00:00.000Z' },
+        { turn_id: 'turn-steer-1', turn_position: 2, role: 'user', text: 'change direction', timestamp: '2026-07-27T08:00:02.000Z' },
+      ],
+      steer_turns: [{
+        item_id: 'steer-item-1',
+        status: 'applied',
+        text: 'change direction',
+        turn_id: 'turn-steer-1',
+        after_message_id: 0,
+        timestamp: '2026-07-27T08:00:02.000Z',
+      }],
+    })))
+
+    expect(state.transcript.turns.map(turn => [turn.role, turn.turn_id])).toEqual([
+      ['user', 'turn-1'],
+      ['assistant', 'turn-1'],
+      ['user', 'turn-steer-1'],
+    ])
+  })
+
   it('treats a null message list from an idle runtime snapshot as empty', () => {
     const state = reduceRuntimeProjection(createEmptyRuntimeProjection(), snapshot(runView({
       status: 'completed',

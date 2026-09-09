@@ -1,6 +1,12 @@
 package input
 
-import "testing"
+import (
+	"context"
+	"testing"
+	"time"
+
+	"github.com/jackc/pgx/v5/pgtype"
+)
 
 func interactionTestPayload() UIPayload {
 	return UIPayload{
@@ -102,5 +108,54 @@ func TestApplyInteractionOpSameSelectionTogglesOffWithoutAdvance(t *testing.T) {
 	}
 	if _, ok := state.Answer("q1"); ok {
 		t.Fatalf("re-select must clear: %#v", state)
+	}
+}
+
+func TestServiceAdvanceInteractionDoesNotRequireRuntimeFence(t *testing.T) {
+	t.Parallel()
+
+	queries := newFakeUserInputQueries()
+	svc := NewService(nil, queries)
+	future := time.Now().Add(time.Hour)
+	req := createStorePending(t, svc, &future, "telegram-button")
+	queries.mu.Lock()
+	row := queries.rows[req.ID]
+	row.RuntimeFencingToken = pgtype.Int8{Int64: 42, Valid: true}
+	queries.mu.Unlock()
+
+	result, err := svc.AdvanceInteraction(context.Background(), AdvanceInteractionInput{
+		BotID:     storeTestBotID,
+		RequestID: req.ID,
+		Op:        InteractionOp{Kind: OpSelectOption, QuestionIndex: 0, OptionIndex: 0},
+	})
+	if err != nil {
+		t.Fatalf("advance interaction: %v", err)
+	}
+	if !result.Handled || !result.Changed {
+		t.Fatalf("result = %#v, want handled changed", result)
+	}
+	if answer, ok := result.Request.Interaction.Answer("q1"); !ok || len(answer.OptionIDs) != 1 {
+		t.Fatalf("interaction = %#v, want q1 selection", result.Request.Interaction)
+	}
+}
+
+func TestServiceAdvanceInteractionTreatsExpiredRequestAsUnhandled(t *testing.T) {
+	t.Parallel()
+
+	queries := newFakeUserInputQueries()
+	svc := NewService(nil, queries)
+	expired := time.Now().Add(-time.Minute)
+	req := createStorePending(t, svc, &expired, "telegram-button-expired")
+
+	result, err := svc.AdvanceInteraction(context.Background(), AdvanceInteractionInput{
+		BotID:     storeTestBotID,
+		RequestID: req.ID,
+		Op:        InteractionOp{Kind: OpSelectOption, QuestionIndex: 0, OptionIndex: 0},
+	})
+	if err != nil {
+		t.Fatalf("advance expired interaction: %v", err)
+	}
+	if result.Handled {
+		t.Fatalf("expired result = %#v, want unhandled", result)
 	}
 }

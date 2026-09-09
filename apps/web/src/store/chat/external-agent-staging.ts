@@ -9,6 +9,7 @@ import {
   setACPRuntimeReasoningByID as requestSetACPRuntimeReasoningByID,
 } from '@/composables/api/useChat'
 import { ACP_DEFAULT_PROJECT_MODE, ACP_DEFAULT_PROJECT_PATH } from '@/utils/acp'
+import { botAgentRuntimeForProvider, normalizeBotAgentRuntime, type BotAgentRuntime } from '@/utils/bot-agent'
 import { isApiErrorCode } from '@/utils/api-error'
 import type { ACPRuntimeStatusRegistry } from './acp-runtime-registry'
 import type { ExternalAgentSessionInput } from './types'
@@ -37,6 +38,19 @@ export interface DetachedExternalAgentSession {
   botId: string
 }
 
+// Normalize legacy input objects once before staging or session creation.
+// Internal draft identity must not infer a different runtime from the writer.
+export function normalizedExternalAgentInput(input: ExternalAgentSessionInput): ExternalAgentSessionInput & { runtime: BotAgentRuntime } {
+  return {
+    ...input,
+    runtime: normalizeBotAgentRuntime(input.runtime) || botAgentRuntimeForProvider(input.agentId),
+    botAgentId: input.botAgentId?.trim() || undefined,
+    agentId: input.agentId.trim(),
+    projectPath: input.projectPath?.trim() || ACP_DEFAULT_PROJECT_PATH,
+    projectMode: input.projectMode?.trim() || ACP_DEFAULT_PROJECT_MODE,
+  }
+}
+
 export function externalAgentDraftMetadata(input: ExternalAgentSessionInput): Record<string, unknown> {
   const agentId = input.agentId.trim()
   const projectMode = input.projectMode?.trim() || ACP_DEFAULT_PROJECT_MODE
@@ -58,7 +72,7 @@ export function sameExternalAgentSessionInput(a: ExternalAgentSessionInput, b: E
   const right = externalAgentDraftMetadata(b)
   return left.acp_agent_id === right.acp_agent_id
     && (a.botAgentId?.trim() ?? '') === (b.botAgentId?.trim() ?? '')
-    && (a.runtime || 'acp') === (b.runtime || 'acp')
+    && normalizedExternalAgentInput(a).runtime === normalizedExternalAgentInput(b).runtime
     && (a.sessionMode || 'chat') === (b.sessionMode || 'chat')
     && left.project_path === right.project_path
     && left.acp_project_mode === right.acp_project_mode
@@ -120,7 +134,7 @@ export function createExternalAgentStaging(deps: ExternalAgentStagingDeps) {
   const pendingACPRuntimeEnsuring = computed(() => pendingACPCreating.value)
 
   function cloneExternalAgentInput(input: ExternalAgentSessionInput): ExternalAgentSessionInput {
-    return { ...input }
+    return normalizedExternalAgentInput(input)
   }
 
   function rememberDefaultExternalAgentInput(botId: string, input: ExternalAgentSessionInput | null) {
@@ -145,6 +159,7 @@ export function createExternalAgentStaging(deps: ExternalAgentStagingDeps) {
   }
 
   function pendingExternalAgentIdentityKey(botId: string, input: ExternalAgentSessionInput): string {
+    input = normalizedExternalAgentInput(input)
     return [botId, input.sessionMode ?? 'chat', input.botAgentId ?? '', input.runtime ?? 'acp', input.agentId, input.projectPath ?? '', input.projectMode ?? ''].join('\u0000')
   }
 
@@ -193,7 +208,7 @@ export function createExternalAgentStaging(deps: ExternalAgentStagingDeps) {
 
   function stageExternalAgentSession(input: ExternalAgentSessionInput, options: { explicitSelection?: boolean } = {}) {
     const ownerBotId = (currentBotId.value ?? '').trim()
-    const metadata = externalAgentDraftMetadata(input)
+    input = normalizedExternalAgentInput(input)
     const existing = pendingExternalAgentSessionInput.value
     const samePendingAgent = Boolean(existing
       && pendingExternalAgentBotId.value === ownerBotId
@@ -205,13 +220,7 @@ export function createExternalAgentStaging(deps: ExternalAgentStagingDeps) {
     }
     const previousOwnerBotId = pendingExternalAgentBotId.value
     pendingExternalAgentBotId.value = ownerBotId
-    pendingExternalAgentSessionInput.value = {
-      ...input,
-      botAgentId: input.botAgentId?.trim() || undefined,
-      agentId: String(metadata.acp_agent_id ?? ''),
-      projectPath: String(metadata.project_path ?? ''),
-      projectMode: String(metadata.acp_project_mode ?? ''),
-    }
+    pendingExternalAgentSessionInput.value = input
     if (!samePendingAgent && pendingACPRuntimeId.value) {
       const bid = previousOwnerBotId
       const runtimeId = pendingACPRuntimeId.value

@@ -2,6 +2,7 @@ package application
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"os"
 	"strings"
@@ -15,6 +16,7 @@ import (
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/runtime/session/ledger"
 	"github.com/felinics/memoh/internal/agent/turn"
+	chatview "github.com/felinics/memoh/internal/agent/view"
 	dbpkg "github.com/felinics/memoh/internal/db"
 	"github.com/felinics/memoh/internal/db/dbtest"
 	dbsqlc "github.com/felinics/memoh/internal/db/postgres/sqlc"
@@ -88,7 +90,17 @@ func TestAdmitTurnRunRequestUserTurnReachesSubscriber(t *testing.T) {
 		if event.Snapshot == nil || event.Snapshot.CurrentRunView == nil {
 			t.Fatal("snapshot has no current run, want the admitted run")
 		}
-		request := event.Snapshot.CurrentRunView.RequestUserTurn
+		data, err := json.Marshal(event.Snapshot.CurrentRunView)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var wire struct {
+			RequestUserTurn *chatview.UITurn `json:"request_user_turn"`
+		}
+		if err := json.Unmarshal(data, &wire); err != nil {
+			t.Fatal(err)
+		}
+		request := wire.RequestUserTurn
 		if request == nil {
 			t.Fatal("snapshot request_user_turn is nil — the #1044 regression shape")
 		}

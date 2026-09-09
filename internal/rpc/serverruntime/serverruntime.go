@@ -25,6 +25,8 @@ const (
 	MethodCommandHasResource   = "server.command.has_resource"
 	MethodCommandMemberRole    = "server.command.member_role"
 	MethodCommandResolveLocale = "server.command.resolve_locale"
+	MethodQueueEnqueueSteer    = "server.queue.enqueue_steer"
+	MethodQueueEnqueueFollowUp = "server.queue.enqueue_follow_up"
 	MethodResolveSkills        = "server.skills.resolve"
 	MethodSynthesize           = "server.audio.synthesize"
 	MethodTranscribe           = "server.audio.transcribe"
@@ -76,6 +78,29 @@ func (c *Client) ResolveLocale(ctx context.Context, botID string) string {
 		return "en"
 	}
 	return out
+}
+
+func (c *Client) EnqueueSteer(ctx context.Context, input inbound.QueueCommandInput) error {
+	return c.queueCall(ctx, MethodQueueEnqueueSteer, input)
+}
+
+func (c *Client) EnqueueFollowUp(ctx context.Context, input inbound.QueueCommandInput) error {
+	return c.queueCall(ctx, MethodQueueEnqueueFollowUp, input)
+}
+
+func (c *Client) queueCall(ctx context.Context, method string, input inbound.QueueCommandInput) error {
+	err := c.call(ctx, method, input, nil)
+	if code := queueCommandCode(err); code != "" {
+		return inbound.NewQueueCommandError(code)
+	}
+	return err
+}
+
+func queueCommandCode(err error) string {
+	if err == nil {
+		return ""
+	}
+	return inbound.NormalizeQueueCommandCode(err.Error())
 }
 
 func (c *Client) ResolveTextRequestedSkills(ctx context.Context, botID string, names []string) ([]skills.ResolvedSkill, error) {
@@ -136,7 +161,7 @@ type transcriptionResult struct {
 
 func (r transcriptionResult) GetText() string { return r.Text }
 
-func Handlers(commandHandler *command.Handler, skillHandler *handlers.ContainerdHandler, audioService *audio.Service) map[string]runtimeRpc.Handler {
+func Handlers(commandHandler *command.Handler, queueHandler inbound.QueueCommandHandler, skillHandler *handlers.ContainerdHandler, audioService *audio.Service) map[string]runtimeRpc.Handler {
 	decode := func(raw json.RawMessage, dst any) error { return json.Unmarshal(raw, dst) }
 	return map[string]runtimeRpc.Handler{
 		MethodCommandAccess: func(ctx context.Context, raw json.RawMessage) (any, error) {
@@ -188,6 +213,8 @@ func Handlers(commandHandler *command.Handler, skillHandler *handlers.Containerd
 			}
 			return commandHandler.ResolveLocale(ctx, botID), nil
 		},
+		MethodQueueEnqueueSteer:    queueHandlerFunc(decode, queueHandler.EnqueueSteer),
+		MethodQueueEnqueueFollowUp: queueHandlerFunc(decode, queueHandler.EnqueueFollowUp),
 		MethodResolveSkills: func(ctx context.Context, raw json.RawMessage) (any, error) {
 			var in struct {
 				BotID string
@@ -231,6 +258,20 @@ func Handlers(commandHandler *command.Handler, skillHandler *handlers.Containerd
 	}
 }
 
+func queueHandlerFunc(decode func(json.RawMessage, any) error, handler func(context.Context, inbound.QueueCommandInput) error) runtimeRpc.Handler {
+	return func(ctx context.Context, raw json.RawMessage) (any, error) {
+		var input inbound.QueueCommandInput
+		if err := decode(raw, &input); err != nil {
+			return nil, err
+		}
+		err := handler(ctx, input)
+		if code := inbound.QueueCommandErrorCode(err); code != "" {
+			return nil, runtimeRpc.Public(inbound.NewQueueCommandError(code))
+		}
+		return nil, err
+	}
+}
+
 func transcriptionResultFromSDK(result *sdk.TranscriptionResult) transcriptionResult {
 	if result == nil {
 		return transcriptionResult{}
@@ -240,5 +281,6 @@ func transcriptionResultFromSDK(result *sdk.TranscriptionResult) transcriptionRe
 
 var (
 	_ inbound.CommandHandler         = (*Client)(nil)
+	_ inbound.QueueCommandHandler    = (*Client)(nil)
 	_ inbound.RequestedSkillResolver = (*Client)(nil)
 )

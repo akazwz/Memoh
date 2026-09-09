@@ -22,6 +22,11 @@ import (
 	intrpc "github.com/felinics/memoh/internal/rpc"
 )
 
+const (
+	legacySessionIDKey  = "SessionID"
+	internalThreadIDKey = "ThreadID"
+)
+
 func TestStartTurnRoundTrip(t *testing.T) {
 	fake := &fakeService{}
 	client, cleanup := newTestClient(t, fake, "secret")
@@ -124,6 +129,24 @@ func TestLegacySessionIDJSONWireCompatibility(t *testing.T) {
 			}
 			if threadID != "thread-1" {
 				t.Fatalf("roundtrip ThreadID = %q, want thread-1", threadID)
+			}
+			for _, tc := range []struct {
+				name, data, want string
+				invalid          bool
+			}{
+				{"legacy", `{"SessionID":"legacy"}`, "legacy", false},
+				{"internal", `{"ThreadID":"internal"}`, "internal", false},
+				{"both", `{"SessionID":"same","ThreadID":"same"}`, "", true},
+				{"null-conflict", `{"SessionID":null,"ThreadID":"internal"}`, "", true},
+				{"invalid-id", `{"SessionID":123}`, "", true},
+				{"absent", `{}`, "", false},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					got, err := tt.unmarshal([]byte(tc.data))
+					if (err != nil) != tc.invalid || (!tc.invalid && got != tc.want) {
+						t.Fatalf("decoded %s: id=%q err=%v", tc.data, got, err)
+					}
+				})
 			}
 		})
 	}

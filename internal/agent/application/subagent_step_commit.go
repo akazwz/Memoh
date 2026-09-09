@@ -70,6 +70,7 @@ func (s *Service) SubagentStepCommit(
 	}
 	committer := &subagentStepCommitter{
 		persister:            persister,
+		ownerContext:         ctx,
 		runID:                handle.RunID,
 		botID:                botID,
 		sessionID:            sessionID,
@@ -86,11 +87,12 @@ func (s *Service) SubagentStepCommit(
 // carries no ChatRequest: the subagent path has no resolved chat context, and
 // its user message is persisted by the spawn provider before execution starts.
 type subagentStepCommitter struct {
-	persister messagepkg.AgentStepPersister
-	runID     string
-	botID     string
-	sessionID string
-	modelID   string
+	ownerContext context.Context
+	persister    messagepkg.AgentStepPersister
+	runID        string
+	botID        string
+	sessionID    string
+	modelID      string
 	// turnRequestMessageID binds every step row to the task's persisted user
 	// message, so the whole run files under the turn admission allocated
 	// instead of splitting into history-minted turns.
@@ -114,6 +116,11 @@ func (c *subagentStepCommitter) persist(ctx context.Context, stepIndex int, step
 	if c == nil || step == nil {
 		return errors.New("agent step is missing")
 	}
+	persistCtx, ownershipErr := stepPersistenceContext(ctx, c.ownerContext)
+	if ownershipErr != nil {
+		return ownershipErr
+	}
+	ctx = persistCtx
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if stepIndex != c.nextStep {

@@ -261,15 +261,15 @@ func runRedisLeaseIndexContract(t *testing.T, redisURL string) {
 		reserveRuntimeRun(ctx, t, backend, ref, time.Now().Add(-time.Minute))
 
 		runs := newFakeLedger()
-		runs.insertClaimed(runID, ref.SessionID, ref.FencingToken, generation)
+		runs.InsertClaimed(runID, ref.SessionID, ref.FencingToken, generation)
 		reaper := newTestReaperWithLiveness(t, runs, backend, generation)
 
 		reaper.tick(ctx)
 
-		if got := runs.state(runID); got != "lost" {
+		if got := runs.State(runID); got != "lost" {
 			t.Fatalf("state = %q, want lost", got)
 		}
-		if got := runs.errorCode(runID); got != runErrorOwnerLeaseExpired {
+		if got := runs.ErrorCode(runID); got != runErrorOwnerLeaseExpired {
 			t.Fatalf("error code = %q, want %q", got, runErrorOwnerLeaseExpired)
 		}
 		if _, found := leaseCandidateFor(ctx, t, backend, runID); found {
@@ -319,7 +319,7 @@ func runRedisLeaseIndexContract(t *testing.T, redisURL string) {
 		}
 
 		runs := newFakeLedger()
-		runs.insertClaimed(runID, ref.SessionID, ref.FencingToken, generation)
+		runs.InsertClaimed(runID, ref.SessionID, ref.FencingToken, generation)
 		if _, applied, err := runs.PrepareFinish(ctx, ledger.PrepareFinishParams{
 			RunID: runID, FencingToken: ref.FencingToken, State: ledger.StateCompleted,
 		}); err != nil || !applied {
@@ -331,7 +331,7 @@ func runRedisLeaseIndexContract(t *testing.T, redisURL string) {
 
 		reaper.tick(ctx)
 
-		if got := runs.state(runID); got != ledger.StateCompleted {
+		if got := runs.State(runID); got != ledger.StateCompleted {
 			t.Fatalf("durable state = %q, want completed", got)
 		}
 		snapshot, ok, err := finishingBackend.Load(ctx, key)

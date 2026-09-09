@@ -58,7 +58,7 @@ func TestFinishRunWithErrorCodePersistsStableCodeWithoutDiagnostic(t *testing.T)
 		t.Fatal(err)
 	}
 
-	writes := fixture.runs.terminalWrites()
+	writes := fixture.runs.TerminalWrites()
 	if len(writes) != 1 {
 		t.Fatalf("terminal writes = %d, want 1", len(writes))
 	}
@@ -77,12 +77,12 @@ func TestFinishRunRetriesTransientDurableFailuresWhileRetainingOwnership(t *test
 			}
 			transient := errors.New("database temporarily unavailable")
 			if phase == "prepare" {
-				fixture.runs.setPrepareErr(transient)
+				fixture.runs.SetPrepareErr(transient)
 			} else {
 				if _, err := fixture.manager.HandleAgentEvent(context.Background(), admission.Handle, native.StreamEvent{Type: native.EventAgentEnd}); err != nil {
 					t.Fatalf("prepare terminal event: %v", err)
 				}
-				fixture.runs.setFinalizeErr(transient)
+				fixture.runs.SetFinalizeErr(transient)
 			}
 
 			err = fixture.manager.FinishRun(context.Background(), admission.Handle, RunStatusCompleted, "")
@@ -92,8 +92,8 @@ func TestFinishRunRetriesTransientDurableFailuresWhileRetainingOwnership(t *test
 			if fixture.manager.localControlForHandle(admission.Handle) == nil {
 				t.Fatal("owner control was dropped before durable retry could converge")
 			}
-			fixture.runs.setPrepareErr(nil)
-			fixture.runs.setFinalizeErr(nil)
+			fixture.runs.SetPrepareErr(nil)
+			fixture.runs.SetFinalizeErr(nil)
 
 			deadline := time.Now().Add(2 * time.Second)
 			for time.Now().Before(deadline) {
@@ -121,7 +121,7 @@ func TestFinishRunStopsDurableRetryAfterBudget(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	fixture.runs.setPrepareErr(errors.New("database remains unavailable"))
+	fixture.runs.SetPrepareErr(errors.New("database remains unavailable"))
 
 	if err := fixture.manager.FinishRun(context.Background(), admission.Handle, RunStatusCompleted, ""); err == nil {
 		t.Fatal("FinishRun() error = nil, want initial durable failure")
@@ -129,7 +129,7 @@ func TestFinishRunStopsDurableRetryAfterBudget(t *testing.T) {
 	deadline := time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {
 		if fixture.manager.localControlForHandle(admission.Handle) == nil {
-			if got := fixture.runs.state(admission.RunID); got != ledger.StateRunning {
+			if got := fixture.runs.State(admission.RunID); got != ledger.StateRunning {
 				t.Fatalf("ledger state after unprepared retry timeout = %q, want running for reaper", got)
 			}
 			return
@@ -172,12 +172,12 @@ func TestMemoryRuntimeReaperConvergesExhaustedDurableFinish(t *testing.T) {
 
 			transient := errors.New("database remains unavailable")
 			if phase == "prepare" {
-				runs.setPrepareErr(transient)
+				runs.SetPrepareErr(transient)
 			} else {
 				if _, err := manager.HandleAgentEvent(context.Background(), admission.Handle, native.StreamEvent{Type: native.EventAgentEnd}); err != nil {
 					t.Fatalf("prepare terminal event: %v", err)
 				}
-				runs.setFinalizeErr(transient)
+				runs.SetFinalizeErr(transient)
 			}
 			if err := manager.FinishRun(context.Background(), admission.Handle, RunStatusCompleted, ""); err == nil {
 				t.Fatal("FinishRun() error = nil, want initial durable failure")
@@ -190,7 +190,7 @@ func TestMemoryRuntimeReaperConvergesExhaustedDurableFinish(t *testing.T) {
 			if manager.localControlForHandle(admission.Handle) != nil {
 				t.Fatal("owner control remains after retry budget")
 			}
-			runs.setFinalizeErr(nil)
+			runs.SetFinalizeErr(nil)
 
 			want := ledger.StateLost
 			if phase == "finalize" {
@@ -199,13 +199,13 @@ func TestMemoryRuntimeReaperConvergesExhaustedDurableFinish(t *testing.T) {
 			deadline := time.Now().Add(time.Second)
 			for time.Now().Before(deadline) {
 				snapshot, snapshotErr := manager.Snapshot(context.Background(), testBotID, "session-memory-handoff-"+phase)
-				if runs.state(admission.RunID) == want && snapshotErr == nil && snapshot.CurrentRunView != nil &&
+				if runs.State(admission.RunID) == want && snapshotErr == nil && snapshot.CurrentRunView != nil &&
 					snapshot.CurrentRunView.Status == liveRunStatus(want) {
 					return
 				}
 				time.Sleep(5 * time.Millisecond)
 			}
-			t.Fatalf("memory reaper state = %q, want %q", runs.state(admission.RunID), want)
+			t.Fatalf("memory reaper state = %q, want %q", runs.State(admission.RunID), want)
 		})
 	}
 }
@@ -226,7 +226,7 @@ func TestFinishRunRejectsOwnerProposedLostWithoutRetry(t *testing.T) {
 	if fixture.manager.localControlForHandle(admission.Handle) == nil {
 		t.Fatal("invalid owner terminal state scheduled a retry that dropped control")
 	}
-	if got := fixture.runs.state(admission.RunID); got != ledger.StateRunning {
+	if got := fixture.runs.State(admission.RunID); got != ledger.StateRunning {
 		t.Fatalf("ledger state = %q, want running after rejected owner proposal", got)
 	}
 }
@@ -238,7 +238,7 @@ func TestAgentTerminalProposalFailureDefersOutcomeToFinish(t *testing.T) {
 		t.Fatal(err)
 	}
 	transient := errors.New("proposal write temporarily unavailable")
-	fixture.runs.setPrepareErr(transient)
+	fixture.runs.SetPrepareErr(transient)
 
 	if _, err := fixture.manager.HandleAgentEvent(context.Background(), admission.Handle, native.StreamEvent{Type: native.EventAgentEnd}); err != nil {
 		t.Fatalf("HandleAgentEvent() error = %v, want terminal publication to continue", err)
@@ -250,15 +250,15 @@ func TestAgentTerminalProposalFailureDefersOutcomeToFinish(t *testing.T) {
 	if snapshot.CurrentRunView == nil || snapshot.CurrentRunView.Status != RunStatusRunning {
 		t.Fatalf("live run after degraded proposal = %#v, want running", snapshot.CurrentRunView)
 	}
-	if got := fixture.runs.state(admission.RunID); got != ledger.StateRunning {
+	if got := fixture.runs.State(admission.RunID); got != ledger.StateRunning {
 		t.Fatalf("ledger after degraded proposal = %q, want running", got)
 	}
 
-	fixture.runs.setPrepareErr(nil)
+	fixture.runs.SetPrepareErr(nil)
 	if err := fixture.manager.FinishRun(context.Background(), admission.Handle, RunStatusCompleted, ""); err != nil {
 		t.Fatalf("FinishRun() after recovery: %v", err)
 	}
-	if got := fixture.runs.state(admission.RunID); got != ledger.StateCompleted {
+	if got := fixture.runs.State(admission.RunID); got != ledger.StateCompleted {
 		t.Fatalf("final ledger state = %q, want completed", got)
 	}
 }
@@ -282,7 +282,7 @@ func TestUnnamedFinishCarriesProjectedStableErrorCodeToLedger(t *testing.T) {
 	if err := fixture.manager.FinishRun(context.Background(), admission.Handle, "", ""); err != nil {
 		t.Fatal(err)
 	}
-	writes := fixture.runs.terminalWrites()
+	writes := fixture.runs.TerminalWrites()
 	if len(writes) != 1 || writes[0].ErrorCode != "agent.response_interrupted" || writes[0].ErrorMessage != "" {
 		t.Fatalf("terminal writes = %#v", writes)
 	}
@@ -313,6 +313,53 @@ func TestFinishRunReplaysAlreadyTerminalLedgerOutcome(t *testing.T) {
 	}
 }
 
+func TestAgentTerminalEventReplaysMatchingTerminalLedgerOutcome(t *testing.T) {
+	t.Parallel()
+	fixture := newAdmitFixture(t)
+	admission, err := fixture.manager.Admit(context.Background(), fixture.input("inv-terminal-event-replay", `{"text":"hi"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, applied, err := fixture.runs.Finalize(context.Background(), ledger.FinalizeParams{
+		RunID: admission.RunID, FencingToken: admission.Handle.FencingToken, State: ledger.StateCompleted,
+	}); err != nil || !applied {
+		t.Fatalf("seed terminal = applied:%v err:%v", applied, err)
+	}
+
+	if _, err := fixture.manager.HandleAgentEvent(context.Background(), admission.Handle, native.StreamEvent{Type: native.EventAgentEnd}); err != nil {
+		t.Fatalf("HandleAgentEvent() = %v, want matching terminal replay", err)
+	}
+	snapshot, err := fixture.manager.Snapshot(context.Background(), testBotID, testSessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.CurrentRunView == nil || snapshot.CurrentRunView.Status != RunStatusFinishing || snapshot.CurrentRunView.ProposedTerminalStatus != RunStatusCompleted {
+		t.Fatalf("live run after terminal replay = %#v, want finishing/completed", snapshot.CurrentRunView)
+	}
+	if err := fixture.manager.FinishRun(context.Background(), admission.Handle, RunStatusCompleted, ""); err != nil {
+		t.Fatalf("FinishRun() after terminal replay = %v", err)
+	}
+}
+
+func TestAgentTerminalEventRejectsMismatchedTerminalLedgerOutcome(t *testing.T) {
+	t.Parallel()
+	fixture := newAdmitFixture(t)
+	admission, err := fixture.manager.Admit(context.Background(), fixture.input("inv-terminal-event-mismatch", `{"text":"hi"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, applied, err := fixture.runs.Finalize(context.Background(), ledger.FinalizeParams{
+		RunID: admission.RunID, FencingToken: admission.Handle.FencingToken, State: ledger.StateAborted,
+	}); err != nil || !applied {
+		t.Fatalf("seed terminal = applied:%v err:%v", applied, err)
+	}
+
+	_, err = fixture.manager.HandleAgentEvent(context.Background(), admission.Handle, native.StreamEvent{Type: native.EventAgentEnd})
+	if !errors.Is(err, ErrRunOwnershipLost) {
+		t.Fatalf("HandleAgentEvent() = %v, want ErrRunOwnershipLost", err)
+	}
+}
+
 func TestFinishRunObservesTerminalNewerFenceButRejectsStaleOwner(t *testing.T) {
 	t.Parallel()
 	fixture := newAdmitFixture(t)
@@ -335,12 +382,12 @@ func TestFinishRunObservesTerminalNewerFenceButRejectsStaleOwner(t *testing.T) {
 	ctrl.leaseStop = stopLease
 	ctrl.leaseDone = leaseDone
 	ctrl.leaseLifecycleMu.Unlock()
-	fixture.runs.mu.Lock()
-	run := fixture.runs.runs[admission.RunID]
+	fixture.runs.Mu.Lock()
+	run := fixture.runs.Runs[admission.RunID]
 	run.FencingToken++
 	run.State = ledger.StateAborted
 	newToken := run.FencingToken
-	fixture.runs.mu.Unlock()
+	fixture.runs.Mu.Unlock()
 	var observed []TerminalRun
 	fixture.manager.SetTerminalObserver(func(_ context.Context, run TerminalRun) {
 		observed = append(observed, run)
@@ -387,7 +434,7 @@ func TestFinishRunDoesNotObserveWaitingDecision(t *testing.T) {
 	if len(observed) != 0 {
 		t.Fatalf("waiting decision emitted terminal observations: %+v", observed)
 	}
-	if got := fixture.runs.state(admission.RunID); got != ledger.StateWaitingDecision {
+	if got := fixture.runs.State(admission.RunID); got != ledger.StateWaitingDecision {
 		t.Fatalf("ledger state = %q, want waiting_decision", got)
 	}
 }

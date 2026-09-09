@@ -3,7 +3,6 @@ package sessionruntime
 import (
 	"context"
 	"errors"
-	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -11,369 +10,12 @@ import (
 
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	"github.com/felinics/memoh/internal/agent/runtime/session/ledger"
+	"github.com/felinics/memoh/internal/testutil/sessionledger"
 )
 
-// fakeLedger is an in-memory ledger with the same guarantees the PostgreSQL
-// adapter provides: one active run per session, fenced idempotent transitions,
-// and a monotonic token sequence. It exists so admission ordering can be tested
-// without a database; the adapter's own SQL is covered by its integration test.
-type fakeLedger struct {
-	mu   sync.Mutex
-	runs map[string]*ledger.Run
-	// bySession preserves insertion order so ActiveRun is deterministic.
-	order []string
-	token int64
+type fakeLedger = sessionledger.Store
 
-	admitErr    error
-	claimErr    error
-	tokenErr    error
-	prepareErr  error
-	finalizeErr error
-	claimHook   func(runID string)
-
-	admits    int
-	claims    int
-	finalized []ledger.FinalizeParams
-}
-
-func newFakeLedger() *fakeLedger {
-	return &fakeLedger{runs: map[string]*ledger.Run{}}
-}
-
-func (f *fakeLedger) Admit(_ context.Context, params ledger.AdmitParams) (ledger.Run, bool, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.admits++
-	if f.admitErr != nil {
-		return ledger.Run{}, false, f.admitErr
-	}
-	for _, id := range f.order {
-		run := f.runs[id]
-		if run.SessionID != params.SessionID {
-			continue
-		}
-		if run.InvocationID == params.InvocationID {
-			return *run, false, nil
-		}
-		if run.State.Active() {
-			return ledger.Run{}, false, ledger.ErrSessionBusy
-		}
-	}
-	position := int64(1)
-	for _, id := range f.order {
-		if f.runs[id].SessionID == params.SessionID {
-			position++
-		}
-	}
-	run := &ledger.Run{
-		RunID:            params.RunID,
-		BotID:            params.BotID,
-		SessionID:        params.SessionID,
-		InvocationID:     params.InvocationID,
-		TurnID:           params.TurnID,
-		TurnPosition:     position,
-		State:            ledger.StateAccepted,
-		Input:            params.Input,
-		InputFingerprint: params.InputFingerprint,
-		CreatedAt:        time.Now(),
-	}
-	f.runs[run.RunID] = run
-	f.order = append(f.order, run.RunID)
-	return *run, true, nil
-}
-
-func (f *fakeLedger) Get(_ context.Context, runID string) (ledger.Run, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	run, ok := f.runs[runID]
-	if !ok {
-		return ledger.Run{}, ledger.ErrRunNotFound
-	}
-	return *run, nil
-}
-
-func (f *fakeLedger) GetByInvocation(_ context.Context, sessionID, invocationID string) (ledger.Run, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	for _, id := range f.order {
-		if run := f.runs[id]; run.SessionID == sessionID && run.InvocationID == invocationID {
-			return *run, nil
-		}
-	}
-	return ledger.Run{}, ledger.ErrRunNotFound
-}
-
-func (f *fakeLedger) ActiveRun(_ context.Context, sessionID string) (ledger.Run, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	for _, id := range f.order {
-		if run := f.runs[id]; run.SessionID == sessionID && run.State.Active() {
-			return *run, nil
-		}
-	}
-	return ledger.Run{}, ledger.ErrRunNotFound
-}
-
-func (f *fakeLedger) LatestRun(_ context.Context, sessionID string) (ledger.Run, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	for i := len(f.order) - 1; i >= 0; i-- {
-		if run := f.runs[f.order[i]]; run.SessionID == sessionID {
-			return *run, nil
-		}
-	}
-	return ledger.Run{}, ledger.ErrRunNotFound
-}
-
-func (f *fakeLedger) NextFencingToken(context.Context) (int64, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.tokenErr != nil {
-		return 0, f.tokenErr
-	}
-	f.token++
-	return f.token, nil
-}
-
-func (f *fakeLedger) Claim(_ context.Context, params ledger.ClaimParams) (ledger.Run, bool, error) {
-	if f.claimHook != nil {
-		f.claimHook(params.RunID)
-	}
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.claims++
-	if f.claimErr != nil {
-		return ledger.Run{}, false, f.claimErr
-	}
-	run, ok := f.runs[params.RunID]
-	if !ok {
-		return ledger.Run{}, false, ledger.ErrRunNotFound
-	}
-	if run.State != ledger.StateAccepted || run.FencingToken >= params.FencingToken {
-		return ledger.Run{}, false, nil
-	}
-	run.State = ledger.StateRunning
-	run.OwnerID = params.OwnerID
-	run.FencingToken = params.FencingToken
-	run.LiveGeneration = params.LiveGeneration
-	run.OwnerSince = time.Now()
-	return *run, true, nil
-}
-
-func (f *fakeLedger) SetWaitingDecision(_ context.Context, runID string, token int64) (ledger.Run, bool, error) {
-	return f.transition(runID, token, ledger.StateWaitingDecision)
-}
-
-func (f *fakeLedger) Resume(_ context.Context, runID string, token int64) (ledger.Run, bool, error) {
-	return f.transition(runID, token, ledger.StateRunning)
-}
-
-func (f *fakeLedger) transition(runID string, token int64, state ledger.State) (ledger.Run, bool, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	run, ok := f.runs[runID]
-	if !ok || run.FencingToken != token || run.State.Terminal() || run.State == ledger.StateFinishing {
-		return ledger.Run{}, false, nil
-	}
-	run.State = state
-	return *run, true, nil
-}
-
-func (f *fakeLedger) PrepareFinish(_ context.Context, params ledger.PrepareFinishParams) (ledger.Run, bool, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.prepareErr != nil {
-		return ledger.Run{}, false, f.prepareErr
-	}
-	run, ok := f.runs[params.RunID]
-	if !ok || run.FencingToken != params.FencingToken || run.State.Terminal() ||
-		(run.State == ledger.StateWaitingDecision && !params.AllowWaitingDecision) {
-		return ledger.Run{}, false, nil
-	}
-	if run.State != ledger.StateFinishing {
-		run.State = ledger.StateFinishing
-		run.ProposedState = params.State
-		run.ProposedErrorCode = params.ErrorCode
-		run.ProposedErrorMessage = params.ErrorMessage
-		run.FinishProposedAt = time.Now()
-	}
-	return *run, true, nil
-}
-
-func (f *fakeLedger) Finalize(_ context.Context, params ledger.FinalizeParams) (ledger.Run, bool, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.finalizeErr != nil {
-		return ledger.Run{}, false, f.finalizeErr
-	}
-	run, ok := f.runs[params.RunID]
-	if !ok || run.FencingToken != params.FencingToken || run.State.Terminal() {
-		return ledger.Run{}, false, nil
-	}
-	state := params.State
-	errorCode := params.ErrorCode
-	errorMessage := params.ErrorMessage
-	if run.State == ledger.StateFinishing {
-		state = run.ProposedState
-		errorCode = run.ProposedErrorCode
-		errorMessage = run.ProposedErrorMessage
-	} else if state == ledger.StateLost && !run.AbortRequestedAt.IsZero() {
-		state = ledger.StateAborted
-		errorCode = ""
-		errorMessage = ""
-	}
-	run.State = state
-	run.ErrorCode = errorCode
-	run.ErrorMessage = errorMessage
-	f.finalized = append(f.finalized, params)
-	return *run, true, nil
-}
-
-func (f *fakeLedger) RequestAbort(_ context.Context, runID string) (ledger.Run, bool, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	run, ok := f.runs[runID]
-	if !ok || run.State.Terminal() || run.State == ledger.StateFinishing {
-		return ledger.Run{}, false, nil
-	}
-	run.AbortRequestedAt = time.Now()
-	return *run, true, nil
-}
-
-// StaleGenerationRuns mirrors the adapter's keyset sweep: active rows that were
-// claimed by an incarnation other than the current one, ordered so a cursor can
-// page through them.
-func (f *fakeLedger) StaleGenerationRuns(_ context.Context, query ledger.StaleGenerationQuery) ([]ledger.Run, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	var matched []ledger.Run
-	for _, id := range f.order {
-		run := *f.runs[id]
-		if !run.State.Active() || run.LiveGeneration == "" || run.LiveGeneration == query.CurrentGeneration {
-			continue
-		}
-		if run.LiveGeneration < query.After.LiveGeneration ||
-			(run.LiveGeneration == query.After.LiveGeneration && run.RunID <= query.After.RunID) {
-			continue
-		}
-		matched = append(matched, run)
-	}
-	sort.Slice(matched, func(i, j int) bool {
-		if matched[i].LiveGeneration != matched[j].LiveGeneration {
-			return matched[i].LiveGeneration < matched[j].LiveGeneration
-		}
-		return matched[i].RunID < matched[j].RunID
-	})
-	if query.Limit > 0 && len(matched) > int(query.Limit) {
-		matched = matched[:query.Limit]
-	}
-	return matched, nil
-}
-
-func (f *fakeLedger) OrphanedRuns(_ context.Context, query ledger.OrphanQuery) ([]ledger.Run, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	cutoff := time.Now().Add(-query.MinAge)
-	var matched []ledger.Run
-	for _, id := range f.order {
-		run := *f.runs[id]
-		if run.State != ledger.StateAccepted || run.OwnerID != "" || !run.CreatedAt.Before(cutoff) {
-			continue
-		}
-		matched = append(matched, run)
-	}
-	if query.Limit > 0 && len(matched) > int(query.Limit) {
-		matched = matched[:query.Limit]
-	}
-	return matched, nil
-}
-
-// insertOrphan records an admission that committed under a process that died
-// before it could claim anything.
-func (f *fakeLedger) insertOrphan(runID, sessionID, invocationID, fingerprint string) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	run := &ledger.Run{
-		RunID:            runID,
-		BotID:            testBotID,
-		SessionID:        sessionID,
-		InvocationID:     invocationID,
-		TurnID:           runID + "-turn",
-		TurnPosition:     1,
-		State:            ledger.StateAccepted,
-		InputFingerprint: fingerprint,
-		CreatedAt:        time.Now().Add(-time.Hour),
-	}
-	f.runs[run.RunID] = run
-	f.order = append(f.order, run.RunID)
-}
-
-// insertClaimed records a run that some owner took and never finished, which is
-// what the reaper finds after that owner disappears.
-func (f *fakeLedger) insertClaimed(runID, sessionID string, token int64, generation string) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	run := &ledger.Run{
-		RunID:          runID,
-		BotID:          testBotID,
-		SessionID:      sessionID,
-		InvocationID:   runID + "-inv",
-		TurnID:         runID + "-turn",
-		TurnPosition:   1,
-		State:          ledger.StateRunning,
-		OwnerID:        "owner-gone",
-		FencingToken:   token,
-		LiveGeneration: generation,
-		OwnerSince:     time.Now().Add(-time.Minute),
-		CreatedAt:      time.Now().Add(-time.Minute),
-	}
-	f.runs[run.RunID] = run
-	f.order = append(f.order, run.RunID)
-}
-
-func (f *fakeLedger) state(runID string) ledger.State {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	run, ok := f.runs[runID]
-	if !ok {
-		return ""
-	}
-	return run.State
-}
-
-func (f *fakeLedger) errorCode(runID string) string {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	run, ok := f.runs[runID]
-	if !ok {
-		return ""
-	}
-	return run.ErrorCode
-}
-
-func (f *fakeLedger) setFinalizeErr(err error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.finalizeErr = err
-}
-
-func (f *fakeLedger) setPrepareErr(err error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.prepareErr = err
-}
-
-func (f *fakeLedger) counts() (admits, claims int) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.admits, f.claims
-}
-
-func (f *fakeLedger) terminalWrites() []ledger.FinalizeParams {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return append([]ledger.FinalizeParams(nil), f.finalized...)
-}
+func newFakeLedger() *fakeLedger { return sessionledger.New() }
 
 type recordedActivation struct {
 	botID     string
@@ -602,7 +244,7 @@ func TestAdmitDuplicateInvocationDoesNotExecuteTwice(t *testing.T) {
 	if *f.executions != 1 {
 		t.Fatalf("executions = %d, want 1", *f.executions)
 	}
-	if _, claims := f.runs.counts(); claims != 1 {
+	if _, claims := f.runs.Counts(); claims != 1 {
 		t.Fatalf("claims = %d, want 1", claims)
 	}
 }
@@ -667,10 +309,10 @@ func TestAdmitLostClaimReportsStateWithoutStarting(t *testing.T) {
 	t.Parallel()
 	f := newAdmitFixture(t)
 	// Simulate the peer winning between this call's admission and its claim.
-	f.runs.claimHook = func(runID string) {
-		f.runs.mu.Lock()
-		defer f.runs.mu.Unlock()
-		if run, ok := f.runs.runs[runID]; ok && run.State == ledger.StateAccepted {
+	f.runs.ClaimHook = func(runID string) {
+		f.runs.Mu.Lock()
+		defer f.runs.Mu.Unlock()
+		if run, ok := f.runs.Runs[runID]; ok && run.State == ledger.StateAccepted {
 			run.State = ledger.StateRunning
 			run.OwnerID = "peer"
 			run.FencingToken = 99
@@ -710,7 +352,7 @@ func TestAdmitReleasesClaimWhenFenceActivationFails(t *testing.T) {
 	if *f.executions != 0 {
 		t.Fatalf("executions = %d, want 0", *f.executions)
 	}
-	writes := f.runs.terminalWrites()
+	writes := f.runs.TerminalWrites()
 	if len(writes) != 1 {
 		t.Fatalf("terminal writes = %d, want 1", len(writes))
 	}
@@ -737,7 +379,7 @@ func TestAdmitReleasesClaimWhenExecutionCannotStart(t *testing.T) {
 	if _, err := f.manager.Admit(context.Background(), in); err == nil {
 		t.Fatal("admit should fail when the run cannot start")
 	}
-	writes := f.runs.terminalWrites()
+	writes := f.runs.TerminalWrites()
 	if len(writes) != 1 || writes[0].State != ledger.StateFailed {
 		t.Fatalf("terminal writes = %+v, want one failed write", writes)
 	}
@@ -753,7 +395,7 @@ func TestAdmitAdoptsOwnerlessAdmission(t *testing.T) {
 	t.Parallel()
 	f := newAdmitFixture(t)
 	in := f.input("inv-orphan", `{"text":"a"}`)
-	f.runs.insertOrphan("run-orphan", testSessionID, "inv-orphan", fingerprintPayload(in.Payload))
+	f.runs.InsertOrphan("run-orphan", testSessionID, "inv-orphan", fingerprintPayload(in.Payload))
 
 	admission, err := f.manager.Admit(context.Background(), in)
 	if err != nil {
@@ -805,7 +447,7 @@ func TestAdmitRequiresExecutionBuilder(t *testing.T) {
 	if err == nil {
 		t.Fatal("admit without an execution builder should fail")
 	}
-	if admits, _ := f.runs.counts(); admits != 0 {
+	if admits, _ := f.runs.Counts(); admits != 0 {
 		t.Fatalf("admits = %d, want 0; validation must precede persistence", admits)
 	}
 }
@@ -832,7 +474,7 @@ func TestAdmittedRunParksAndResumesOnUserInputDecision(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("publish user input request: %v", err)
 	}
-	if got := fixture.runs.state(admission.RunID); got != ledger.StateWaitingDecision {
+	if got := fixture.runs.State(admission.RunID); got != ledger.StateWaitingDecision {
 		t.Fatalf("ledger state = %q, want waiting_decision", got)
 	}
 
@@ -859,7 +501,7 @@ func TestAdmittedRunParksAndResumesOnUserInputDecision(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("resume decision run: %v", err)
 	}
-	if got := fixture.runs.state(admission.RunID); got != ledger.StateRunning {
+	if got := fixture.runs.State(admission.RunID); got != ledger.StateRunning {
 		t.Fatalf("ledger state after resume = %q, want running", got)
 	}
 	if _, err := fixture.manager.HandleAgentEvent(context.Background(), handle, native.StreamEvent{
@@ -870,7 +512,7 @@ func TestAdmittedRunParksAndResumesOnUserInputDecision(t *testing.T) {
 	if err := fixture.manager.FinishRun(context.Background(), handle, "", ""); err != nil {
 		t.Fatalf("finish resumed run: %v", err)
 	}
-	if got := fixture.runs.state(admission.RunID); got != ledger.StateCompleted {
+	if got := fixture.runs.State(admission.RunID); got != ledger.StateCompleted {
 		t.Fatalf("ledger state after completion = %q, want completed", got)
 	}
 }

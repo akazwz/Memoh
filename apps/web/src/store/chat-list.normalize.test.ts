@@ -115,6 +115,14 @@ describe('sortChatMessages', () => {
     expect(sorted.map(m => m.id)).toEqual(['a', 'c', 'b'])
     expect(items.map(m => m.id)).toEqual(['b', 'a', 'c'])
   })
+
+  it('keeps the request before the reply inside one turn when timestamps tie', () => {
+    const items = [
+      { id: 'runtime-assistant', role: 'assistant', turnId: 'turn-1', turnPosition: 3, messages: [], timestamp: '2026-07-09T00:00:01.000Z', streaming: false },
+      { id: 'runtime-user', role: 'user', turnId: 'turn-1', turnPosition: 3, text: 'hi', timestamp: '2026-07-09T00:00:01.000Z', streaming: false },
+    ] as ChatMessage[]
+    expect(sortChatMessages(items).map(m => m.role)).toEqual(['user', 'assistant'])
+  })
 })
 
 describe('isOptimisticTurn', () => {

@@ -114,11 +114,30 @@ container or erase the configured Redis database. The dedicated
 sets the crash guard explicitly. Do not enable either fault against a shared
 development or production environment.
 
-## Current implementation boundary
+## Execution and fault boundaries
 
-These are target-contract tests, not compatibility tests for the old
-per-WebSocket stream registry. Until the production cutover is complete, cases
-that require `run_accepted`, `runtime_subscribe`, the durable ledger, or
-cross-instance control are expected to fail. A compiling/skipped suite only
-proves that the acceptance harness is valid; it does not prove the runtime
-contract is implemented.
+These tests exercise the current public runtime, not the retired per-WebSocket
+registry. A skipped or merely compiled suite is not acceptance evidence.
+
+`TestQueueFollowUpsPreserveRepeatedReorderAndDrain` checks serial follow-up
+admission after two reorder operations. `TestQueueSteerDecisionKeepsInputAndHistory`
+checks a steer, an ask_user pause, another steer admitted while parked,
+and persisted user inputs after the decision continuation.
+
+`TestQueueSteerPreemptsModel` keeps the previous HTTP model request blocked until
+test cleanup. Direct steer, follow-up promotion, silent sampling, consecutive
+steers, provider retry, and stopping the continued run must preserve the run ID
+and exactly one history input per submission. Each steer starts one successor
+model call; the retry case also checks the original request's expected retry.
+Cluster runs mutate through the
+peer Server. Releasing the original request before asserting replacement would
+test only eventual step-boundary consumption and is not a passing steer test.
+
+`TestSRDUR002PreparedFinishSurvivesProcessCrash` is opt-in with
+`MEMOH_SESSION_RUNTIME_ACCEPTANCE_CRASH=1` and requires two Servers. Its temporary
+PostgreSQL trigger gates only the generated invocation's terminal UPDATE after
+the finishing proposal has committed. The real owner is killed, the gate is
+released, and the peer must converge to the original outcome with unchanged
+history and an available active slot. The trigger is removed and the owner
+restarted in cleanup. This fault intentionally writes test-only database objects;
+normal ledger probes remain read-only. Never run it against a shared database.

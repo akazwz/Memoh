@@ -11,6 +11,96 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const cancelPendingUserInputsByRun = `-- name: CancelPendingUserInputsByRun :many
+UPDATE user_input_requests
+SET status = 'canceled',
+    result_json = $1,
+    responded_at = now(),
+    canceled_at = now(),
+    updated_at = now()
+WHERE team_id = public.memoh_current_team_id()
+  AND bot_id = $2
+  AND session_id = $3
+  AND run_id = $4
+  AND status = 'pending'
+  AND runtime_fencing_token IS NOT DISTINCT FROM $5::bigint
+RETURNING id, bot_id, session_id, route_id, channel_identity_id, workspace_target_id, tool_call_id, tool_name, short_id, status, runtime_fencing_token, response_control_id, response_payload_hash, input_json, ui_payload_json, interaction_json, interaction_revision, result_json, provider_metadata, requested_by_channel_identity_id, responded_by_channel_identity_id, assistant_message_id, tool_result_message_id, prompt_message_id, prompt_external_message_id, source_platform, reply_target, conversation_type, expires_at, created_at, responded_at, canceled_at, updated_at, team_id, run_id, turn_id
+`
+
+type CancelPendingUserInputsByRunParams struct {
+	ResultJson          []byte      `json:"result_json"`
+	BotID               pgtype.UUID `json:"bot_id"`
+	SessionID           pgtype.UUID `json:"session_id"`
+	RunID               pgtype.UUID `json:"run_id"`
+	RuntimeFencingToken pgtype.Int8 `json:"runtime_fencing_token"`
+}
+
+// A lost run must only invalidate decisions it created. Session-wide
+// cancellation would also expire a newer run's ask_user request after a
+// stale owner is reaped.
+func (q *Queries) CancelPendingUserInputsByRun(ctx context.Context, arg CancelPendingUserInputsByRunParams) ([]UserInputRequest, error) {
+	rows, err := q.db.Query(ctx, cancelPendingUserInputsByRun,
+		arg.ResultJson,
+		arg.BotID,
+		arg.SessionID,
+		arg.RunID,
+		arg.RuntimeFencingToken,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []UserInputRequest
+	for rows.Next() {
+		var i UserInputRequest
+		if err := rows.Scan(
+			&i.ID,
+			&i.BotID,
+			&i.SessionID,
+			&i.RouteID,
+			&i.ChannelIdentityID,
+			&i.WorkspaceTargetID,
+			&i.ToolCallID,
+			&i.ToolName,
+			&i.ShortID,
+			&i.Status,
+			&i.RuntimeFencingToken,
+			&i.ResponseControlID,
+			&i.ResponsePayloadHash,
+			&i.InputJson,
+			&i.UiPayloadJson,
+			&i.InteractionJson,
+			&i.InteractionRevision,
+			&i.ResultJson,
+			&i.ProviderMetadata,
+			&i.RequestedByChannelIdentityID,
+			&i.RespondedByChannelIdentityID,
+			&i.AssistantMessageID,
+			&i.ToolResultMessageID,
+			&i.PromptMessageID,
+			&i.PromptExternalMessageID,
+			&i.SourcePlatform,
+			&i.ReplyTarget,
+			&i.ConversationType,
+			&i.ExpiresAt,
+			&i.CreatedAt,
+			&i.RespondedAt,
+			&i.CanceledAt,
+			&i.UpdatedAt,
+			&i.TeamID,
+			&i.RunID,
+			&i.TurnID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const cancelPendingUserInputsBySession = `-- name: CancelPendingUserInputsBySession :many
 UPDATE user_input_requests
 SET status = 'canceled',
@@ -444,6 +534,68 @@ type FailUserInputRequestParams struct {
 
 func (q *Queries) FailUserInputRequest(ctx context.Context, arg FailUserInputRequestParams) (UserInputRequest, error) {
 	row := q.db.QueryRow(ctx, failUserInputRequest, arg.ResultJson, arg.ID, arg.RuntimeFencingToken)
+	var i UserInputRequest
+	err := row.Scan(
+		&i.ID,
+		&i.BotID,
+		&i.SessionID,
+		&i.RouteID,
+		&i.ChannelIdentityID,
+		&i.WorkspaceTargetID,
+		&i.ToolCallID,
+		&i.ToolName,
+		&i.ShortID,
+		&i.Status,
+		&i.RuntimeFencingToken,
+		&i.ResponseControlID,
+		&i.ResponsePayloadHash,
+		&i.InputJson,
+		&i.UiPayloadJson,
+		&i.InteractionJson,
+		&i.InteractionRevision,
+		&i.ResultJson,
+		&i.ProviderMetadata,
+		&i.RequestedByChannelIdentityID,
+		&i.RespondedByChannelIdentityID,
+		&i.AssistantMessageID,
+		&i.ToolResultMessageID,
+		&i.PromptMessageID,
+		&i.PromptExternalMessageID,
+		&i.SourcePlatform,
+		&i.ReplyTarget,
+		&i.ConversationType,
+		&i.ExpiresAt,
+		&i.CreatedAt,
+		&i.RespondedAt,
+		&i.CanceledAt,
+		&i.UpdatedAt,
+		&i.TeamID,
+		&i.RunID,
+		&i.TurnID,
+	)
+	return i, err
+}
+
+const getInteractiveUserInputRequest = `-- name: GetInteractiveUserInputRequest :one
+SELECT id, bot_id, session_id, route_id, channel_identity_id, workspace_target_id, tool_call_id, tool_name, short_id, status, runtime_fencing_token, response_control_id, response_payload_hash, input_json, ui_payload_json, interaction_json, interaction_revision, result_json, provider_metadata, requested_by_channel_identity_id, responded_by_channel_identity_id, assistant_message_id, tool_result_message_id, prompt_message_id, prompt_external_message_id, source_platform, reply_target, conversation_type, expires_at, created_at, responded_at, canceled_at, updated_at, team_id, run_id, turn_id
+FROM user_input_requests
+WHERE team_id = public.memoh_current_team_id()
+  AND bot_id = $1
+  AND id = $2
+  AND status = 'pending'
+  AND (expires_at IS NULL OR expires_at > now())
+`
+
+type GetInteractiveUserInputRequestParams struct {
+	BotID pgtype.UUID `json:"bot_id"`
+	ID    pgtype.UUID `json:"id"`
+}
+
+// Channel-native controls may advance the interaction without carrying the
+// runtime fence. The eventual submit remains fence-protected; this lookup
+// only admits a live, pending request in the requested bot scope.
+func (q *Queries) GetInteractiveUserInputRequest(ctx context.Context, arg GetInteractiveUserInputRequestParams) (UserInputRequest, error) {
+	row := q.db.QueryRow(ctx, getInteractiveUserInputRequest, arg.BotID, arg.ID)
 	var i UserInputRequest
 	err := row.Scan(
 		&i.ID,

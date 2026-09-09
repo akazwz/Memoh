@@ -11,7 +11,7 @@ import (
 )
 
 type decisionOutputBackend struct {
-	sessionruntime.Backend
+	*sessionruntime.MemoryBackend
 	output []struct {
 		Type   string
 		Output json.RawMessage
@@ -19,7 +19,7 @@ type decisionOutputBackend struct {
 }
 
 func (b *decisionOutputBackend) AppendDecisionOutput(ctx context.Context, ref sessionruntime.DecisionOutputRef, seq int64, payload json.RawMessage, limits sessionruntime.DecisionOutputLimits) (sessionruntime.DecisionOutputState, error) {
-	state, err := b.Backend.AppendDecisionOutput(ctx, ref, seq, payload, limits)
+	state, err := b.MemoryBackend.AppendDecisionOutput(ctx, ref, seq, payload, limits)
 	if err == nil && state.Applied {
 		entry := struct {
 			Type   string
@@ -36,7 +36,7 @@ func (b *decisionOutputBackend) AppendDecisionOutput(ctx context.Context, ref se
 func TestContinuationPublishesTextAndNextQuestionToChannel(t *testing.T) {
 	for _, nextQuestion := range []bool{false, true} {
 		t.Run(map[bool]string{false: "ordinary reply", true: "second question"}[nextQuestion], func(t *testing.T) {
-			backend := &decisionOutputBackend{Backend: sessionruntime.NewMemoryBackend()}
+			backend := &decisionOutputBackend{MemoryBackend: sessionruntime.NewMemoryBackend()}
 			manager, handle := newWaitingDecisionRuntime(t, backend)
 			service := &Service{decisionRuntime: manager}
 			events := []native.StreamEvent{{Type: native.EventAgentStart}, {Type: native.EventTextDelta, Delta: "收到你的答案"}}
@@ -72,13 +72,13 @@ func TestContinuationPublishesTextAndNextQuestionToChannel(t *testing.T) {
 	}
 }
 
-type failedEndCheckpointBackend struct{ sessionruntime.Backend }
+type failedEndCheckpointBackend struct{ *sessionruntime.MemoryBackend }
 
 func (b failedEndCheckpointBackend) AppendDecisionOutput(ctx context.Context, ref sessionruntime.DecisionOutputRef, seq int64, payload json.RawMessage, limits sessionruntime.DecisionOutputLimits) (sessionruntime.DecisionOutputState, error) {
 	if payload == nil {
 		return sessionruntime.DecisionOutputState{}, errors.New("checkpoint write unavailable")
 	}
-	return b.Backend.AppendDecisionOutput(ctx, ref, seq, payload, limits)
+	return b.MemoryBackend.AppendDecisionOutput(ctx, ref, seq, payload, limits)
 }
 
 func TestContinuationClosesRunWhenEndCheckpointCannotPersist(t *testing.T) {

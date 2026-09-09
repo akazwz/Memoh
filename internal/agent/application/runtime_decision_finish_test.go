@@ -17,6 +17,7 @@ import (
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
 	dbstore "github.com/felinics/memoh/internal/db/store"
 	"github.com/felinics/memoh/internal/runtimefence"
+	sessiontest "github.com/felinics/memoh/internal/testutil/sessionruntime"
 )
 
 type finishDecisionQueries struct {
@@ -89,7 +90,7 @@ func TestWebAndChannelStopCloseParkedInputWithoutContinuing(t *testing.T) {
 				t.Fatalf("cleanup replay: %v, calls=%d", err, input.cancelCalls)
 			}
 			// The runtime must release the slot as well as the decision row.
-			if _, err := manager.StartRunHandle(context.Background(), handle.BotID, handle.SessionID,
+			if _, err := sessiontest.Start(context.Background(), manager, handle.BotID, handle.SessionID,
 				"55555555-5555-4555-8555-555555555555", make(chan struct{}, 1), func() {}, make(chan turn.InjectMessage, 1)); err != nil {
 				t.Fatalf("next run blocked: %v", err)
 			}

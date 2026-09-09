@@ -84,15 +84,6 @@ func (a *lifecycleTurnAdmitter) Admit(
 	return a.admission, nil
 }
 
-func (a *lifecycleTurnAdmitter) FinishRun(
-	_ context.Context,
-	handle sessionruntime.RunHandle,
-	status, message string,
-) error {
-	a.finishes = append(a.finishes, recordedFinish{handle: handle, status: status, message: message})
-	return a.finishErr
-}
-
 func (a *lifecycleTurnAdmitter) FinishRunWithErrorCode(
 	_ context.Context,
 	handle sessionruntime.RunHandle,

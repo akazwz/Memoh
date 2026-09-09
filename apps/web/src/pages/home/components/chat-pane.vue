@@ -414,6 +414,13 @@
                 ]"
                 @click="handleComposerClick"
               >
+                <SessionFollowUpQueue
+                  v-if="hasRenderedSession && currentBotId && activeSessionId"
+                  :bot-id="currentBotId"
+                  :session-id="activeSessionId"
+                  :active="streaming"
+                  :refresh-key="queueRefreshKey"
+                />
                 <!-- The attachment row reveals via a grid 0fr↔1fr track so a card
                    is unveiled in place — it never translates and is always
                    clipped, so it can't overflow the box — while the composer
@@ -537,7 +544,7 @@
                   ref="textareaEl"
                   v-model="inputText"
                   rows="1"
-                  :placeholder="activeChatReadOnly ? $t('chat.readonlyHint') : $t('chat.inputPlaceholder')"
+                  :placeholder="composerPlaceholder"
                   :disabled="!currentBotId || activeChatReadOnly || loadingMessages"
                   class="order-none max-h-52 w-full basis-full field-sizing-content resize-none break-words bg-transparent pl-2 pr-1 pt-2 pb-1.5 text-base leading-[var(--chat-leading)] text-foreground outline-none placeholder:text-[var(--field-placeholder)] disabled:cursor-not-allowed"
                   :class="isWelcome ? 'min-h-12' : 'min-h-10'"
@@ -961,9 +968,9 @@
                         variant="brand"
                         shape="circle"
                         :disabled="streaming ? false : (!showSend || !currentBotId || activeChatReadOnly || loadingMessages || composerConfigPending || composerHasNoModel)"
-                        :aria-label="streaming ? 'Stop generating response' : 'Send message'"
+                        :aria-label="streaming && showSend ? $t(composerQueueCommand?.mode === 'steer' ? 'chat.queue.enqueueSteer' : 'chat.queue.enqueueFollowUp') : (streaming ? 'Stop generating response' : 'Send message')"
                         class="size-full"
-                        @click="streaming ? chatStore.abort(paneTarget) : handleSend()"
+                        @click="handleSendButton"
                       >
                         <span
                           class="grid size-[18px] max-md:size-5 shrink-0 place-items-center"
@@ -1062,10 +1069,13 @@ import ComposerContinueOn from './composer-continue-on.vue'
 import ChatAttachmentCard from './chat-attachment-card.vue'
 import { useChatScroll } from '../composables/useChatScroll'
 import { useComposerPlacementMotion } from '../composables/useComposerPlacementMotion'
+import { useQueueTurnAnchors } from '../composables/useQueueTurnAnchors'
+import { isRuntimeContinuationUserTurn, isRuntimeSteerTurnId } from '@/store/chat/types'
 import BgTaskPill from './bg-task-pill.vue'
 import ForkSourceDivider from './fork-source-divider.vue'
 import ChatForkDialog from './chat-fork-dialog.vue'
 import ComposerDock from './composer-dock.vue'
+import SessionFollowUpQueue from './session-follow-up-queue.vue'
 import { usePendingApprovals } from '../composables/usePendingApprovals'
 import ChatScrollRail, { type ScrollRailSegment } from './chat-scroll-rail.vue'
 import { provideBgTaskBeacons } from '../composables/useBgTaskBeacons'
@@ -1082,7 +1092,8 @@ import { useComposerPair } from '../composables/useComposerPair'
 import { COMPOSER_MASK_BELOW_PX, useComposerLayout } from '../composables/useComposerLayout'
 import { provideChatViewTarget } from '../composables/useChatViewContext'
 import { provideConnectorLogos } from '../composables/useConnectorLogos'
-import { fetchSafeSkillCatalog, fetchSession, type ChatAttachment, type CommandActionError, type CommandActionListItem, type RequestedSkillSelection, type UIUserInput } from '@/composables/api/useChat'
+import { enqueueSteerQueue, enqueueFollowUpQueue, fetchSafeSkillCatalog, fetchSession, type ChatAttachment, type CommandActionError, type CommandActionListItem, type RequestedSkillSelection, type UIUserInput } from '@/composables/api/useChat'
+import { parseSessionQueueCommand, SessionQueueSubmissionGate } from './session-queue-submission'
 import { commandResultPresentation, isCommandResultItemVisible, resolveCommandResultSelection } from './slash-command-result'
 import { captureChatPaneSendContext, clearComposerPairDraft, composerHasNoModel as hasNoComposerModel, matchesChatPaneSendContext, pinnedSubagentModelId as resolvePinnedSubagentModelId, shouldRefreshACPComposerConfig, welcomeSendConsumedDraft } from './chat-pane-send'
 import { onAuthSessionCleared } from '@/lib/auth-session'
@@ -1667,6 +1678,28 @@ function showForkSourceDividerBefore(index: number): boolean {
 }
 
 const activeSessionId = computed(() => paneTarget.value.sessionId ?? activeSession.value?.id ?? '')
+const queueLocalRefresh = ref(0)
+// The queue list refreshes on runtime boundaries instead of polling. A steer
+// or follow-up continuation user turn changes this signature; a local enqueue
+// bumps the counter. The composable keeps a slow fallback timer for a missed
+// event.
+//
+// Only the newest queue turn is part of the key: queue inputs are consumed in
+// order, so the latest one is the only boundary that can still move. Scanning
+// from the end keeps this computed constant-time for long transcripts instead
+// of filtering and joining every queue turn on each message change.
+const queueRefreshKey = computed(() => {
+  let latestQueueTurn = ''
+  for (let index = messages.value.length - 1; index >= 0; index -= 1) {
+    const message = messages.value[index]!
+    if (message.role !== 'user') continue
+    if (isRuntimeSteerTurnId(message.turnId) || isRuntimeContinuationUserTurn(message)) {
+      latestQueueTurn = `${message.id}\u0000${message.turnId ?? ''}`
+      break
+    }
+  }
+  return `${streaming.value ? 'live' : 'idle'}\u0000${latestQueueTurn}\u0000${queueLocalRefresh.value}`
+})
 const requestedSkills = ref<RequestedSkillSelection[]>([])
 const slashPanelSuppressedPrefix = ref('')
 const skillSlashEnabled = computed(() => !activeIsExternalAgent.value && !activeIsPendingExternalAgent.value)
@@ -1784,7 +1817,8 @@ const slashPanelOpen = computed(() =>
   && !loadingMessages.value
   && inputText.value.trimStart().startsWith('/')
   && !slashPanelSuppressedPrefix.value
-  && !inputText.value.includes('\n'),
+  && !inputText.value.includes('\n')
+  && !composerQueueCommand.value?.text,
 )
 function slashMatches(label: string, description = ''): boolean {
   const query = slashQuery.value
@@ -2743,6 +2777,13 @@ const {
 } = useMediaGallery(messages)
 
 const inputText = ref('')
+const queueSubmissionGate = new SessionQueueSubmissionGate()
+const composerQueueCommand = computed(() => parseSessionQueueCommand(inputText.value, composerACPAvailableCommands.value))
+const composerPlaceholder = computed(() => {
+  if (activeChatReadOnly.value) return t('chat.readonlyHint')
+  if (!streaming.value) return t('chat.inputPlaceholder')
+  return t('chat.queue.followUpPlaceholder')
+})
 watch(inputText, (text) => {
   const prefix = slashPanelSuppressedPrefix.value
   if (!prefix || text === prefix || text.startsWith(`${prefix} `)) return
@@ -3242,6 +3283,8 @@ const {
   suppressAutoScrollForPrepend,
   markEscaped,
   pinAfterSend,
+  pinAfterSteer,
+  pinAfterFollowUp,
   onActivatedRestoreScroll,
   onDeactivatedResetScroll,
   onMessageActive,
@@ -3257,6 +3300,8 @@ const {
   isActive: isVisible,
   sessionId: computed(() => paneTarget.value.sessionId ?? `draft:${paneTarget.value.viewId}`),
 })
+
+useQueueTurnAnchors(messages, pinAfterSteer, pinAfterFollowUp)
 const showJumpToBottom = computed(() => showJumpToBottomFromScroll.value && !loadingChats.value)
 
 // Rail navigation parks the reader on a chosen turn, so escape follow —
@@ -3463,9 +3508,59 @@ async function handleSend() {
   const text = inputText.value.trim()
   const files = [...pendingFiles.value]
   const skills = [...requestedSkills.value]
+  const queueCommand = composerQueueCommand.value
+  if (queueCommand) {
+    if (files.length || skills.length) {
+      composerError.value = files.length
+        ? t('chat.slash.attachmentsUnsupported')
+        : t('chat.slash.errorMessages.invalid_skill_slash_syntax')
+      return
+    }
+    if (!queueCommand.text || !activeSessionId.value) {
+      composerError.value = t('errors.queue_request_invalid')
+      return
+    }
+  }
+  if (streaming.value || queueCommand) {
+    if (!text || files.length || skills.length || !currentBotId.value || !activeSessionId.value || activeChatReadOnly.value) return
+    const botId = currentBotId.value
+    const sessionId = activeSessionId.value
+    const mode = queueCommand?.mode ?? 'follow-up'
+    const queueText = queueCommand?.text ?? text
+    const sentDraftKey = inputDraftKey.value
+    const sentContext = captureChatPaneSendContext(
+      paneTarget.value,
+      inputDraftKey.value || 'chat',
+    )
+    const submission = queueSubmissionGate.begin({ botId, sessionId, mode, text: queueText })
+    if (!submission) return
+
+    composerError.value = ''
+    inputText.value = ''
+    saveInputDraft(sentDraftKey, '')
+    try {
+      const enqueue = mode === 'steer' ? enqueueSteerQueue : enqueueFollowUpQueue
+      await enqueue(botId, sessionId, queueText, submission.invocationId)
+      queueSubmissionGate.succeed(submission)
+      queueLocalRefresh.value++
+    } catch (error) {
+      queueSubmissionGate.fail(submission)
+      if (matchesChatPaneSendContext(
+        sentContext,
+        paneTarget.value,
+        inputDraftKey.value || 'chat',
+      )) {
+        if (!inputText.value.trim()) {
+          inputText.value = text
+          saveInputDraft(sentDraftKey, text)
+        }
+        composerError.value = resolveApiErrorMessage(error, t('chat.sendFailed'))
+      }
+    }
+    return
+  }
   if (
     (!text && !files.length && !skills.length)
-    || streaming.value
     || loadingMessages.value
     || activeChatReadOnly.value
     || composerConfigPending.value
@@ -3581,4 +3676,13 @@ async function handleSend() {
     clearComposerPairDraft(sentContext.target.botId)
   }
 }
+
+function handleSendButton() {
+  if (streaming.value && !showSend.value) {
+    chatStore.abort(paneTarget.value)
+    return
+  }
+  void handleSend()
+}
+
 </script>

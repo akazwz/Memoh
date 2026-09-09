@@ -222,13 +222,56 @@ func TestClassifyWebKnownCommands(t *testing.T) {
 
 func TestClassifyModeSlashRemainderRejects(t *testing.T) {
 	decision := Classify(ClassifyInput{
-		Text:         "/btw /help",
-		Surface:      SurfaceChannel,
-		Directed:     true,
-		SupportsMode: true,
+		Text:     "/btw /help",
+		Surface:  SurfaceChannel,
+		Directed: true,
 	})
 	if decision.Kind != DecisionReject || decision.Code != CodeUnknownSlash {
 		t.Fatalf("decision = %#v, want slash reject", decision)
+	}
+}
+
+func TestClassifyChannelQueueControls(t *testing.T) {
+	known := func(resource string) bool {
+		return resource == "queue" || resource == "steer"
+	}
+	for _, text := range []string{"/queue after this", "/steer change direction"} {
+		t.Run(text, func(t *testing.T) {
+			decision := Classify(ClassifyInput{
+				Text:         text,
+				Surface:      SurfaceChannel,
+				IsGroup:      true,
+				Directed:     true,
+				KnownCommand: known,
+			})
+			if decision.Kind != DecisionCommandAction || decision.Invocation == nil {
+				t.Fatalf("decision = %#v, want queue command action", decision)
+			}
+			if decision.Invocation.Rest == "" {
+				t.Fatalf("invocation = %#v, want command text", decision.Invocation)
+			}
+		})
+	}
+
+	undirected := Classify(ClassifyInput{
+		Text:         "/queue after this",
+		Surface:      SurfaceChannel,
+		IsGroup:      true,
+		KnownCommand: known,
+	})
+	if undirected.Kind != DecisionRejectNoop {
+		t.Fatalf("undirected decision = %#v, want reject noop", undirected)
+	}
+
+	removed := Classify(ClassifyInput{
+		Text:         "/followup continue later",
+		Surface:      SurfaceChannel,
+		IsGroup:      true,
+		Directed:     true,
+		KnownCommand: known,
+	})
+	if removed.Kind != DecisionReject || removed.Code != CodeUnknownSlash {
+		t.Fatalf("removed command decision = %#v, want unknown slash reject", removed)
 	}
 }
 
@@ -273,18 +316,15 @@ func TestClassifyKnownCommandIgnoresAttachments(t *testing.T) {
 	}
 }
 
-// TestClassifyModePrefixWithAttachmentsStaysNormalChat: "/now" + photo is a
-// normal chat message in now-mode, not a rejected control message.
-func TestClassifyModePrefixWithAttachmentsStaysNormalChat(t *testing.T) {
+func TestClassifyRemovedModePrefixWithAttachmentsIsUnknown(t *testing.T) {
 	decision := Classify(ClassifyInput{
 		Text:           "/now look at this",
 		Surface:        SurfaceChannel,
 		Directed:       true,
-		SupportsMode:   true,
 		HasAttachments: true,
 	})
-	if decision.Kind != DecisionNormalChat {
-		t.Fatalf("decision = %#v, want normal chat for mode prefix with attachments", decision)
+	if decision.Kind != DecisionReject || decision.Code != CodeUnknownSlash {
+		t.Fatalf("decision = %#v, want unknown slash", decision)
 	}
 }
 

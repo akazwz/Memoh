@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -13,7 +15,30 @@ import (
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/turn"
 	"github.com/felinics/memoh/internal/apperror"
+	sessiontest "github.com/felinics/memoh/internal/testutil/sessionruntime"
 )
+
+func TestRuntimeDecisionContinuationLogsPrivateCause(t *testing.T) {
+	var logs bytes.Buffer
+	service := &Service{logger: slog.New(slog.NewTextHandler(&logs, nil))}
+	privateCause := errors.New("private provider rejection")
+	service.logRuntimeDecisionContinuationFailure(sessionruntime.Command{
+		RunID: "run-log", TargetID: "decision-log", Type: sessionruntime.CommandUserInputResponse,
+	}, apperror.Wrap(apperror.CodeAgentResponseInterrupted, privateCause, nil))
+
+	got := logs.String()
+	for _, want := range []string{
+		"runtime decision continuation failed",
+		"private provider rejection",
+		"run_id=run-log",
+		"decision_id=decision-log",
+		"command_type=user_input_response",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("continuation failure log %q does not contain %q", got, want)
+		}
+	}
+}
 
 func newWaitingDecisionRuntime(t *testing.T, backends ...sessionruntime.Backend) (*sessionruntime.Manager, sessionruntime.RunHandle) {
 	t.Helper()
@@ -21,7 +46,7 @@ func newWaitingDecisionRuntime(t *testing.T, backends ...sessionruntime.Backend)
 	if len(backends) > 0 {
 		backend = backends[0]
 	}
-	manager := sessionruntime.NewManager(backend, sessionruntime.Options{
+	manager := sessiontest.New(backend, sessionruntime.Options{
 		OwnerID:       "runtime-lifecycle-owner",
 		StateTTL:      time.Minute,
 		OwnerLeaseTTL: time.Second,
@@ -31,8 +56,7 @@ func newWaitingDecisionRuntime(t *testing.T, backends ...sessionruntime.Backend)
 	if err := manager.Start(context.Background()); err != nil {
 		t.Fatalf("start runtime manager: %v", err)
 	}
-	handle, err := manager.StartRunHandle(
-		context.Background(),
+	handle, err := sessiontest.Start(context.Background(), manager,
 		lifecycleTestBotID,
 		lifecycleTestSessionID,
 		lifecycleTestRunID,
@@ -66,7 +90,7 @@ func runtimeDecisionEvent(t *testing.T, event native.StreamEvent) WSStreamEvent 
 }
 
 type failNextRuntimeDecisionBackend struct {
-	sessionruntime.Backend
+	*sessionruntime.MemoryBackend
 	failNext atomic.Bool
 	err      error
 }
@@ -79,7 +103,7 @@ func (b *failNextRuntimeDecisionBackend) Update(
 	if b.failNext.CompareAndSwap(true, false) {
 		return sessionruntime.Snapshot{}, false, b.err
 	}
-	return b.Backend.Update(ctx, key, update)
+	return b.MemoryBackend.Update(ctx, key, update)
 }
 
 func TestRuntimeDecisionTerminalDoesNotExposePrivateErrors(t *testing.T) {
@@ -141,7 +165,7 @@ func TestContinueRuntimeDecisionDoesNotParkProviderCancellation(t *testing.T) {
 		sessionID = "session-provider-cancel"
 		runID     = "run-provider-cancel"
 	)
-	manager := sessionruntime.NewManager(sessionruntime.NewMemoryBackend(), sessionruntime.Options{
+	manager := sessiontest.New(sessionruntime.NewMemoryBackend(), sessionruntime.Options{
 		OwnerID:       "owner-provider-cancel",
 		StateTTL:      time.Minute,
 		OwnerLeaseTTL: time.Second,
@@ -151,8 +175,7 @@ func TestContinueRuntimeDecisionDoesNotParkProviderCancellation(t *testing.T) {
 	if err := manager.Start(context.Background()); err != nil {
 		t.Fatalf("start runtime manager: %v", err)
 	}
-	handle, err := manager.StartRunHandle(
-		context.Background(),
+	handle, err := sessiontest.Start(context.Background(), manager,
 		botID,
 		sessionID,
 		runID,
@@ -201,10 +224,10 @@ func TestContinueRuntimeDecisionCancelsContinuationAfterPublicationFailure(t *te
 	)
 	publishErr := errors.New("private runtime publication failure")
 	backend := &failNextRuntimeDecisionBackend{
-		Backend: sessionruntime.NewMemoryBackend(),
-		err:     publishErr,
+		MemoryBackend: sessionruntime.NewMemoryBackend(),
+		err:           publishErr,
 	}
-	manager := sessionruntime.NewManager(backend, sessionruntime.Options{
+	manager := sessiontest.New(backend, sessionruntime.Options{
 		OwnerID:       "owner-publish-failure",
 		StateTTL:      time.Minute,
 		OwnerLeaseTTL: time.Second,
@@ -214,8 +237,7 @@ func TestContinueRuntimeDecisionCancelsContinuationAfterPublicationFailure(t *te
 	if err := manager.Start(context.Background()); err != nil {
 		t.Fatalf("start runtime manager: %v", err)
 	}
-	handle, err := manager.StartRunHandle(
-		context.Background(),
+	handle, err := sessiontest.Start(context.Background(), manager,
 		botID,
 		sessionID,
 		runID,

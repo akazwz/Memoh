@@ -156,6 +156,9 @@ type Service struct {
 	contextLifecycleCandidates        map[contextLifecycleCandidateKey]contextLifecycleCandidate
 	publishTurnEvent                  func(context.Context, sessionruntime.RunHandle, native.StreamEvent) error
 	turnHooks                         *turnRuntimeHooks
+	sessionManager                    *sessionruntime.Manager
+	// followUpStarts holds one in-flight follow-up starter per session key.
+	followUpStarts sync.Map
 }
 
 // NewService creates an application service backed by the native agent.
@@ -209,7 +212,7 @@ func NewService(
 		Timeout:   10 * time.Minute,
 	}
 
-	return &Service{
+	service := &Service{
 		agent:                  a,
 		modelsService:          modelsService,
 		queries:                queries,
@@ -225,6 +228,7 @@ func NewService(
 		clockLocation:          clockLocation,
 		logger:                 log.With(slog.String("service", "agent/application")),
 	}
+	return service
 }
 
 // SetContextAbsoluteMaxTokens sets the server-wide context admission cap
@@ -822,9 +826,11 @@ func (s *Service) Chat(ctx context.Context, req ChatRequest) (ChatResponse, erro
 	go s.maybeGenerateSessionTitle(context.WithoutCancel(ctx), req, req.RawQuery)
 
 	cfg := rc.runConfig
+	cfg.StepIndexOffset = req.StepIndexOffset
 	stepCommitter := s.newAgentStepCommitter(ctx, req, rc)
 	if stepCommitter != nil {
 		cfg.OnStepCommitted = stepCommitter.commit
+		stepCommitter.bindContinuation(&cfg)
 	}
 	cfg = s.prepareRunConfig(ctx, cfg)
 	terminal := s.contextLifecycleTerminal(ctx, cfg)

@@ -246,6 +246,11 @@ func mapClientError(err error) error {
 		return turn.ErrSessionBusy
 	case codes.AlreadyExists:
 		return turn.ErrDuplicateTurn
+	case codes.ResourceExhausted:
+		if status.Convert(err).Message() == turnDeferredStatusMessage {
+			return turn.ErrTurnDeferred
+		}
+		return err
 	case codes.PermissionDenied:
 		return turn.ErrTeamNotServed
 	case codes.Canceled:

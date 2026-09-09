@@ -37,7 +37,7 @@ func (a *injectOwnershipAdmitter) Admit(_ context.Context, input sessionruntime.
 	}, nil
 }
 
-func (a *injectOwnershipAdmitter) FinishRun(context.Context, sessionruntime.RunHandle, string, string) error {
+func (a *injectOwnershipAdmitter) FinishRunWithErrorCode(context.Context, sessionruntime.RunHandle, string, string) error {
 	close(a.finishStarted)
 	<-a.finishRelease
 	a.input.Execution.InjectCh <- turn.InjectMessage{Text: "finishing steer"}

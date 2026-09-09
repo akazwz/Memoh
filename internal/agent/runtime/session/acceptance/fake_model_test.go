@@ -189,6 +189,12 @@ func (m *fakeModel) handleChatCompletions(writer http.ResponseWriter, request *h
 	directive := parseDirective(userText)
 	m.begin(directive.marker)
 	defer m.finish()
+	if directive.mode == "retry_block" && m.RequestCount(directive.marker) == 1 {
+		writeJSON(writer, http.StatusServiceUnavailable, map[string]any{
+			"error": map[string]any{"message": "controlled retry", "type": "server_error"},
+		})
+		return
+	}
 
 	requestID := fmt.Sprintf("acceptance-%d", time.Now().UnixNano())
 	if stream, _ := payload["stream"].(bool); !stream {
@@ -251,7 +257,7 @@ func (m *fakeModel) handleChatCompletions(writer http.ResponseWriter, request *h
 			return
 		}
 	}
-	if directive.mode == "partial_block" {
+	if directive.mode == "partial_block" || directive.mode == "retry_block" {
 		if err := m.waitForRelease(request.Context(), directive.marker); err != nil {
 			m.markDisconnected(directive.marker)
 			return

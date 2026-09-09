@@ -459,6 +459,47 @@ func (s *Service) CancelPendingForSession(ctx context.Context, botID, sessionID,
 	return requests, nil
 }
 
+// CancelPendingForRun invalidates only pending ask_user requests owned by one
+// exact run. It is used by runtime recovery after a run is declared lost;
+// session-wide cancellation would incorrectly expire a newer run's request.
+func (s *Service) CancelPendingForRun(ctx context.Context, botID, sessionID, runID string, fencingToken int64, reason string) ([]Request, error) {
+	if s == nil || s.queries == nil {
+		return nil, errors.New("user input queries not configured")
+	}
+	pgBotID, err := db.ParseUUID(botID)
+	if err != nil {
+		return nil, err
+	}
+	pgSessionID, err := db.ParseUUID(sessionID)
+	if err != nil {
+		return nil, err
+	}
+	pgRunID, err := db.ParseUUID(runID)
+	if err != nil {
+		return nil, err
+	}
+	resultJSON, err := json.Marshal(canceledResult(reason))
+	if err != nil {
+		return nil, err
+	}
+	params := sqlc.CancelPendingUserInputsByRunParams{
+		BotID: pgBotID, SessionID: pgSessionID, RunID: pgRunID,
+		ResultJson:          resultJSON,
+		RuntimeFencingToken: pgtype.Int8{Int64: fencingToken, Valid: fencingToken > 0},
+	}
+	rows, err := s.queries.CancelPendingUserInputsByRun(ctx, params)
+	if err != nil {
+		return nil, err
+	}
+	requests := make([]Request, 0, len(rows))
+	for _, row := range rows {
+		req := requestFromRow(row)
+		requests = append(requests, req)
+		s.notifyResolved(req)
+	}
+	return requests, nil
+}
+
 func (s *Service) Fail(ctx context.Context, requestID string, result map[string]any) (Request, error) {
 	if s == nil || s.queries == nil {
 		return Request{}, errors.New("user input queries not configured")

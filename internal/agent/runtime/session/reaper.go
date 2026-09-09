@@ -42,6 +42,7 @@ type Reaper struct {
 	recoverWaitingDecision func(context.Context, LeaseCandidate) (bool, error)
 	terminalObserver       func(context.Context, TerminalRun)
 	terminalReconciler     func(context.Context) error
+	cancelLostRunDecisions func(context.Context, string, string, string, int64, string) error
 
 	// generation is the liveness incarnation last observed. Runs stamped with
 	// anything else were claimed by a backend that no longer exists.
@@ -59,6 +60,16 @@ type Reaper struct {
 	startOnce sync.Once
 	stop      context.CancelFunc
 	done      chan struct{}
+}
+
+// SetLostRunDecisionCanceller installs the application-owned cleanup for
+// decisions created by a run that is durably marked lost. It is deliberately
+// run-scoped: canceling a whole session could expire a newer run's prompt.
+func (r *Reaper) SetLostRunDecisionCanceller(canceller func(context.Context, string, string, string, int64, string) error) {
+	if r == nil || canceller == nil {
+		return
+	}
+	r.cancelLostRunDecisions = canceller
 }
 
 // SetWaitingDecisionRecoverer installs the owner-local half of parked-run
@@ -383,6 +394,17 @@ func (r *Reaper) markLost(ctx context.Context, runID string, fencingToken int64,
 		}
 		if !run.State.Terminal() {
 			return nil
+		}
+	}
+	if r.cancelLostRunDecisions != nil && run.BotID != "" && run.SessionID != "" {
+		cancelCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		cancelErr := r.cancelLostRunDecisions(cancelCtx, run.BotID, run.SessionID, run.RunID, run.FencingToken, errorCode)
+		cancel()
+		if cancelErr != nil {
+			// The run transition is authoritative and must not be rolled back.
+			// A later terminal reconciliation/reaper pass can retry decision
+			// cleanup without changing the lost outcome.
+			r.logger.Warn("cancel lost run decisions failed", slog.String("run_id", run.RunID), slog.Any("error", cancelErr))
 		}
 	}
 	if r.terminalObserver != nil {

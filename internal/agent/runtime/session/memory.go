@@ -87,6 +87,8 @@ type MemoryBackend struct {
 	decisionOutputs         map[string]*memoryDecisionOutput
 	decisionOutputExpiresAt map[string]time.Time
 	historyResets           map[string]ResetLease
+	steerQueues             map[string]steerQueueState
+	followUpQueues          map[string]followUpQueueState
 	subscribers             *subscriberSet[Event]
 	closed                  bool
 	// generation is this process's liveness incarnation. It is minted once and
@@ -109,6 +111,8 @@ func NewMemoryBackendWithTTL(stateTTL time.Duration) *MemoryBackend {
 		decisionOutputs:         make(map[string]*memoryDecisionOutput),
 		decisionOutputExpiresAt: make(map[string]time.Time),
 		historyResets:           make(map[string]ResetLease),
+		steerQueues:             make(map[string]steerQueueState),
+		followUpQueues:          make(map[string]followUpQueueState),
 		subscribers:             newSubscriberSet[Event](),
 		generation:              uuid.NewString(),
 	}
@@ -418,8 +422,12 @@ func cloneSnapshot(snapshot Snapshot) (Snapshot, error) {
 		currentRun.Messages = nil
 		snapshot.CurrentRunView = &currentRun
 	}
+	data, err := marshalSnapshot(snapshot)
+	if err != nil {
+		return Snapshot{}, err
+	}
 	var out Snapshot
-	if err := cloneJSON(snapshot, &out); err != nil {
+	if err := unmarshalSnapshot(data, &out); err != nil {
 		return Snapshot{}, err
 	}
 	if out.CurrentRunView != nil {

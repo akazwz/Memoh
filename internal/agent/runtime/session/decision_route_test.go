@@ -9,99 +9,87 @@ import (
 	"testing"
 	"time"
 
+	"github.com/felinics/memoh/internal/agent/runtime/native"
 	"github.com/felinics/memoh/internal/agent/runtime/session/ledger"
 	chatview "github.com/felinics/memoh/internal/agent/view"
 )
 
-func TestRunControlCommandContextPreservesOwnershipLossCause(t *testing.T) {
-	type contextKey struct{}
-	lifecycleCtx, lifecycleCancel := context.WithCancel(
-		context.WithValue(context.Background(), contextKey{}, "run-scope"),
-	)
-	ctrl := &runControl{
-		lifecycleCtx:    lifecycleCtx,
-		lifecycleCancel: lifecycleCancel,
-	}
-	ctx, cancel := ctrl.commandContext(context.Background())
-	defer cancel()
-	if got := ctx.Value(contextKey{}); got != "run-scope" {
-		t.Fatalf("command context value = %v, want run-scope", got)
-	}
-
-	ctrl.revokeOwnership(ErrRunOwnershipLost)
-	ctrl.stopCommands()
-
-	<-ctx.Done()
-	if cause := context.Cause(ctx); !errors.Is(cause, ErrRunOwnershipLost) {
-		t.Fatalf("command context cause = %v, want %v", cause, ErrRunOwnershipLost)
-	}
-}
-
-// A command carries the acknowledgement deadline of the request that routed
-// it. Relaying only cancellation would report every expiry as context.Canceled
-// and hide expired commands from callers that branch on DeadlineExceeded.
-func TestRunControlCommandContextKeepsParentDeadline(t *testing.T) {
-	type contextKey struct{}
-	lifecycleCtx, lifecycleCancel := context.WithCancel(
-		context.WithValue(context.Background(), contextKey{}, "run-scope"),
-	)
-	defer lifecycleCancel()
-	ctrl := &runControl{
-		lifecycleCtx:    lifecycleCtx,
-		lifecycleCancel: lifecycleCancel,
-	}
-
-	parent, cancelParent := context.WithTimeout(context.Background(), 20*time.Millisecond)
-	defer cancelParent()
-	ctx, cancel := ctrl.commandContext(parent)
-	defer cancel()
-	if _, ok := ctx.Deadline(); !ok {
-		t.Fatal("command context has no deadline")
-	}
-	if got := ctx.Value(contextKey{}); got != "run-scope" {
-		t.Fatalf("command context value = %v, want run-scope", got)
-	}
-
-	select {
-	case <-ctx.Done():
-	case <-time.After(time.Second):
-		t.Fatal("command context did not expire with its parent")
-	}
-	if err := ctx.Err(); !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("command context error = %v, want context deadline exceeded", err)
-	}
-	if cause := context.Cause(ctx); !errors.Is(cause, context.DeadlineExceeded) {
-		t.Fatalf("command context cause = %v, want context deadline exceeded", cause)
+func TestRunControlCommandContextCancellation(t *testing.T) {
+	for _, tc := range []struct {
+		name               string
+		deadline           time.Duration
+		trigger            func(*runControl, context.CancelCauseFunc)
+		wantErr, wantCause error
+	}{
+		{"ownership loss", 0, func(ctrl *runControl, _ context.CancelCauseFunc) {
+			ctrl.revokeOwnership(ErrRunOwnershipLost)
+			ctrl.stopCommands()
+		}, context.Canceled, ErrRunOwnershipLost},
+		{"deadline expiry", 20 * time.Millisecond, nil, context.DeadlineExceeded, context.DeadlineExceeded},
+		// The cause can be DeadlineExceeded even when the future deadline has
+		// not fired. Err must still be Canceled and propagation immediate.
+		{"parent cancellation", time.Minute, func(_ *runControl, cancel context.CancelCauseFunc) {
+			cancel(context.DeadlineExceeded)
+		}, context.Canceled, context.DeadlineExceeded},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			type contextKey struct{}
+			lifecycle, stop := context.WithCancel(context.WithValue(context.Background(), contextKey{}, "run-scope"))
+			defer stop()
+			ctrl := &runControl{lifecycleCtx: lifecycle, lifecycleCancel: stop}
+			parent, cancelParent := context.WithCancelCause(context.Background())
+			defer cancelParent(nil)
+			if tc.deadline > 0 {
+				var cancel context.CancelFunc
+				parent, cancel = context.WithTimeout(parent, tc.deadline)
+				defer cancel()
+			}
+			ctx, cancel := ctrl.commandContext(parent)
+			defer cancel()
+			if _, hasDeadline := ctx.Deadline(); hasDeadline != (tc.deadline > 0) {
+				t.Fatalf("deadline propagated=%v, want %v", hasDeadline, tc.deadline > 0)
+			}
+			if got := ctx.Value(contextKey{}); got != "run-scope" {
+				t.Fatalf("command context value=%v", got)
+			}
+			if tc.trigger != nil {
+				tc.trigger(ctrl, cancelParent)
+			}
+			select {
+			case <-ctx.Done():
+			case <-time.After(time.Second):
+				t.Fatal("command cancellation did not propagate")
+			}
+			if !errors.Is(ctx.Err(), tc.wantErr) || !errors.Is(context.Cause(ctx), tc.wantCause) {
+				t.Fatalf("Err=%v Cause=%v, want %v / %v", ctx.Err(), context.Cause(ctx), tc.wantErr, tc.wantCause)
+			}
+		})
 	}
 }
 
-func TestRunControlCommandContextPropagatesCancellationCauseBeforeDeadline(t *testing.T) {
-	lifecycleCtx, lifecycleCancel := context.WithCancel(context.Background())
-	defer lifecycleCancel()
-	ctrl := &runControl{
-		lifecycleCtx:    lifecycleCtx,
-		lifecycleCancel: lifecycleCancel,
+// A visible tool block cannot authorize a control command. Only the durable
+// decision router may supply the resolved target to owner-side execution.
+func TestDecisionCommandRejectsProjectionOnlyTarget(t *testing.T) {
+	manager := testRuntimeManager(t, NewMemoryBackend(), "projection-only-owner")
+	handle, err := manager.StartRunHandle(context.Background(), testBotID, testSessionID, testRunID, nil, func() {}, nil)
+	if err != nil {
+		t.Fatal(err)
 	}
-
-	sourceCtx, cancelSource := context.WithCancelCause(context.Background())
-	parent, cancelDeadline := context.WithDeadline(sourceCtx, time.Now().Add(time.Minute))
-	defer cancelDeadline()
-	ctx, cancel := ctrl.commandContext(parent)
-	defer cancel()
-
-	// A DeadlineExceeded cause does not mean the deadline itself fired. This
-	// cancellation must propagate immediately and retain Canceled as ctx.Err().
-	cancelSource(context.DeadlineExceeded)
-	select {
-	case <-ctx.Done():
-	case <-time.After(time.Second):
-		t.Fatal("command context did not propagate parent cancellation")
+	_, err = manager.HandleAgentEvent(context.Background(), handle, native.StreamEvent{
+		Type: native.EventUserInputRequest, ToolName: "ask_user", ToolCallID: "call-projection",
+		UserInputID: "decision-projection", Status: "pending",
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
-	if err := ctx.Err(); !errors.Is(err, context.Canceled) {
-		t.Fatalf("command context error = %v, want context canceled", err)
-	}
-	if cause := context.Cause(ctx); !errors.Is(cause, context.DeadlineExceeded) {
-		t.Fatalf("command context cause = %v, want context deadline exceeded", cause)
+	called := false
+	manager.SetCommandHandler(func(context.Context, Command) error { called = true; return nil })
+	err = manager.applyRoutedCommand(context.Background(), Command{
+		Type: CommandUserInputResponse, BotID: testBotID, SessionID: testSessionID,
+		RunID: testRunID, Generation: handle.Generation, TargetID: "decision-projection",
+	})
+	if !errors.Is(err, ErrCommandTargetNotActive) || called {
+		t.Fatalf("unresolved command: err=%v handler called=%v", err, called)
 	}
 }
 
@@ -143,7 +131,7 @@ func TestRouteDecisionResponseUsesDurableTargetAndReplaysAfterTerminal(t *testin
 		token      = int64(7)
 	)
 	runs := newFakeLedger()
-	runs.insertClaimed(runID, sessionID, token, "live-generation")
+	runs.InsertClaimed(runID, sessionID, token, "live-generation")
 	if _, applied, err := runs.SetWaitingDecision(context.Background(), runID, token); err != nil || !applied {
 		t.Fatalf("park fake ledger run: applied=%v err=%v", applied, err)
 	}
@@ -233,3 +221,71 @@ func TestRouteDecisionResponseUsesDurableTargetAndReplaysAfterTerminal(t *testin
 }
 
 var _ ledger.Store = (*fakeLedger)(nil)
+
+// Exercise the actual durable decision ingress on both shared backends, with
+// no decision present in the UI projection. The transport-only tests construct
+// command envelopes directly and cannot substitute for this contract.
+func runDistributedDecisionRouteContract(t *testing.T, suite distributedRuntimeBackendContractSuite) {
+	t.Helper()
+	ctx := context.Background()
+	runs := newFakeLedger()
+	backends := suite.newSharedBackends(t, 2)
+	owner := testRuntimeManagerWithOptions(t, backends[0], Options{OwnerID: "decision-owner", Ledger: runs, Fence: &fakeFence{}, OwnerLeaseTTL: 2 * time.Second})
+	remote := testRuntimeManagerWithOptions(t, backends[1], Options{OwnerID: "decision-remote", Ledger: runs, Fence: &fakeFence{}, OwnerLeaseTTL: 2 * time.Second})
+	admission, err := owner.Admit(ctx, AdmitInput{
+		BotID: testBotID, SessionID: "durable-decision", InvocationID: "invoke-decision", Payload: []byte(`{"text":"question"}`),
+		Execution: Execution{Admission: func(context.Context, RunHandle) (RunAdmissionView, error) { return RunAdmissionView{}, nil }, Cancel: func() {}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := owner.HandleAgentEvent(ctx, admission.Handle, native.StreamEvent{Type: native.EventUserInputRequest, UserInputID: "decision-durable", ToolCallID: "call-durable", Status: "pending"}); err != nil {
+		t.Fatal(err)
+	}
+	store := &fakeDecisionStore{target: DecisionTarget{
+		Type: CommandUserInputResponse, ID: "decision-durable", BotID: testBotID, SessionID: "durable-decision",
+		RunID: admission.RunID, TurnID: admission.TurnID, Status: "pending", FencingToken: admission.Handle.FencingToken,
+	}}
+	owner.SetDecisionStore(store)
+	remote.SetDecisionStore(store)
+	if _, _, err := backends[0].Update(ctx, Key{BotID: testBotID, SessionID: "durable-decision"}, func(snapshot Snapshot, _ bool) (Snapshot, bool, error) {
+		snapshot.CurrentRunView.Messages = nil
+		return snapshot, true, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var executions atomic.Int32
+	owner.SetCommandHandler(func(_ context.Context, cmd Command) error {
+		if !cmd.DecisionResolved || cmd.FencingToken != admission.Handle.FencingToken {
+			return errors.New("decision lost its durable ownership")
+		}
+		executions.Add(1)
+		return nil
+	})
+	response := DecisionResponse{Type: CommandUserInputResponse, ControlID: "control-durable", DecisionID: "decision-durable", BotID: testBotID, SessionID: "durable-decision", RunID: admission.RunID, Payload: []byte(`{"answers":[{"question_id":"q1","text":"yes"}]}`)}
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			result, err := remote.RouteDecisionResponse(ctx, response)
+			if err != nil || !result.Handled || !result.Applied {
+				t.Errorf("decision result=%+v err=%v", result, err)
+			}
+		}()
+	}
+	wg.Wait()
+	if executions.Load() != 1 {
+		t.Fatalf("duplicate executions=%d", executions.Load())
+	}
+	if err := owner.FinishRun(ctx, admission.Handle, RunStatusAborted, ""); err != nil {
+		t.Fatal(err)
+	}
+	if result, err := remote.RouteDecisionResponse(ctx, response); err != nil || !result.Replayed || !result.Applied {
+		t.Fatalf("terminal replay=%+v err=%v", result, err)
+	}
+	response.Payload = []byte(`{"answers":[{"question_id":"q1","text":"different"}]}`)
+	if _, err := remote.RouteDecisionResponse(ctx, response); !errors.Is(err, ErrCommandPayloadConflict) {
+		t.Fatalf("conflicting replay=%v", err)
+	}
+}

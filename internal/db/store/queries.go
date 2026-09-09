@@ -40,11 +40,13 @@ type Queries interface {
 	RevokeAgentCredentialByID(ctx context.Context, id pgtype.UUID) (dbsqlc.AgentCredential, error)
 	RevokeAgentCredentialsForBot(ctx context.Context, botID pgtype.UUID) error
 	UpdateAgentCredentialPayloadCAS(ctx context.Context, arg dbsqlc.UpdateAgentCredentialPayloadCASParams) (dbsqlc.AgentCredential, error)
+	FinalizeSessionRun(ctx context.Context, arg dbsqlc.FinalizeSessionRunParams) (dbsqlc.SessionRun, error)
 	AcquireProviderTemplateSyncLock(ctx context.Context) error
 	ApproveToolApprovalRequest(ctx context.Context, arg dbsqlc.ApproveToolApprovalRequestParams) (dbsqlc.ToolApprovalRequest, error)
 	BumpBotRuntimeConfigEpoch(ctx context.Context, botID pgtype.UUID) (int64, error)
 	CancelPendingToolApprovalsBySession(ctx context.Context, arg dbsqlc.CancelPendingToolApprovalsBySessionParams) ([]dbsqlc.ToolApprovalRequest, error)
 	CancelPendingUserInputsBySession(ctx context.Context, arg dbsqlc.CancelPendingUserInputsBySessionParams) ([]dbsqlc.UserInputRequest, error)
+	CancelPendingUserInputsByRun(ctx context.Context, arg dbsqlc.CancelPendingUserInputsByRunParams) ([]dbsqlc.UserInputRequest, error)
 	CancelUserInputRequest(ctx context.Context, arg dbsqlc.CancelUserInputRequestParams) (dbsqlc.UserInputRequest, error)
 	ClearBotRuntimeData(ctx context.Context, botID pgtype.UUID) error
 	ClearMCPOAuthTokens(ctx context.Context, connectionID pgtype.UUID) error
@@ -274,6 +276,7 @@ type Queries interface {
 	GetToolApprovalRequest(ctx context.Context, id pgtype.UUID) (dbsqlc.ToolApprovalRequest, error)
 	ListPendingToolApprovalsByRun(ctx context.Context, runID pgtype.UUID) ([]dbsqlc.ToolApprovalRequest, error)
 	GetUserInputRequest(ctx context.Context, id pgtype.UUID) (dbsqlc.UserInputRequest, error)
+	GetInteractiveUserInputRequest(ctx context.Context, arg dbsqlc.GetInteractiveUserInputRequestParams) (dbsqlc.UserInputRequest, error)
 	ListPendingUserInputsByRun(ctx context.Context, runID pgtype.UUID) ([]dbsqlc.UserInputRequest, error)
 	ReclaimWaitingDecisionSessionRun(ctx context.Context, arg dbsqlc.ReclaimWaitingDecisionSessionRunParams) (dbsqlc.SessionRun, error)
 	GetRespondableUserInputRequest(ctx context.Context, arg dbsqlc.GetRespondableUserInputRequestParams) (dbsqlc.UserInputRequest, error)

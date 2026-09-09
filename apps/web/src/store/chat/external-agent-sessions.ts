@@ -5,9 +5,8 @@ import {
   updateSessionAgent,
   type SessionSummary,
 } from '@/composables/api/useChat'
-import { BOT_AGENT_RUNTIME_ACP, BOT_AGENT_RUNTIME_CLAUDE_CODE, BOT_AGENT_RUNTIME_CODEX, botAgentRuntimeForProvider } from '@/utils/bot-agent'
 import { provisionalSessionTitle } from '../chat-list.utils'
-import { externalAgentDraftMetadata } from './external-agent-staging'
+import { externalAgentDraftMetadata, normalizedExternalAgentInput } from './external-agent-staging'
 import { StreamFailureError } from './send'
 import type { ExternalAgentSessionInput, ChatViewTarget } from './types'
 
@@ -53,32 +52,9 @@ export interface ExternalAgentSessionDeps {
   draftWorkdirIdFor: (botId: string, opts: { externalAgent: boolean }) => string
 }
 
-function normalizedExternalAgentInput(input: ExternalAgentSessionInput): ExternalAgentSessionInput {
-  const metadata = externalAgentDraftMetadata(input)
-  return {
-    ...input,
-    agentId: String(metadata.acp_agent_id ?? ''),
-    projectPath: String(metadata.project_path ?? ''),
-    projectMode: String(metadata.acp_project_mode ?? ''),
-  }
-}
-
 function agentSessionRuntimeType(input: ExternalAgentSessionInput): string {
-  switch (input.runtime) {
-    case BOT_AGENT_RUNTIME_CODEX:
-    case BOT_AGENT_RUNTIME_CLAUDE_CODE:
-      return input.runtime
-    case BOT_AGENT_RUNTIME_ACP:
-      return 'acp_agent'
-    default:
-      break
-  }
-  // Legacy callers (slash commands, cached defaults) carry only agentId;
-  // direct external agents are addressed by their runtime name, so derive
-  // it here instead of silently creating an acp_agent session the server
-  // will refuse.
-  const derived = botAgentRuntimeForProvider(input.agentId)
-  return derived === BOT_AGENT_RUNTIME_ACP ? 'acp_agent' : derived
+  const runtime = normalizedExternalAgentInput(input).runtime
+  return runtime === 'acp' ? 'acp_agent' : runtime
 }
 
 function externalAgentSessionMetadata(input: ExternalAgentSessionInput): Record<string, unknown> {

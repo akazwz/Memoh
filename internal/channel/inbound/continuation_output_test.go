@@ -15,7 +15,7 @@ func TestContinuationForwardsReplyAndInteractiveFollowUp(t *testing.T) {
 	processor := NewChannelInboundProcessor(slog.Default(), nil, nil, nil, nil, nil, nil, "", 0)
 	sender := &fakeReplySender{}
 	msg := channel.InboundMessage{Channel: channel.ChannelType("telegram"), ReplyTarget: "test-chat", Message: channel.Message{ID: "answer"}}
-	err := processor.streamContinuationCommand(context.Background(), msg, sender, InboundIdentity{BotID: "bot"}, "", func(_ context.Context, ch chan<- json.RawMessage) error {
+	err := processor.streamContinuationCommand(context.Background(), msg, sender, InboundIdentity{BotID: "bot"}, func(_ context.Context, ch chan<- json.RawMessage) error {
 		ch <- json.RawMessage(`{"type":"text_delta","delta":"收到你的答案"}`)
 		ch <- json.RawMessage(`{"type":"user_input_request","toolName":"ask_user","toolCallId":"second-call","userInputId":"second-question","status":"pending","metadata":{"ui_payload":{"version":2,"questions":[{"id":"q1","kind":"text","text":"接下来做什么？"}]}}}`)
 		ch <- json.RawMessage(`{"type":"agent_end","userInputId":"second-question","status":"pending"}`)
@@ -44,7 +44,7 @@ func TestAcceptanceReceiptPrecedesFailedContinuation(t *testing.T) {
 	accepted := false
 	sender := decisionReplySender{StreamReplySender: sink, accepted: func(context.Context, string) { accepted = true }}
 	msg := channel.InboundMessage{Channel: channel.ChannelType("telegram"), ReplyTarget: "chat"}
-	err := p.streamContinuationCommand(context.Background(), msg, sender, InboundIdentity{BotID: "bot"}, "", func(_ context.Context, ch chan<- json.RawMessage) error {
+	err := p.streamContinuationCommand(context.Background(), msg, sender, InboundIdentity{BotID: "bot"}, func(_ context.Context, ch chan<- json.RawMessage) error {
 		ch <- json.RawMessage(`{"type":"decision_accepted","decision_id":"question"}`)
 		return errors.New("SECRET transport failure after acceptance")
 	})

@@ -21,6 +21,8 @@ import (
 	"github.com/felinics/memoh/internal/accounts"
 	"github.com/felinics/memoh/internal/acl"
 	acpprofileadapter "github.com/felinics/memoh/internal/agent/adapter/acpprofile"
+	"github.com/felinics/memoh/internal/agent/adapter/channelqueue"
+	"github.com/felinics/memoh/internal/agent/application"
 	"github.com/felinics/memoh/internal/agent/context/compaction"
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
 	"github.com/felinics/memoh/internal/agent/turn"
@@ -221,6 +223,7 @@ func provideChannelRouter(
 	discussDriver *discuss.DiscussDriver,
 	cfg config.Config,
 	cmdHandler inbound.CommandHandler,
+	queueHandler inbound.QueueCommandHandler,
 	skillResolver inbound.RequestedSkillResolver,
 ) *inbound.ChannelInboundProcessor {
 	adapter, ok := registry.Get(qq.Type)
@@ -246,7 +249,6 @@ func provideChannelRouter(
 	}
 	processor.SetMediaService(mediaService)
 	processor.SetStreamObserver(local.NewRouteHubBroadcaster(hub))
-	processor.SetDispatcher(inbound.NewRouteDispatcher(log))
 	processor.SetSpeechService(audioService, &settingsSpeechModelResolver{settings: settingsService})
 	processor.SetTranscriptionService(audioService, &settingsTranscriptionModelResolver{settings: settingsService})
 	processor.SetIMDisplayOptions(&settingsIMDisplayOptions{settings: settingsService})
@@ -255,6 +257,7 @@ func provideChannelRouter(
 	processor.SetACPProfileResolver(acpprofileadapter.NewCatalog())
 	processor.SetBotPermissionChecker(&botPermissionCheckerAdapter{bots: botService, accounts: accountService})
 	processor.SetCommandHandler(cmdHandler)
+	processor.SetQueueCommandHandler(queueHandler)
 	processor.SetRequestedSkillResolver(skillResolver)
 	return processor
 }
@@ -563,6 +566,10 @@ func provideLocalChannelAudio(service *audiopkg.Service) channelAudio {
 }
 
 func provideLocalCommandHandler(handler *command.Handler) inbound.CommandHandler { return handler }
+
+func provideLocalQueueCommandHandler(service *application.Service) inbound.QueueCommandHandler {
+	return channelqueue.New(service)
+}
 
 func provideLocalSkillResolver(handler *handlers.ContainerdHandler) inbound.RequestedSkillResolver {
 	return handler

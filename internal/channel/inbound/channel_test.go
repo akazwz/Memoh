@@ -41,6 +41,8 @@ type fakeChatGateway struct {
 	resp             fakeChatResponse
 	err              error
 	gotReq           turn.StartTurnCommand
+	startReqs        []turn.StartTurnCommand
+	startErrors      []error
 	onChat           func(turn.StartTurnCommand)
 	userInputCalls   int
 	userInputInput   turn.UserInputResponse
@@ -51,6 +53,16 @@ type fakeChatGateway struct {
 	advanceInput     userinput.AdvanceTextInput
 	advanceResult    userinput.AdvanceTextResult
 	advanceErr       error
+}
+
+type deferredFakeChatGateway struct {
+	fakeChatGateway
+	deferred []turn.StartTurnCommand
+}
+
+func (f *deferredFakeChatGateway) EnqueueDeferredTurn(_ context.Context, cmd turn.StartTurnCommand) error {
+	f.deferred = append(f.deferred, cmd)
+	return nil
 }
 
 type fakeChatResponse struct {
@@ -141,11 +153,17 @@ func TestRejectReservedSkillMetadataInInboundMessage(t *testing.T) {
 
 func (f *fakeChatGateway) StartTurn(_ context.Context, cmd turn.StartTurnCommand) (turn.RunHandle, error) {
 	f.gotReq = cmd
+	f.startReqs = append(f.startReqs, cmd)
 	if f.startErr != nil {
 		return nil, f.startErr
 	}
 	if f.onChat != nil {
 		f.onChat(cmd)
+	}
+	if len(f.startErrors) > 0 {
+		err := f.startErrors[0]
+		f.startErrors = f.startErrors[1:]
+		return nil, err
 	}
 	events := make(chan turn.Event, 1)
 	errs := make(chan error, 1)
@@ -329,6 +347,24 @@ type fakeSessionEnsurer struct {
 	createErr     error
 	lastRouteID   string
 	lastSpec      NewSessionSpec
+	createCalls   int
+}
+
+type fakeQueueCommandHandler struct {
+	steerInputs    []QueueCommandInput
+	followUpInputs []QueueCommandInput
+	steerErr       error
+	followUpErr    error
+}
+
+func (f *fakeQueueCommandHandler) EnqueueSteer(_ context.Context, input QueueCommandInput) error {
+	f.steerInputs = append(f.steerInputs, input)
+	return f.steerErr
+}
+
+func (f *fakeQueueCommandHandler) EnqueueFollowUp(_ context.Context, input QueueCommandInput) error {
+	f.followUpInputs = append(f.followUpInputs, input)
+	return f.followUpErr
 }
 
 func (f *fakeSessionEnsurer) EnsureActiveSession(_ context.Context, _, routeID, _ string) (SessionResult, error) {
@@ -348,6 +384,7 @@ func (f *fakeSessionEnsurer) GetActiveSession(_ context.Context, routeID string)
 }
 
 func (f *fakeSessionEnsurer) CreateNewSession(_ context.Context, _, routeID, _ string, spec NewSessionSpec) (SessionResult, error) {
+	f.createCalls++
 	f.lastRouteID = routeID
 	f.lastSpec = spec
 	if f.createErr != nil {
@@ -888,7 +925,7 @@ func TestChannelInboundProcessorNativeUserInputWithoutPendingQuestionFallsThroug
 	}
 }
 
-func TestChannelInboundProcessorModeCommandBypassesTextFallback(t *testing.T) {
+func TestChannelInboundProcessorRemovedModeCommandIsRejected(t *testing.T) {
 	channelIdentitySvc := &fakeChannelIdentityService{channelIdentity: identities.ChannelIdentity{ID: "channelIdentity-1"}}
 	chatSvc := &fakeChatService{resolveResult: route.ResolveConversationResult{BotID: "chat-1", RouteID: "route-1"}}
 	gateway := &fakeChatGateway{resp: fakeChatResponse{Messages: []turn.ModelMessage{{Role: "assistant", Content: turn.NewTextContent("normal reply")}}}}
@@ -900,11 +937,173 @@ func TestChannelInboundProcessorModeCommandBypassesTextFallback(t *testing.T) {
 		Message: channel.Message{Text: "/btw side question"}, Sender: channel.Identity{SubjectID: "ext-1"},
 		Conversation: channel.Conversation{ID: "chat-1", Type: channel.ConversationTypePrivate},
 	}
-	if err := processor.HandleInbound(context.Background(), channel.ChannelConfig{TeamID: "team-test", BotID: "bot-1", ChannelType: msg.Channel}, msg, &fakeReplySender{}); err != nil {
+	sender := &fakeReplySender{}
+	if err := processor.HandleInbound(context.Background(), channel.ChannelConfig{TeamID: "team-test", BotID: "bot-1", ChannelType: msg.Channel}, msg, sender); err != nil {
 		t.Fatalf("HandleInbound() error = %v", err)
 	}
 	if gateway.advanceCalls != 0 {
-		t.Fatalf("mode command advanced user input %d times", gateway.advanceCalls)
+		t.Fatalf("removed command advanced user input %d times", gateway.advanceCalls)
+	}
+	if len(sender.sent) != 1 || !strings.Contains(strings.ToLower(sender.sent[0].Message.PlainText()), "unknown") {
+		t.Fatalf("removed command response = %+v", sender.sent)
+	}
+}
+
+func TestChannelInboundProcessorQueueCommandsUseResolvedSession(t *testing.T) {
+	channelIdentitySvc := &fakeChannelIdentityService{channelIdentity: identities.ChannelIdentity{ID: "channelIdentity-1"}}
+	chatSvc := &fakeChatService{resolveResult: route.ResolveConversationResult{BotID: "bot-1", RouteID: "route-1"}}
+	gateway := &fakeChatGateway{}
+	processor := NewChannelInboundProcessor(slog.Default(), nil, chatSvc, chatSvc, gateway, channelIdentitySvc, &fakePolicyService{}, "", 0)
+	processor.SetACLService(&fakeChatACL{allowed: true})
+	processor.SetSessionEnsurer(&fakeSessionEnsurer{activeSession: SessionResult{ID: "session-1"}})
+	queueHandler := &fakeQueueCommandHandler{}
+	processor.SetQueueCommandHandler(queueHandler)
+	for _, tc := range []struct {
+		channelType string
+		text        string
+		wantSteer   bool
+		wantPayload string
+	}{
+		// Follow-ups start a server-owned run whose output only a local
+		// channel can observe; steers join the run this channel streams.
+		{channelType: "web", text: "/queue build the test", wantPayload: "build the test"},
+		{channelType: "telegram", text: "/steer use bun", wantSteer: true, wantPayload: "use bun"},
+	} {
+		t.Run(tc.channelType+" "+tc.text, func(t *testing.T) {
+			cfg := channel.ChannelConfig{TeamID: "team-test", ID: "cfg-1", BotID: "bot-1", ChannelType: channel.ChannelType(tc.channelType)}
+			msg := channel.InboundMessage{
+				BotID: "bot-1", Channel: cfg.ChannelType, ReplyTarget: "target-id",
+				Message:      channel.Message{ID: strings.ReplaceAll(tc.wantPayload, " ", "-"), Text: tc.text},
+				Sender:       channel.Identity{SubjectID: "ext-1"},
+				Conversation: channel.Conversation{ID: "chat-1", Type: channel.ConversationTypePrivate},
+			}
+			sender := &fakeReplySender{}
+			if err := processor.HandleInbound(context.Background(), cfg, msg, sender); err != nil {
+				t.Fatalf("HandleInbound() error = %v", err)
+			}
+			if len(sender.sent) != 1 || sender.sent[0].Message.Reply == nil || sender.sent[0].Message.Reply.MessageID != msg.Message.ID {
+				t.Fatalf("reply = %#v, want acknowledgment replying to command", sender.sent)
+			}
+			if gateway.gotReq.Query != "" || len(chatSvc.persistedIn) != 0 {
+				t.Fatalf("queue command entered normal chat: query=%q persisted=%d", gateway.gotReq.Query, len(chatSvc.persistedIn))
+			}
+			if tc.wantSteer {
+				if len(queueHandler.steerInputs) == 0 {
+					t.Fatal("steer was not admitted")
+				}
+				input := queueHandler.steerInputs[len(queueHandler.steerInputs)-1]
+				if input.SessionID != "session-1" || input.Text != tc.wantPayload || input.InvocationID == "" {
+					t.Fatalf("steer input = %#v", input)
+				}
+			} else {
+				if len(queueHandler.followUpInputs) == 0 {
+					t.Fatal("follow-up was not admitted")
+				}
+				input := queueHandler.followUpInputs[len(queueHandler.followUpInputs)-1]
+				if input.SessionID != "session-1" || input.Text != tc.wantPayload || input.InvocationID == "" {
+					t.Fatalf("follow-up input = %#v", input)
+				}
+			}
+		})
+	}
+}
+
+func TestChannelInboundProcessorRejectsFollowUpQueueOnPlatformChannel(t *testing.T) {
+	channelIdentitySvc := &fakeChannelIdentityService{channelIdentity: identities.ChannelIdentity{ID: "channelIdentity-1"}}
+	chatSvc := &fakeChatService{resolveResult: route.ResolveConversationResult{BotID: "bot-1", RouteID: "route-1"}}
+	processor := NewChannelInboundProcessor(slog.Default(), nil, chatSvc, chatSvc, &fakeChatGateway{}, channelIdentitySvc, &fakePolicyService{}, "", 0)
+	processor.SetACLService(&fakeChatACL{allowed: true})
+	processor.SetSessionEnsurer(&fakeSessionEnsurer{activeSession: SessionResult{ID: "session-1"}})
+	queueHandler := &fakeQueueCommandHandler{}
+	processor.SetQueueCommandHandler(queueHandler)
+	cfg := channel.ChannelConfig{TeamID: "team-test", ID: "cfg-1", BotID: "bot-1", ChannelType: channel.ChannelType("telegram")}
+	msg := channel.InboundMessage{
+		BotID: "bot-1", Channel: cfg.ChannelType, ReplyTarget: "target-id",
+		Message:      channel.Message{ID: "queue-on-telegram", Text: "/queue build the test"},
+		Sender:       channel.Identity{SubjectID: "ext-1"},
+		Conversation: channel.Conversation{ID: "chat-1", Type: channel.ConversationTypePrivate},
+	}
+	sender := &fakeReplySender{}
+	if err := processor.HandleInbound(context.Background(), cfg, msg, sender); err != nil {
+		t.Fatalf("HandleInbound() error = %v", err)
+	}
+	if len(queueHandler.followUpInputs) != 0 || len(queueHandler.steerInputs) != 0 {
+		t.Fatalf("platform channel follow-up was admitted: %#v", queueHandler)
+	}
+	if len(sender.sent) != 1 || sender.sent[0].Message.PlainText() == "" {
+		t.Fatalf("reply = %#v, want an explanatory slash error", sender.sent)
+	}
+}
+
+func TestChannelInboundProcessorQueueCommandNoSessionDoesNotCreateOne(t *testing.T) {
+	channelIdentitySvc := &fakeChannelIdentityService{channelIdentity: identities.ChannelIdentity{ID: "channelIdentity-1"}}
+	chatSvc := &fakeChatService{resolveResult: route.ResolveConversationResult{BotID: "bot-1", RouteID: "route-1"}}
+	gateway := &fakeChatGateway{}
+	processor := NewChannelInboundProcessor(slog.Default(), nil, chatSvc, chatSvc, gateway, channelIdentitySvc, &fakePolicyService{}, "", 0)
+	processor.SetACLService(&fakeChatACL{allowed: true})
+	ensurer := &fakeSessionEnsurer{activeErr: errors.New("no active session")}
+	processor.SetSessionEnsurer(ensurer)
+	queueHandler := &fakeQueueCommandHandler{}
+	processor.SetQueueCommandHandler(queueHandler)
+	msg := channel.InboundMessage{
+		BotID: "bot-1", Channel: channel.ChannelType("telegram"), ReplyTarget: "target-id",
+		Message: channel.Message{ID: "queue-1", Text: "/queue later"}, Sender: channel.Identity{SubjectID: "ext-1"},
+		Conversation: channel.Conversation{ID: "chat-1", Type: channel.ConversationTypePrivate},
+	}
+	sender := &fakeReplySender{}
+	if err := processor.HandleInbound(context.Background(), channel.ChannelConfig{TeamID: "team-test", BotID: "bot-1", ChannelType: msg.Channel}, msg, sender); err != nil {
+		t.Fatalf("HandleInbound() error = %v", err)
+	}
+	if len(queueHandler.steerInputs) != 0 || len(queueHandler.followUpInputs) != 0 || gateway.gotReq.Query != "" || len(chatSvc.persistedIn) != 0 {
+		t.Fatalf("queue command without session admitted or started chat: queue=%#v/%#v query=%q persisted=%d", queueHandler.steerInputs, queueHandler.followUpInputs, gateway.gotReq.Query, len(chatSvc.persistedIn))
+	}
+	if ensurer.createCalls != 0 {
+		t.Fatalf("queue command created a session %d times with spec %#v", ensurer.createCalls, ensurer.lastSpec)
+	}
+	if len(sender.sent) != 1 || !strings.Contains(strings.ToLower(sender.sent[0].Message.PlainText()), "no active") {
+		t.Fatalf("reply = %#v, want no-active-run feedback", sender.sent)
+	}
+}
+
+func TestQueueCommandIdempotencyKeyScopesOperation(t *testing.T) {
+	steer := queueCommandIdempotencyKey(channel.ChannelType("telegram"), "route-1", "42", "steer")
+	retry := queueCommandIdempotencyKey(channel.ChannelType("telegram"), "route-1", "42", "steer")
+	queue := queueCommandIdempotencyKey(channel.ChannelType("telegram"), "route-1", "42", "queue")
+	if steer == "" || steer != retry || steer == queue {
+		t.Fatalf("keys = steer %q retry %q queue %q", steer, retry, queue)
+	}
+}
+
+func TestChannelInboundProcessorQueueCommandsRejectDiscussSession(t *testing.T) {
+	channelIdentitySvc := &fakeChannelIdentityService{channelIdentity: identities.ChannelIdentity{ID: "channelIdentity-1"}}
+	chatSvc := &fakeChatService{resolveResult: route.ResolveConversationResult{BotID: "bot-1", RouteID: "route-1"}}
+	gateway := &fakeChatGateway{}
+	processor := NewChannelInboundProcessor(slog.Default(), nil, chatSvc, chatSvc, gateway, channelIdentitySvc, &fakePolicyService{}, "", 0)
+	processor.SetACLService(&fakeChatACL{allowed: true})
+	processor.SetSessionEnsurer(&fakeSessionEnsurer{activeSession: SessionResult{ID: "session-1", Type: sessionpkg.TypeDiscuss}})
+	queueHandler := &fakeQueueCommandHandler{}
+	processor.SetQueueCommandHandler(queueHandler)
+	cfg := channel.ChannelConfig{TeamID: "team-test", BotID: "bot-1", ChannelType: channel.ChannelType("telegram")}
+
+	for _, text := range []string{"/queue continue later", "/steer use bun"} {
+		t.Run(text, func(t *testing.T) {
+			sender := &fakeReplySender{}
+			msg := channel.InboundMessage{
+				BotID: "bot-1", Channel: cfg.ChannelType, ReplyTarget: "target-id",
+				Message:      channel.Message{ID: strings.ReplaceAll(text, " ", "-"), Text: text},
+				Sender:       channel.Identity{SubjectID: "ext-1"},
+				Conversation: channel.Conversation{ID: "chat-1", Type: channel.ConversationTypePrivate},
+			}
+			if err := processor.HandleInbound(context.Background(), cfg, msg, sender); err != nil {
+				t.Fatalf("HandleInbound() error = %v", err)
+			}
+			if len(sender.sent) != 1 || !strings.Contains(strings.ToLower(sender.sent[0].Message.PlainText()), "not available") {
+				t.Fatalf("reply = %#v, want unsupported-session feedback", sender.sent)
+			}
+		})
+	}
+	if len(queueHandler.steerInputs) != 0 || len(queueHandler.followUpInputs) != 0 || gateway.gotReq.Query != "" || len(chatSvc.persistedIn) != 0 {
+		t.Fatalf("discuss queue command admitted or entered chat: steer=%#v queue=%#v query=%q persisted=%d", queueHandler.steerInputs, queueHandler.followUpInputs, gateway.gotReq.Query, len(chatSvc.persistedIn))
 	}
 }
 
@@ -1740,7 +1939,7 @@ func TestChannelInboundProcessorRejectsDirectSkillBeforeAutoDiscussSession(t *te
 	}
 }
 
-func TestChannelInboundProcessorRejectsDirectSkillBeforeActiveStreamInjection(t *testing.T) {
+func TestChannelInboundProcessorRejectsUnresolvedDirectSkill(t *testing.T) {
 	channelIdentitySvc := &fakeChannelIdentityService{channelIdentity: identities.ChannelIdentity{ID: "channelIdentity-skill-use-active"}}
 	policySvc := &fakePolicyService{}
 	chatSvc := &fakeChatService{resolveResult: route.ResolveConversationResult{BotID: "chat-skill-use-active", RouteID: "route-skill-use-active"}}
@@ -1748,9 +1947,6 @@ func TestChannelInboundProcessorRejectsDirectSkillBeforeActiveStreamInjection(t 
 	processor := NewChannelInboundProcessor(slog.Default(), nil, chatSvc, chatSvc, gateway, channelIdentitySvc, policySvc, "", 0)
 	processor.SetACLService(&fakeChatACL{allowed: true})
 	processor.SetSessionEnsurer(&fakeSessionEnsurer{activeSession: SessionResult{ID: "session-1", Type: sessionpkg.TypeChat, Runtime: sessionpkg.RuntimeModel}})
-	dispatcher := NewRouteDispatcher(slog.Default())
-	dispatcher.MarkActive("route-skill-use-active")
-	processor.SetDispatcher(dispatcher)
 	sender := &fakeReplySender{}
 
 	msg := channel.InboundMessage{
@@ -1778,12 +1974,12 @@ func TestChannelInboundProcessorRejectsDirectSkillBeforeActiveStreamInjection(t 
 	if len(chatSvc.persistedIn) != 0 {
 		t.Fatalf("skill slash should not persist before active-stream reject, got %+v", chatSvc.persistedIn)
 	}
-	if len(sender.sent) != 1 || !strings.Contains(sender.sent[0].Message.PlainText(), "not supported") {
-		t.Fatalf("expected unsupported skill slash reply, got %+v", sender.sent)
+	if len(sender.sent) != 1 || !strings.Contains(sender.sent[0].Message.PlainText(), "not available") {
+		t.Fatalf("expected unavailable skill slash reply, got %+v", sender.sent)
 	}
 }
 
-func TestChannelInboundProcessorRejectsDirectSkillDuringContinuationStream(t *testing.T) {
+func TestChannelInboundProcessorDoesNotUseRouteLocalContinuationLock(t *testing.T) {
 	channelIdentitySvc := &fakeChannelIdentityService{
 		channelIdentity: identities.ChannelIdentity{ID: "channelIdentity-skill-use-continuation"},
 		linkedUserIDs:   map[string][]string{"channelIdentity-skill-use-continuation": {"user-1"}},
@@ -1797,7 +1993,6 @@ func TestChannelInboundProcessorRejectsDirectSkillDuringContinuationStream(t *te
 	processor := NewChannelInboundProcessor(slog.Default(), nil, chatSvc, chatSvc, gateway, channelIdentitySvc, policySvc, "", 0)
 	processor.SetACLService(&fakeChatACL{allowed: true})
 	processor.SetSessionEnsurer(&fakeSessionEnsurer{activeSession: SessionResult{ID: "session-1", Type: sessionpkg.TypeChat, Runtime: sessionpkg.RuntimeModel}})
-	processor.SetDispatcher(NewRouteDispatcher(slog.Default()))
 	skillResolver := &fakeRequestedSkillResolver{items: []skillset.ResolvedSkill{{Name: "alpha", Content: "alpha skill content"}}}
 	processor.SetRequestedSkillResolver(skillResolver)
 	sender := &fakeReplySender{}
@@ -1830,18 +2025,15 @@ func TestChannelInboundProcessorRejectsDirectSkillDuringContinuationStream(t *te
 	if err := <-done; err != nil {
 		t.Fatalf("respond HandleInbound() error = %v", err)
 	}
-	if skillResolver.calls != 0 {
-		t.Fatalf("skill resolver calls = %d, want 0 during active continuation", skillResolver.calls)
+	if skillResolver.calls != 1 {
+		t.Fatalf("skill resolver calls = %d, want 1 without route-local dispatcher", skillResolver.calls)
 	}
-	if gateway.gotReq.BotID != "" {
-		t.Fatalf("ordinary chat should not run during active continuation, got request %#v", gateway.gotReq)
-	}
-	if len(sender.sent) == 0 || !strings.Contains(sender.sent[0].Message.PlainText(), "not supported") {
-		t.Fatalf("expected unsupported skill slash reply, got %+v", sender.sent)
+	if gateway.gotReq.BotID != "bot-1" || gateway.gotReq.UserMessageKind != turn.UserMessageKindSkillActivation {
+		t.Fatalf("durable admission should receive the skill turn, got request %#v", gateway.gotReq)
 	}
 }
 
-func TestChannelInboundProcessorDirectSkillStartsStreamWithDispatcherInjectCh(t *testing.T) {
+func TestChannelInboundProcessorDirectSkillStartsStream(t *testing.T) {
 	channelIdentitySvc := &fakeChannelIdentityService{channelIdentity: identities.ChannelIdentity{ID: "channelIdentity-skill-use-dispatch"}}
 	policySvc := &fakePolicyService{}
 	chatSvc := &fakeChatService{resolveResult: route.ResolveConversationResult{BotID: "chat-skill-use-dispatch", RouteID: "route-skill-use-dispatch"}}
@@ -1849,7 +2041,6 @@ func TestChannelInboundProcessorDirectSkillStartsStreamWithDispatcherInjectCh(t 
 	processor := NewChannelInboundProcessor(slog.Default(), nil, chatSvc, chatSvc, gateway, channelIdentitySvc, policySvc, "", 0)
 	processor.SetACLService(&fakeChatACL{allowed: true})
 	processor.SetSessionEnsurer(&fakeSessionEnsurer{activeSession: SessionResult{ID: "session-1", Type: sessionpkg.TypeChat, Runtime: sessionpkg.RuntimeModel}})
-	processor.SetDispatcher(NewRouteDispatcher(slog.Default()))
 	skillResolver := &fakeRequestedSkillResolver{items: []skillset.ResolvedSkill{{
 		Name:       "alpha",
 		Content:    "alpha skill content",
@@ -3036,6 +3227,116 @@ func TestChannelInboundProcessorProcessingStatusSuccessLifecycle(t *testing.T) {
 	}
 	if len(sender.sent) != 1 {
 		t.Fatalf("expected one outbound reply, got %d", len(sender.sent))
+	}
+}
+
+func TestChannelInboundProcessorRetriesBusyTurnWithoutDuplicatingDelivery(t *testing.T) {
+	notifier := &fakeProcessingStatusNotifier{
+		startedHandle: channel.ProcessingStatusHandle{Token: "reaction-busy"},
+	}
+	registry := channel.NewRegistry()
+	registry.MustRegister(&fakeProcessingStatusAdapter{notifier: notifier})
+	channelIdentitySvc := &fakeChannelIdentityService{channelIdentity: identities.ChannelIdentity{ID: "channelIdentity-busy"}}
+	chatSvc := &fakeChatService{resolveResult: route.ResolveConversationResult{BotID: "bot-busy", RouteID: "route-busy"}}
+	gateway := &fakeChatGateway{
+		startErrors: []error{turn.ErrSessionBusy},
+		resp: fakeChatResponse{Messages: []turn.ModelMessage{
+			{Role: "assistant", Content: turn.NewTextContent("delivered after continuation")},
+		}},
+	}
+	processor := NewChannelInboundProcessor(slog.Default(), registry, chatSvc, chatSvc, gateway, channelIdentitySvc, &fakePolicyService{}, "", 0)
+	processor.SetACLService(&fakeChatACL{allowed: true})
+	processor.SetSessionEnsurer(&fakeSessionEnsurer{activeSession: SessionResult{ID: "session-busy"}})
+	sender := &fakeReplySender{}
+	cfg := channel.ChannelConfig{TeamID: "team-test", ID: "cfg-busy", BotID: "bot-busy", ChannelType: channel.ChannelType("feishu")}
+	msg := channel.InboundMessage{
+		BotID: "bot-busy", Channel: channel.ChannelType("feishu"),
+		Message:     channel.Message{ID: "msg-busy", Text: "ordinary message"},
+		ReplyTarget: "target-busy", Sender: channel.Identity{SubjectID: "ext-busy"},
+		Conversation: channel.Conversation{ID: "chat-busy", Type: channel.ConversationTypePrivate},
+	}
+
+	if err := processor.HandleInbound(context.Background(), cfg, msg, sender); err != nil {
+		t.Fatalf("HandleInbound() error = %v", err)
+	}
+	if len(gateway.startReqs) != 2 {
+		t.Fatalf("StartTurn calls = %d, want 2", len(gateway.startReqs))
+	}
+	first, second := gateway.startReqs[0], gateway.startReqs[1]
+	if first.IdempotencyKey == "" || first.IdempotencyKey != second.IdempotencyKey {
+		t.Fatalf("retry changed idempotency key: %q -> %q", first.IdempotencyKey, second.IdempotencyKey)
+	}
+	if first.ExternalMessageID != second.ExternalMessageID || first.ThreadID != second.ThreadID {
+		t.Fatalf("retry changed delivery identity: first=%#v second=%#v", first, second)
+	}
+	if len(notifier.events) != 2 || notifier.events[0] != "started" || notifier.events[1] != "completed" {
+		t.Fatalf("processing status lifecycle = %#v, want started/completed", notifier.events)
+	}
+	if len(sender.sent) != 1 || sender.sent[0].Message.PlainText() != "delivered after continuation" {
+		t.Fatalf("outbound replies = %#v, want one model reply", sender.sent)
+	}
+}
+
+// A web (local) ingress observes runs through the session runtime
+// subscription, so a busy session parks its complete command in the follow-up
+// queue and the inbound call returns without a reply.
+func TestChannelInboundProcessorAcceptsBusyLocalTurnIntoRuntimeQueue(t *testing.T) {
+	channelIdentitySvc := &fakeChannelIdentityService{channelIdentity: identities.ChannelIdentity{ID: "channelIdentity-deferred"}}
+	chatSvc := &fakeChatService{resolveResult: route.ResolveConversationResult{BotID: "bot-deferred", RouteID: "route-deferred"}}
+	gateway := &deferredFakeChatGateway{fakeChatGateway: fakeChatGateway{startErrors: []error{turn.ErrSessionBusy}}}
+	processor := NewChannelInboundProcessor(slog.Default(), nil, chatSvc, chatSvc, gateway, channelIdentitySvc, &fakePolicyService{}, "", 0)
+	processor.SetACLService(&fakeChatACL{allowed: true})
+	processor.SetSessionEnsurer(&fakeSessionEnsurer{activeSession: SessionResult{ID: "session-deferred"}})
+	sender := &fakeReplySender{}
+	msg := channel.InboundMessage{
+		BotID: "bot-deferred", Channel: channel.ChannelType("web"), ReplyTarget: "target-deferred",
+		Message: channel.Message{ID: "msg-deferred", Text: "queued ordinary message"}, Sender: channel.Identity{SubjectID: "ext-deferred"},
+		Conversation: channel.Conversation{ID: "chat-deferred", Type: channel.ConversationTypePrivate},
+	}
+	if err := processor.HandleInbound(context.Background(), channel.ChannelConfig{TeamID: "team-test", BotID: msg.BotID, ChannelType: msg.Channel}, msg, sender); err != nil {
+		t.Fatalf("HandleInbound() error = %v", err)
+	}
+	if len(gateway.deferred) != 1 || len(sender.sent) != 0 {
+		t.Fatalf("deferred commands = %d, replies = %d", len(gateway.deferred), len(sender.sent))
+	}
+	queued := gateway.deferred[0]
+	if queued.Query != msg.Message.Text || queued.ExternalMessageID != msg.Message.ID || queued.ThreadID != "session-deferred" || queued.IdempotencyKey == "" {
+		t.Fatalf("queued command lost delivery fields: %#v", queued)
+	}
+}
+
+// A platform channel delivers the reply from this call's run handle. A run
+// started later from the follow-up queue would have no consumer, so a busy
+// session must keep retrying admission instead of parking the command.
+func TestChannelInboundProcessorDoesNotDeferBusyPlatformTurn(t *testing.T) {
+	channelIdentitySvc := &fakeChannelIdentityService{channelIdentity: identities.ChannelIdentity{ID: "channelIdentity-platform"}}
+	chatSvc := &fakeChatService{resolveResult: route.ResolveConversationResult{BotID: "bot-platform", RouteID: "route-platform"}}
+	gateway := &deferredFakeChatGateway{fakeChatGateway: fakeChatGateway{
+		startErrors: []error{turn.ErrSessionBusy},
+		resp: fakeChatResponse{Messages: []turn.ModelMessage{
+			{Role: "assistant", Content: turn.NewTextContent("delivered after retry")},
+		}},
+	}}
+	processor := NewChannelInboundProcessor(slog.Default(), nil, chatSvc, chatSvc, gateway, channelIdentitySvc, &fakePolicyService{}, "", 0)
+	processor.SetACLService(&fakeChatACL{allowed: true})
+	processor.SetSessionEnsurer(&fakeSessionEnsurer{activeSession: SessionResult{ID: "session-platform"}})
+	sender := &fakeReplySender{}
+	msg := channel.InboundMessage{
+		BotID: "bot-platform", Channel: channel.ChannelType("feishu"), ReplyTarget: "target-platform",
+		Message: channel.Message{ID: "msg-platform", Text: "ordinary message"}, Sender: channel.Identity{SubjectID: "ext-platform"},
+		Conversation: channel.Conversation{ID: "chat-platform", Type: channel.ConversationTypePrivate},
+	}
+	if err := processor.HandleInbound(context.Background(), channel.ChannelConfig{TeamID: "team-test", BotID: msg.BotID, ChannelType: msg.Channel}, msg, sender); err != nil {
+		t.Fatalf("HandleInbound() error = %v", err)
+	}
+	if len(gateway.deferred) != 0 {
+		t.Fatalf("platform turn was parked in the follow-up queue: %#v", gateway.deferred)
+	}
+	if len(gateway.startReqs) != 2 {
+		t.Fatalf("StartTurn calls = %d, want a retry after busy", len(gateway.startReqs))
+	}
+	if len(sender.sent) != 1 || sender.sent[0].Message.PlainText() != "delivered after retry" {
+		t.Fatalf("outbound replies = %#v, want the model reply", sender.sent)
 	}
 }
 

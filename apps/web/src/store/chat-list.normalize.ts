@@ -129,6 +129,8 @@ export function skillActivationTextFromRaw(text: string, activation: UISkillActi
   return matchesSkill ? rest.join(' ').trim() : ''
 }
 
+const turnRoleRank: Record<ChatMessage['role'], number> = { user: 0, assistant: 1, system: 2 }
+
 export function sortChatMessages(items: ChatMessage[]): ChatMessage[] {
   return [...items].sort((a, b) => {
     // Turn positions are the authoritative order once both sides carry one;
@@ -136,6 +138,13 @@ export function sortChatMessages(items: ChatMessage[]): ChatMessage[] {
     const ap = a.turnPosition
     const bp = b.turnPosition
     if (ap !== undefined && bp !== undefined && ap !== bp) return ap - bp
+    // Inside one turn the request precedes the reply. Rows of a turn are
+    // persisted together at step commit and share a timestamp, so neither
+    // timestamps nor ids can order them.
+    const aTurn = a.turnId?.trim() ?? ''
+    if (aTurn && aTurn === (b.turnId?.trim() ?? '') && a.role !== b.role) {
+      return turnRoleRank[a.role] - turnRoleRank[b.role]
+    }
     const at = Date.parse(a.timestamp)
     const bt = Date.parse(b.timestamp)
     if (!Number.isNaN(at) && !Number.isNaN(bt) && at !== bt) return at - bt
