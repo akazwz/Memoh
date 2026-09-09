@@ -1,15 +1,13 @@
 import { execFile } from 'node:child_process'
 import * as fs from 'node:fs/promises'
-import { chmod, mkdtemp, readdir, realpath, rm, stat, writeFile } from 'node:fs/promises'
-import { tmpdir, userInfo } from 'node:os'
+import { mkdtemp, readdir, realpath, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { promisify } from 'node:util'
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { checkDirectory, checkExecutable, readPrivateFile, writeFileAtomic } from '../src/secure-files'
-import { secureWindowsDirectory } from '../src/daemon/windows'
-import { spawnCommand } from '../src/daemon/types'
+import { readPrivateFile, writeFileAtomic } from '../src/secure-files'
 import { protectWindowsDirectory, protectWindowsFile } from '../src/windows-file-security'
 
 vi.mock('node:fs/promises', async importOriginal => ({
@@ -31,8 +29,6 @@ describe('atomic credential writes', () => {
     const directory = await mkdtemp(join(tmpdir(), 'memoh-acl-repeat-'))
     directories.push(directory)
     const file = join(directory, 'credential')
-    await secureWindowsDirectory(directory, spawnCommand)
-    await secureWindowsDirectory(directory, spawnCommand)
     await protectWindowsDirectory(directory)
     await protectWindowsDirectory(directory)
     await writeFile(file, 'test credential')
@@ -42,7 +38,7 @@ describe('atomic credential writes', () => {
   }, 120_000)
 
   it.runIf(process.platform === 'darwin')('creates the file without inherited read access before writing any bytes', async () => {
-    const path = await executable()
+    const path = await credentialFile()
     const parent = dirname(path)
     const command = promisify(execFile)
     await command('/bin/chmod', ['+a', 'everyone allow read,execute,file_inherit,directory_inherit', parent])
@@ -71,66 +67,25 @@ describe('atomic credential writes', () => {
     expect(privateCreationObserved).toBe(true)
     expect(await readPrivateFile(path)).toBe('private enrollment')
     expect(await aclLines(parent)).toEqual(parentACL)
-    expect(await readdir(parent)).toEqual(['node'])
+    expect(await readdir(parent)).toEqual(['credential'])
   })
 
   it('preserves the committed destination and removes staging after rename fails', async () => {
-    const path = await executable()
+    const path = await credentialFile()
     const parent = dirname(path)
     const destination = join(parent, 'existing-directory')
     await fs.mkdir(destination)
     await writeFile(join(destination, 'keep'), 'old state')
     await expect(writeFileAtomic(destination, 'new state', 0o600)).rejects.toThrow()
     expect(await fs.readFile(join(destination, 'keep'), 'utf8')).toBe('old state')
-    expect((await readdir(parent)).sort()).toEqual(['existing-directory', 'node'])
+    expect((await readdir(parent)).sort()).toEqual(['credential', 'existing-directory'])
   })
 })
 
-async function executable(): Promise<string> {
-  const directory = await mkdtemp(join(await realpath(tmpdir()), 'memoh-executable-test-'))
+async function credentialFile(): Promise<string> {
+  const directory = await mkdtemp(join(await realpath(tmpdir()), 'memoh-credential-test-'))
   directories.push(directory)
-  const path = join(directory, 'node')
-  await writeFile(path, '#!/bin/sh\nexit 0\n', { mode: 0o755 })
+  const path = join(directory, 'credential')
+  await writeFile(path, 'old credential', { mode: 0o600 })
   return path
 }
-
-describe('service executable trust', () => {
-  it.runIf(process.platform !== 'win32')('rejects an executable writable by another user', async () => {
-    const path = await executable()
-    await expect(checkExecutable(path)).resolves.toBeUndefined()
-    await chmod(path, 0o777)
-    await expect(checkExecutable(path)).rejects.toThrow('not a trusted regular file')
-  })
-
-  it.runIf(process.platform === 'darwin')('rejects a writable file ACL even when mode bits are safe', async () => {
-    const path = await executable()
-    await promisify(execFile)('/bin/chmod', ['+a', 'everyone allow write', path])
-    expect((await stat(path)).mode & 0o022).toBe(0)
-    await expect(checkExecutable(path)).rejects.toThrow('writable extended ACL')
-  })
-
-  it.runIf(process.platform === 'darwin')('allows read-only executable ACLs', async () => {
-    const path = await executable()
-    await promisify(execFile)('/bin/chmod', ['+a', 'everyone allow read,execute', path])
-    await expect(checkExecutable(path)).resolves.toBeUndefined()
-  })
-
-  it.runIf(process.platform !== 'win32')('accepts a package manager prefix that is group-writable or owned by another account', async () => {
-    // Homebrew keeps its Cellar admin-writable; a shared /usr/local belongs to whoever installed it.
-    const path = await executable()
-    await chmod(dirname(path), 0o775)
-    await expect(checkExecutable(path)).resolves.toBeUndefined()
-    const rootOwned = await realpath('/bin/sh')
-    await expect(checkExecutable(rootOwned)).resolves.toBeUndefined()
-  })
-
-  it.runIf(process.platform === 'darwin')('ignores ACL entries the user granted to themselves', async () => {
-    const path = await executable()
-    await promisify(execFile)('/bin/chmod', ['+a', `${userInfo().username} allow write`, path])
-    await promisify(execFile)('/bin/chmod', ['+a', `${userInfo().username} allow write,delete`, dirname(path)])
-    await expect(checkExecutable(path)).resolves.toBeUndefined()
-    await expect(checkDirectory(dirname(path))).resolves.toBeUndefined()
-    await promisify(execFile)('/bin/chmod', ['+a', 'group:staff allow write', dirname(path)])
-    await expect(checkDirectory(dirname(path))).rejects.toThrow('writable extended ACL')
-  })
-})

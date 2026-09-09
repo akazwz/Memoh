@@ -2,7 +2,7 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { randomUUID } from 'node:crypto'
 import { constants } from 'node:fs'
-import { access, chmod, lstat, mkdir, open, realpath, rename, rm } from 'node:fs/promises'
+import { chmod, lstat, mkdir, open, realpath, rename, rm } from 'node:fs/promises'
 import { userInfo } from 'node:os'
 import { dirname, join, parse, resolve } from 'node:path'
 import { checkWindowsAccess, protectWindowsDirectory, protectWindowsFile } from './windows-file-security'
@@ -123,21 +123,4 @@ export async function writeFileAtomic(path: string, content: string | Uint8Array
 
 export function errorCode(error: unknown): string | undefined {
   return error && typeof error === 'object' && 'code' in error ? String(error.code) : undefined
-}
-
-// Executables are whatever Node the user's shell already trusts, and package
-// managers keep them in group-writable prefixes (Homebrew's Cellar is
-// admin-writable, shared /usr/local installs belong to another account). Only
-// the file itself must be immune to rewriting by everyone else; the managed
-// directory chain is covered by the credential and manifest checks.
-export async function checkExecutable(path: string): Promise<void> {
-  const info = await lstat(path)
-  if (!info.isFile() || info.isSymbolicLink() || (process.platform !== 'win32' && (info.mode & 0o002) !== 0)) {
-    throw new Error(`runtime executable is not a trusted regular file: ${path}`)
-  }
-  await access(path, constants.R_OK | (process.platform === 'win32' ? 0 : constants.X_OK))
-  if (process.platform === 'win32') await checkWindowsAccess(path, false)
-  if (process.platform === 'darwin' && await grantsOthers([path], fileWriteRights)) {
-    throw new Error(`runtime executable has a writable extended ACL: ${path}`)
-  }
 }

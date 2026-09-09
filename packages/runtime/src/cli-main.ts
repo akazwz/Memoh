@@ -1,19 +1,16 @@
-import { appendFile, mkdir, realpath, rm } from 'node:fs/promises'
+import { access, appendFile, mkdir } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
 
 import type { RuntimeClientConfig } from './config'
-import { createRuntimeServiceManager, spawnCommand, type CommandRunner } from './daemon'
-import { installRuntime, validateInstalledProgram, waitForService, withServiceLock } from './daemon/installation'
-import { secureWindowsDirectory } from './daemon/windows'
+import { createRuntimeServiceManager, findNodeExecutable, serviceExecutablePath, spawnCommand, waitForService, type CommandRunner } from './daemon'
 import {
-  normalizeRuntimeEnrollment, parseBooleanEnvironment, readInstallManifest,
+  normalizeRuntimeEnrollment, parseBooleanEnvironment,
   readRuntimeEnrollment, readRuntimeEnrollmentIfExists, resolveRuntimePaths,
   sameEnrollment, writeRuntimeEnrollment, type RuntimeEnrollment,
 } from './runtime-config'
-import { checkDirectory, checkExecutable, ensureDirectory } from './secure-files'
 import { RuntimeSession, type RuntimeSessionOptions } from './session'
 import { runtimeClientVersion } from './version'
 
@@ -26,14 +23,10 @@ export interface CLIContext {
   platform: NodeJS.Platform
   env: NodeJS.ProcessEnv
   home: string
-  nodePath: string
   entryPath: string
-  protoPath: string
   uid?: number
   runner: CommandRunner
   createSession(config: RuntimeClientConfig, options: RuntimeSessionOptions): ManagedRuntimeSession
-  pollIntervalMs?: number
-  timeoutMs?: number
   stdout(message: string): void
   stderr(message: string): void
 }
@@ -49,8 +42,8 @@ type Values = Record<string, string | boolean | undefined>
 export async function runCLI(args: string[], overrides: Partial<CLIContext> = {}): Promise<number> {
   const entryPath = overrides.entryPath ?? fileURLToPath(import.meta.url)
   const context: CLIContext = {
-    platform: process.platform, env: process.env, home: homedir(), nodePath: process.execPath,
-    entryPath, protoPath: join(dirname(entryPath), 'bridge.proto'), uid: process.getuid?.(),
+    platform: process.platform, env: process.env, home: homedir(),
+    entryPath, uid: process.getuid?.(),
     runner: spawnCommand, createSession: (config, options) => new RuntimeSession(config, options),
     stdout: message => console.log(message), stderr: message => console.error(message), ...overrides,
   }
@@ -127,20 +120,16 @@ async function enroll(args: string[], context: CLIContext): Promise<number> {
   assertManagedPaths(context)
   const paths = resolveRuntimePaths({ home: context.home })
   const enrollment = await resolveEnrollment(values, context)
-  await ensureDirectory(paths.controlHome)
-  await withServiceLock(paths, async () => {
-    // --replace is also the explicit repair path for a malformed saved file.
-    if (!values.replace) {
-      let current: RuntimeEnrollment | undefined
-      try {
-        current = await readRuntimeEnrollmentIfExists(paths.configPath, context.home)
-      } catch (error) {
-        throw new Error(`${formatCLIError(error)}; pass --replace to overwrite it`)
-      }
-      if (current && !sameEnrollment(current, enrollment)) throw new Error('saved enrollment differs; pass --replace to replace it')
+  if (!values.replace) {
+    let current: RuntimeEnrollment | undefined
+    try {
+      current = await readRuntimeEnrollmentIfExists(paths.configPath, context.home)
+    } catch (error) {
+      throw new Error(`${formatCLIError(error)}; pass --replace to overwrite it`)
     }
-    await writeRuntimeEnrollment(paths.configPath, enrollment)
-  })
+    if (current && !sameEnrollment(current, enrollment)) throw new Error('saved enrollment differs; pass --replace to replace it')
+  }
+  await writeRuntimeEnrollment(paths.configPath, enrollment)
   context.stdout(`saved enrollment to ${paths.configPath}; restart a running service to apply it`)
   return 0
 }
@@ -155,66 +144,52 @@ async function service(args: string[], context: CLIContext): Promise<number> {
   const { values } = parseArgs({ args: rest, strict: true, options: {
     help: { type: 'boolean', short: 'h' },
     ...(action === 'status' ? { json: { type: 'boolean' as const } } : {}),
-    ...(action === 'uninstall' ? { purge: { type: 'boolean' as const } } : {}),
   } })
   if (values.help) {
-    context.stdout(`Usage: memoh-runtime service ${action}${action === 'uninstall' ? ' [--purge]' : action === 'status' ? ' [--json]' : ''}`)
+    context.stdout(`Usage: memoh-runtime service ${action}${action === 'status' ? ' [--json]' : ''}`)
     return 0
   }
   assertManagedPaths(context)
   const paths = resolveRuntimePaths({ home: context.home })
   const manager = createRuntimeServiceManager({ platform: context.platform, paths, runner: context.runner, uid: context.uid })
-  const options = { paths, manager, platform: context.platform, nodePath: context.nodePath,
-    environmentPath: context.env.PATH, sources: { entryPath: context.entryPath, protoPath: context.protoPath },
-    pollIntervalMs: context.pollIntervalMs, timeoutMs: context.timeoutMs,
-    secureDirectory: context.platform === 'win32' ? (path: string) => secureWindowsDirectory(path, context.runner) : undefined,
-  }
   if (action === 'status') {
     const status = await manager.status()
     context.stdout(values.json ? JSON.stringify(status) : `Memoh Runtime service: ${status.state} (${status.backend})${status.detail ? `: ${status.detail}` : ''}`)
     return status.state === 'running' ? 0 : 1
   }
-  await ensureDirectory(paths.controlHome)
-  await withServiceLock(paths, async () => {
-    switch (action) {
-      case 'install': {
-        const nodePath = await realpath(context.nodePath)
-        await checkExecutable(nodePath)
-        await installRuntime({ ...options, nodePath })
-        break
-      }
-      case 'stop':
-        await manager.stop()
-        await waitForService(options, 'stopped')
-        break
-      case 'uninstall':
-        await manager.uninstall()
-        await waitForService(options, 'not-installed')
-        await rm(paths.manifestPath, { force: true })
-        if (values.purge) {
-          await checkDirectory(paths.runtimeHome)
-          await rm(paths.versionsDir, { recursive: true, force: true })
-          await rm(paths.logsDir, { recursive: true, force: true })
-          await rm(paths.serviceDir, { recursive: true, force: true })
-        }
-        break
-      case 'start':
-      case 'restart': {
-        const installation = await readInstallManifest(paths.manifestPath)
-        if (installation?.state !== 'installed') throw new Error('service installation is incomplete; run service install first')
-        if (installation.spec.configPath !== paths.configPath) throw new Error('service configuration is invalid; run service install again')
-        await validateInstalledProgram(installation.spec.entryPath, installation.spec.nodePath)
-        await readRuntimeEnrollment(paths.configPath, context.home)
-        if (action === 'restart') {
-          await manager.stop()
-          await waitForService(options, 'stopped')
-        }
-        await manager.start()
-        await waitForService(options, 'running')
-        break
-      }
+  switch (action) {
+    case 'install': {
+      const nodePath = await findNodeExecutable(context.env.PATH, context.platform)
+      await access(context.entryPath)
+      await access(join(dirname(context.entryPath), 'bridge.proto'))
+      await manager.stop()
+      await waitForService(manager, 'stopped')
+      await manager.register({
+        nodePath, entryPath: context.entryPath, configPath: paths.configPath,
+        logsDir: paths.logsDir, workingDirectory: context.home,
+        servicePath: serviceExecutablePath(nodePath, context.env.PATH, context.platform),
+      })
+      break
     }
-  })
+    case 'stop':
+      await manager.stop()
+      await waitForService(manager, 'stopped')
+      break
+    case 'uninstall':
+      await manager.uninstall()
+      await waitForService(manager, 'not-installed')
+      break
+    case 'start':
+    case 'restart':
+      await readRuntimeEnrollment(paths.configPath, context.home)
+      if (action === 'restart') {
+        await manager.stop()
+        await waitForService(manager, 'stopped')
+      }
+      await manager.start()
+      await waitForService(manager, 'running')
+      break
+  }
   context.stdout(action === 'install' ? 'installed Memoh Runtime service (stopped); run service start to connect'
     : action === 'uninstall' ? 'uninstalled Memoh Runtime service; saved enrollment was retained'
       : action === 'stop' ? 'stopped Memoh Runtime service; it starts again at the next login unless you run service uninstall'

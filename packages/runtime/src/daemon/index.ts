@@ -1,65 +1,15 @@
-import { randomUUID } from 'node:crypto'
-import { readFile, rm } from 'node:fs/promises'
-import { join } from 'node:path'
+import { access, stat } from 'node:fs/promises'
+import { constants } from 'node:fs'
+import { isAbsolute, join } from 'node:path'
+import { setTimeout as sleep } from 'node:timers/promises'
 
-import {
-  ensureDirectory,
-  writeFileAtomic,
-  type RuntimePaths,
-} from '../runtime-config'
+import type { RuntimePaths } from '../runtime-config'
 import { createLaunchdServiceManager } from './launchd'
 import { createSystemdServiceManager } from './systemd'
-import {
-  serviceExecutablePath,
-  type CommandRunner,
-  type RuntimeServiceManager,
-  type RuntimeServiceSpec,
-} from './types'
+import type { CommandRunner, RuntimeServiceManager, RuntimeServiceState } from './types'
 import { createWindowsTaskServiceManager } from './windows'
 
 export * from './types'
-export { renderLaunchdPlist } from './launchd'
-export { renderSystemdUnit } from './systemd'
-export { renderWindowsTaskXML } from './windows'
-
-export interface RuntimeArtifactSources {
-  entryPath: string
-  protoPath: string
-}
-
-export interface StagedRuntimeArtifacts {
-  entryPath: string
-  protoPath: string
-  // macOS launches a named shell wrapper that execs the pinned Node binary.
-  launcherPath: string
-}
-
-export const runtimeLauncherName = 'Memoh Runtime'
-
-export async function stageRuntimeArtifacts(
-  paths: RuntimePaths,
-  version: string,
-  sources: RuntimeArtifactSources,
-  platform: NodeJS.Platform = process.platform,
-  nodePath = process.execPath,
-): Promise<StagedRuntimeArtifacts> {
-  const versionDirectory = join(paths.versionsDir, `${version}-${randomUUID()}`)
-  await ensureDirectory(versionDirectory)
-  try {
-    const entryPath = join(versionDirectory, 'cli.mjs')
-    const protoPath = join(versionDirectory, 'bridge.proto')
-    await copyReplacing(sources.entryPath, entryPath, 0o700)
-    await copyReplacing(sources.protoPath, protoPath, 0o600)
-    if (platform !== 'darwin') return { entryPath, protoPath, launcherPath: entryPath }
-    const launcherPath = join(versionDirectory, runtimeLauncherName)
-    const quote = (value: string) => `'${value.replaceAll('\'', '\'\\\'\'')}'`
-    await writeFileAtomic(launcherPath, `#!/bin/sh\nexec ${quote(nodePath)} ${quote(entryPath)} "$@"\n`, 0o700)
-    return { entryPath, protoPath, launcherPath }
-  } catch (error) {
-    await rm(versionDirectory, { recursive: true, force: true })
-    throw error
-  }
-}
 
 export function createRuntimeServiceManager(options: {
   platform: NodeJS.Platform
@@ -68,37 +18,43 @@ export function createRuntimeServiceManager(options: {
   uid?: number
 }): RuntimeServiceManager {
   switch (options.platform) {
-    case 'darwin': {
+    case 'darwin':
       if (options.uid === undefined) throw new Error('launchd service installation requires a user ID')
       return createLaunchdServiceManager(options.paths, options.runner, options.uid)
-    }
     case 'linux':
       return createSystemdServiceManager(options.paths, options.runner)
     case 'win32':
       return createWindowsTaskServiceManager(options.paths, options.runner)
     default:
-      throw new Error(`background service installation is not supported on ${options.platform}`)
+      throw new Error(`background services are not supported on ${options.platform}`)
   }
 }
 
-export function runtimeServiceSpec(options: {
-  paths: RuntimePaths
-  entryPath: string
-  nodePath: string
-  environmentPath?: string
-  platform?: NodeJS.Platform
-}): RuntimeServiceSpec {
-  return {
-    entryPath: options.entryPath,
-    configPath: options.paths.configPath,
-    nodePath: options.nodePath,
-    logsDir: options.paths.logsDir,
-    workingDirectory: options.paths.home,
-    servicePath: serviceExecutablePath(options.nodePath, options.environmentPath, options.platform),
+// Keep the package manager's entry path, including symlinks. Resolving it to a
+// version-specific binary would break the service when that version is removed.
+export async function findNodeExecutable(envPath: string | undefined, platform: NodeJS.Platform): Promise<string> {
+  for (const directory of envPath?.split(platform === 'win32' ? ';' : ':') ?? []) {
+    if (!isAbsolute(directory)) continue
+    const path = join(directory, platform === 'win32' ? 'node.exe' : 'node')
+    try {
+      if (!(await stat(path)).isFile()) continue
+      await access(path, platform === 'win32' ? constants.R_OK : constants.X_OK)
+      return path
+    } catch { /* Try the next PATH entry. */ }
   }
+  throw new Error('Node was not found in PATH; install Node and rerun service install')
 }
 
-async function copyReplacing(source: string, destination: string, mode: number): Promise<void> {
-  const content = await readFile(source)
-  await writeFileAtomic(destination, content, mode)
+export async function waitForService(manager: RuntimeServiceManager, target: RuntimeServiceState): Promise<void> {
+  const deadline = Date.now() + 15_000
+  let observations = 0
+  do {
+    const { state } = await manager.status()
+    const matched = state === target || (target === 'stopped' && state === 'not-installed')
+    observations = matched ? observations + 1 : 0
+    // A process can appear briefly before exiting on a startup error.
+    if (observations >= (target === 'running' ? 2 : 1)) return
+    await sleep(250)
+  } while (Date.now() < deadline)
+  throw new Error(`runtime service did not reach ${target}; inspect the service logs`)
 }

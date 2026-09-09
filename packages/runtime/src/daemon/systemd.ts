@@ -1,4 +1,3 @@
-import { dirname, join } from 'node:path'
 import { rm } from 'node:fs/promises'
 
 import { nodeErrorCode, writeFileAtomic, type RuntimePaths } from '../runtime-config'
@@ -40,13 +39,9 @@ export function createSystemdServiceManager(paths: RuntimePaths, runner: Command
   )
   return {
     backend: 'systemd-user',
-    async validate(spec) {
-      const path = join(dirname(spec.entryPath), unitName)
-      await writeFileAtomic(path, renderSystemdUnit(spec), 0o600)
-      await requireCommand(runner, 'systemd-analyze', ['--user', 'verify', path])
-    },
     async register(spec) {
       await writeFileAtomic(paths.systemdUnitPath, renderSystemdUnit(spec), 0o600)
+      await requireCommand(runner, 'systemd-analyze', ['--user', 'verify', paths.systemdUnitPath])
       await run(['daemon-reload'])
       await run(['enable', paths.systemdUnitPath])
     },

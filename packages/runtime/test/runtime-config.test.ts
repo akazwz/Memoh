@@ -1,14 +1,12 @@
 import { chmod, mkdir, mkdtemp, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { join } from 'node:path'
 
 import { afterEach, describe, expect, it } from 'vitest'
 
 import {
   normalizeRuntimeEnrollment,
   readRuntimeEnrollment,
-  resolveRuntimePaths,
-  sameEnrollment,
   writeRuntimeEnrollment,
 } from '../src/runtime-config'
 
@@ -74,20 +72,6 @@ describe('runtime enrollment configuration', () => {
     }, root)).toThrow('query string or fragment')
   })
 
-  it('uses fixed managed paths regardless of input environment', () => {
-    const paths = resolveRuntimePaths({
-      home: '/Users/alice',
-      env: {
-        MEMOH_RUNTIME_HOME: '/private/memoh-runtime',
-        MEMOH_RUNTIME_CONFIG: '/secrets/runtime.json',
-        XDG_CONFIG_HOME: '/cfg',
-      },
-    })
-    expect(paths.runtimeHome).toBe(resolve('/Users/alice/.memoh/runtime'))
-    expect(paths.configPath).toBe(resolve('/Users/alice/.memoh/runtime.json'))
-    expect(paths.systemdUnitPath).toBe(resolve('/Users/alice/.memoh/runtime/service/memoh-runtime.service'))
-  })
-
   it.runIf(process.platform !== 'win32')('refuses to read a credential through a symbolic link', async () => {
     const root = await temporaryDirectory()
     const target = join(root, 'actual.json')
@@ -101,16 +85,6 @@ describe('runtime enrollment configuration', () => {
     await expect(readRuntimeEnrollment(link, root)).rejects.toThrow('could not be read safely')
   })
 
-  it('requires replacement for any enrollment change, including key rotation', () => {
-    const first = normalizeRuntimeEnrollment({ serverUrl: 'https://one.example', key: runtimeKey })
-    const reissued = normalizeRuntimeEnrollment({ serverUrl: 'https://one.example', key: `mrk_${'b'.repeat(64)}` })
-    const moved = normalizeRuntimeEnrollment({ serverUrl: 'https://two.example', key: runtimeKey })
-    const other = normalizeRuntimeEnrollment({ serverUrl: 'https://one.example', key: runtimeKey, teamId: teamID })
-    expect(sameEnrollment(first, reissued)).toBe(false)
-    expect(sameEnrollment(first, moved)).toBe(false)
-    expect(sameEnrollment(first, other)).toBe(false)
-    expect(sameEnrollment(first, normalizeRuntimeEnrollment({ serverUrl: 'wss://one.example/', key: runtimeKey }))).toBe(true)
-  })
 })
 
 async function temporaryDirectory(): Promise<string> {

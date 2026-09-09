@@ -3,7 +3,6 @@ import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 
 import { ensureDirectory, readPrivateFile, writeFileAtomic } from './secure-files'
-import type { RuntimeServiceSpec } from './daemon/types'
 export { ensureDirectory, writeFileAtomic } from './secure-files'
 
 import { normalizeRuntimeTeamId, validateConfig } from './config'
@@ -21,21 +20,12 @@ export interface RuntimeEnrollment {
   insecureLocalhost: boolean
 }
 
-export interface RuntimeInstallManifest {
-  schemaVersion: 1
-  state: 'prepared' | 'installed'
-  spec: RuntimeServiceSpec
-}
-
 export interface RuntimePaths {
   home: string
   runtimeHome: string
   configPath: string
-  versionsDir: string
-  manifestPath: string
   logsDir: string
   serviceDir: string
-  controlHome: string
   launchdPlistPath: string
   systemdUnitPath: string
   windowsTaskXMLPath: string
@@ -43,7 +33,6 @@ export interface RuntimePaths {
 
 export interface RuntimePathOptions {
   home?: string
-  env?: NodeJS.ProcessEnv
 }
 
 export function resolveRuntimePaths(options: RuntimePathOptions = {}): RuntimePaths {
@@ -55,9 +44,6 @@ export function resolveRuntimePaths(options: RuntimePathOptions = {}): RuntimePa
     home,
     runtimeHome,
     configPath,
-    versionsDir: join(runtimeHome, 'versions'),
-    controlHome: runtimeHome,
-    manifestPath: join(runtimeHome, 'install.json'),
     logsDir: join(runtimeHome, 'logs'),
     serviceDir,
     launchdPlistPath: join(home, 'Library', 'LaunchAgents', 'ai.memoh.runtime.plist'),
@@ -155,31 +141,6 @@ export async function writeRuntimeEnrollment(path: string, enrollment: RuntimeEn
   const normalized = normalizeRuntimeEnrollment(enrollment)
   await ensureDirectory(dirname(path))
   await writeFileAtomic(path, `${JSON.stringify(normalized, null, 2)}\n`, 0o600)
-}
-
-export async function readInstallManifest(path: string): Promise<RuntimeInstallManifest | undefined> {
-  let raw: string
-  try {
-    raw = await readPrivateFile(path)
-  } catch (error) {
-    if (nodeErrorCode(error) === 'ENOENT') return undefined
-    throw new Error(`runtime install manifest could not be read at ${path}`)
-  }
-  try {
-    const parsed = JSON.parse(raw) as Partial<RuntimeInstallManifest> | null
-    if (!parsed || parsed.schemaVersion !== 1 || !['prepared', 'installed'].includes(parsed.state ?? '') || !parsed.spec
-      || !['entryPath', 'configPath', 'nodePath', 'logsDir', 'workingDirectory', 'servicePath'].every(key => typeof (parsed.spec as unknown as Record<string, unknown>)[key] === 'string')) {
-      throw new Error('invalid manifest')
-    }
-    return parsed as RuntimeInstallManifest
-  } catch {
-    throw new Error(`runtime install manifest at ${path} is invalid`)
-  }
-}
-
-export async function writeInstallManifest(path: string, manifest: RuntimeInstallManifest): Promise<void> {
-  await ensureDirectory(dirname(path))
-  await writeFileAtomic(path, `${JSON.stringify(manifest, null, 2)}\n`, 0o600)
 }
 
 export function sameEnrollment(left: RuntimeEnrollment, right: RuntimeEnrollment): boolean {

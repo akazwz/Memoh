@@ -20,7 +20,6 @@ export interface RuntimeServiceSpec {
 
 export interface RuntimeServiceManager {
   readonly backend: string
-  validate?(spec: RuntimeServiceSpec): Promise<void>
   register(spec: RuntimeServiceSpec): Promise<void>
   start(): Promise<void>
   stop(): Promise<void>

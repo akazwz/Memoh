@@ -24,6 +24,7 @@ export function renderLaunchdPlist(spec: RuntimeServiceSpec): string {
   <string>${xmlEscape(launchdLabel)}</string>
   <key>ProgramArguments</key>
   <array>
+    <string>${xmlEscape(spec.nodePath)}</string>
     <string>${xmlEscape(spec.entryPath)}</string>
     <string>run</string>
     <string>--config</string>
@@ -92,15 +93,10 @@ export function createLaunchdServiceManager(
   }
   return {
     backend: 'launchd-user',
-    async validate(spec) {
-      await ensureDirectory(spec.logsDir)
-      const path = `${spec.entryPath}.plist`
-      await writeFileAtomic(path, renderLaunchdPlist(spec), 0o600)
-      await requireCommand(runner, '/usr/bin/plutil', ['-lint', path])
-    },
     async register(spec) {
       await ensureDirectory(spec.logsDir)
       await writeFileAtomic(paths.launchdPlistPath, renderLaunchdPlist(spec), 0o600)
+      await requireCommand(runner, '/usr/bin/plutil', ['-lint', paths.launchdPlistPath])
     },
     async start() {
       await bootstrapIfUnloaded()
