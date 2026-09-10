@@ -6,6 +6,7 @@ import { parseArgs } from 'node:util'
 
 import type { RuntimeClientConfig } from './config'
 import { createRuntimeServiceManager, findNodeExecutable, serviceExecutablePath, spawnCommand, waitForService, type CommandRunner } from './daemon'
+import { withEnrollmentLock } from './enrollment-lock'
 import {
   normalizeRuntimeEnrollment, parseBooleanEnvironment,
   readRuntimeEnrollment, readRuntimeEnrollmentIfExists, resolveRuntimePaths,
@@ -120,16 +121,18 @@ async function enroll(args: string[], context: CLIContext): Promise<number> {
   assertManagedPaths(context)
   const paths = resolveRuntimePaths({ home: context.home })
   const enrollment = await resolveEnrollment(values, context)
-  if (!values.replace) {
-    let current: RuntimeEnrollment | undefined
-    try {
-      current = await readRuntimeEnrollmentIfExists(paths.configPath, context.home)
-    } catch (error) {
-      throw new Error(`${formatCLIError(error)}; pass --replace to overwrite it`)
+  await withEnrollmentLock(paths.configPath, async () => {
+    if (!values.replace) {
+      let current: RuntimeEnrollment | undefined
+      try {
+        current = await readRuntimeEnrollmentIfExists(paths.configPath, context.home)
+      } catch (error) {
+        throw new Error(`${formatCLIError(error)}; pass --replace to overwrite it`)
+      }
+      if (current && !sameEnrollment(current, enrollment)) throw new Error('saved enrollment differs; pass --replace to replace it')
     }
-    if (current && !sameEnrollment(current, enrollment)) throw new Error('saved enrollment differs; pass --replace to replace it')
-  }
-  await writeRuntimeEnrollment(paths.configPath, enrollment)
+    await writeRuntimeEnrollment(paths.configPath, enrollment)
+  })
   context.stdout(`saved enrollment to ${paths.configPath}; restart a running service to apply it`)
   return 0
 }

@@ -16,6 +16,14 @@ memoh-runtime service start
 Changing an existing connection or repairing a malformed file requires
 `--replace`. Restart a running service to apply the new configuration.
 
+并发执行 `enroll` 时，CLI 使用 `~/.memoh/runtime.json.lock/` 串行完成
+读取、比较与写入，最多等待 30 秒。正常结束或报错都会释放锁；若进程被强制
+终止而留下锁目录，请检查其中 `owner.json` 的 PID，确认原进程已经退出后
+再删除锁目录并重试。不要删除仍有进程持有的锁。
+
+macOS 上已有配置和目录的直接、继承 ACL 都会检查；向其他账户开放凭证读取
+或目录写入权限时会拒绝操作，CLI 不会自动修改这些已有权限。
+
 `run` reads the saved configuration and runs in the foreground. Connection flags
 or environment variables make a temporary connection without saving it.
 `--config <file>` reads that file instead and ignores connection environment

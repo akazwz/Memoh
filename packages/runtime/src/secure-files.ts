@@ -33,7 +33,12 @@ export async function checkDirectory(path: string): Promise<void> {
 async function grantsOthers(paths: string[], rights: string[]): Promise<boolean> {
   const { stdout } = await promisify(execFile)('/bin/ls', ['-lde', ...paths])
   const self = userInfo().username
-  for (const [, kind, principal, granted] of stdout.matchAll(/^\s*\d+:\s+(user|group):(\S+)\s+allow\s+(\S+)/gm)) {
+  for (const line of stdout.split('\n').filter(line => /^\s*\d+:/.test(line))) {
+    // ls 会把继承标记放在主体与 allow/deny 之间；不能忽略这类条目。
+    const entry = line.match(/^\s*\d+:\s+(user|group):(.+?)\s+(?:inherited\s+)?(allow|deny)\s+(\S+)\s*$/)
+    if (!entry) throw new Error(`could not verify macOS ACL entry for runtime path: ${paths.join(', ')}`)
+    const [, kind, principal, access, granted] = entry
+    if (access === 'deny') continue
     if (kind === 'user' && principal === self) continue
     if (granted.split(',').some(right => rights.includes(right))) return true
   }
