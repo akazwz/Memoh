@@ -925,9 +925,10 @@ func (m *Manager) LivenessGeneration(ctx context.Context) (string, error) {
 // only in whether they carry a fencing token, and that difference should be
 // visible at the call site instead of being a positional zero.
 type runStart struct {
-	botID     string
-	sessionID string
-	runID     string
+	configurationOnly bool
+	botID             string
+	sessionID         string
+	runID             string
 	// fencingToken is the durable ownership token from the ledger claim. Zero
 	// means this reservation has no ledger row, so it gets no lease index entry
 	// either: there would be nothing for the reaper to transition.
@@ -1082,6 +1083,7 @@ func (m *Manager) startRun(ctx context.Context, start runStart) (RunHandle, Curs
 			RunID:               runID,
 			TurnID:              start.turnID,
 			InvocationID:        start.invocationID,
+			ConfigurationOnly:   start.configurationOnly,
 			Generation:          runGeneration,
 			FencingToken:        start.fencingToken,
 			Status:              RunStatusAdmitting,
