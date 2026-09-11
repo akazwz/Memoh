@@ -36,13 +36,14 @@ func NewConnectorsHandler(
 func (h *ConnectorsHandler) Register(e *echo.Echo) {
 	e.GET("/connectors/catalog", h.ListCatalog)
 
-	// Connections are created and removed through Apps
-	// (/bots/:bot_id/packages); here they are only listed, toggled and
-	// reauthorized.
+	// Connections are created through Apps (/bots/:bot_id/apps); here they
+	// are listed, toggled, reauthorized and disconnected. App updates only
+	// unlink a connection, so disconnecting is the user's explicit action.
 	group := e.Group("/bots/:bot_id/connectors")
 	group.GET("", h.List)
 	group.GET("/:connection_id", h.Get)
 	group.PATCH("/:connection_id", h.SetEnabled)
+	group.DELETE("/:connection_id", h.Delete)
 	group.POST("/:connection_id/reauth", h.Reauthorize)
 }
 
@@ -165,6 +166,34 @@ func (h *ConnectorsHandler) SetEnabled(c echo.Context) error {
 	if err := h.service.SetEnabled(
 		c.Request().Context(), botID, strings.TrimSpace(c.Param("connection_id")), *request.Enabled,
 	); err != nil {
+		return connectorHTTPError(err)
+	}
+	return c.NoContent(http.StatusNoContent)
+}
+
+// Delete godoc
+// @Summary Disconnect a connector
+// @Description Delete the Connect-It credential, remove its bot binding and unlink it from every App that referenced it; those Apps ask for authorization again.
+// @Tags connectors
+// @Param bot_id path string true "Bot ID"
+// @Param connection_id path string true "Connect-It connection ID"
+// @Success 204
+// @Failure 400 {object} apperror.Problem
+// @Failure 403 {object} ErrorResponse
+// @Failure 404 {object} apperror.Problem
+// @Failure 409 {object} apperror.Problem
+// @Failure 500 {object} apperror.Problem
+// @Failure 502 {object} apperror.Problem
+// @Failure 503 {object} apperror.Problem
+// @Router /bots/{bot_id}/connectors/{connection_id} [delete].
+func (h *ConnectorsHandler) Delete(c echo.Context) error {
+	botID, err := h.authorize(c)
+	if err != nil {
+		return err
+	}
+	ctx := c.Request().Context()
+	connectionID := strings.TrimSpace(c.Param("connection_id"))
+	if err := h.service.Delete(ctx, botID, connectionID); err != nil {
 		return connectorHTTPError(err)
 	}
 	return c.NoContent(http.StatusNoContent)

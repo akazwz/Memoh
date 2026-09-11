@@ -16,6 +16,8 @@ import {
   Trash2,
 } from 'lucide-vue-next'
 import {
+  Alert,
+  AlertDescription,
   Button,
   DropdownMenu,
   DropdownMenuContent,
@@ -44,7 +46,7 @@ import { useWorkspaceDependencyText } from '@/composables/useWorkspaceDependency
 import DependencyRow from './dependency-row.vue'
 import { appPrimaryAction, type AppRowAction } from './app-actions'
 
-export type AppConnectorAction = 'authorize' | 'reauthorize'
+export type AppConnectorAction = 'authorize' | 'reauthorize' | 'disconnect'
 
 const props = withDefaults(defineProps<{
   item: AppItem
@@ -138,7 +140,7 @@ function dependencyName(dep: AppDependencyItem): string {
 
 <template>
   <div>
-    <header class="flex items-start gap-4">
+    <header class="flex flex-wrap items-start gap-4">
       <div :class="iconBoxClass">
         <SkillIcon
           v-if="item.icon"
@@ -161,7 +163,7 @@ function dependencyName(dep: AppDependencyItem): string {
           {{ name }}
         </h1>
       </div>
-      <div class="flex shrink-0 items-center gap-2">
+      <div class="flex w-full shrink-0 items-center justify-end gap-2 sm:w-auto">
         <Spinner v-if="inProgress" />
         <Button
           v-if="primary"
@@ -171,6 +173,15 @@ function dependencyName(dep: AppDependencyItem): string {
           @click="emit('action', primary.action)"
         >
           {{ t(primary.labelKey) }}
+        </Button>
+        <Button
+          v-if="item.status === 'failed' && canRemove"
+          size="sm"
+          variant="destructive"
+          :disabled="busy || readonly"
+          @click="emit('action', 'remove')"
+        >
+          {{ t('apps.action.remove') }}
         </Button>
         <DropdownMenu>
           <DropdownMenuTrigger as-child>
@@ -187,7 +198,7 @@ function dependencyName(dep: AppDependencyItem): string {
               <ExternalLink />
               {{ t('apps.action.open') }}
             </DropdownMenuItem>
-            <template v-if="canRemove">
+            <template v-if="canRemove && item.status !== 'failed'">
               <DropdownMenuSeparator />
               <DropdownMenuItem
                 variant="destructive"
@@ -206,8 +217,23 @@ function dependencyName(dep: AppDependencyItem): string {
     <p class="mt-8 max-w-4xl text-base leading-7 text-muted-foreground">
       {{ description || t('supermarket.noDescription') }}
     </p>
+    <Alert
+      v-if="item.status === 'failed'"
+      variant="destructive"
+      class="mt-4"
+    >
+      <AlertDescription>
+        {{ t('apps.progress.recoveryHint') }}
+        <p
+          v-if="item.last_error"
+          class="mt-2 break-all font-mono text-caption"
+        >
+          {{ item.last_error }}
+        </p>
+      </AlertDescription>
+    </Alert>
     <p
-      v-if="item.last_error && (item.status === 'failed' || item.status === 'partial')"
+      v-if="item.last_error && item.status === 'partial'"
       class="mt-2 break-all font-mono text-caption text-destructive"
     >
       {{ item.last_error }}
@@ -321,7 +347,7 @@ function dependencyName(dep: AppDependencyItem): string {
             class="flex items-center gap-2"
           >
             <Button
-              v-if="!connector.connection_id"
+              v-if="!connector.connection_id || !connector.connector"
               size="sm"
               variant="outline"
               :disabled="!connectorsEnabled || busy"
@@ -337,6 +363,15 @@ function dependencyName(dep: AppDependencyItem): string {
               @click="emit('connector', connector, 'reauthorize')"
             >
               {{ t('connectors.reauthorize') }}
+            </Button>
+            <Button
+              v-if="connector.connection_id && connector.connector"
+              size="sm"
+              variant="ghost"
+              :disabled="!connectorsEnabled || connectorPending.has(connector.connection_id)"
+              @click="emit('connector', connector, 'disconnect')"
+            >
+              {{ t('connectors.disconnect') }}
             </Button>
             <Switch
               v-if="connector.connector"

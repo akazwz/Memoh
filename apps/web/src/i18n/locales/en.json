@@ -352,7 +352,7 @@
     "people": "Members",
     "appearance": "Appearance",
     "keyboard": "Keyboard",
-    "supermarket": "App Store",
+    "supermarket": "Supermarket",
     "about": "About",
     "switchBot": "Switch bot",
     "manageBots": "Manage Bots"
@@ -3566,7 +3566,7 @@
     "colOutputTokens": "Output"
   },
   "supermarket": {
-    "title": "App Store",
+    "title": "Supermarket",
     "searchPlaceholder": "Search Apps...",
     "skillsSection": "Skills",
     "noResults": "No results found",
@@ -3644,7 +3644,7 @@
     "reauthorize": "Reauthorize",
     "disconnect": "Disconnect",
     "disconnectTitle": "Disconnect connector?",
-    "disconnectDescription": "This will remove {name} from the Bot and delete its stored connection.",
+    "disconnectDescription": "This deletes the stored {name} connection. Apps that use it will ask for authorization again.",
     "disconnected": "Connector disconnected",
     "disconnectFailed": "Failed to disconnect connector",
     "loadFailed": "Failed to load connectors",
@@ -3799,6 +3799,7 @@
     "components": "{count} component | {count} components",
     "workspaceNotRunningDescription": "Installing and updating Apps needs a running workspace. The list shows the last recorded state.",
     "action": {
+      "restore": "Restore installation",
       "install": "Install",
       "resume": "Continue setup",
       "update": "Update",
@@ -3838,6 +3839,7 @@
       }
     },
     "progress": {
+      "recoveryHint": "To continue a failed uninstall, choose Uninstall. Restore installation sets up the App again and may reinstall removed components.",
       "installing": "Installing {name}",
       "updating": "Updating {name}",
       "resuming": "Continuing setup of {name}",
@@ -3873,6 +3875,7 @@
       "skipped": "Skipped",
       "removed": "Removed",
       "kept": "Kept",
+      "unlinked": "Unlinked",
       "disconnected": "Disconnected",
       "updated": "Updated"
     },

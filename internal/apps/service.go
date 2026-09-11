@@ -66,6 +66,9 @@ type DependencyManager interface {
 	Install(ctx context.Context, botID, targetID, depID, version string, sink workspacedeps.LogSink) (workspacedeps.OperationResult, error)
 	Update(ctx context.Context, botID, targetID, depID, version string, sink workspacedeps.LogSink) (workspacedeps.OperationResult, error)
 	Remove(ctx context.Context, botID, targetID, depID string, sink workspacedeps.LogSink) (workspacedeps.OperationResult, error)
+	// EnsureRunning starts a stopped native workspace before a mutating
+	// step; remote targets are never started.
+	EnsureRunning(ctx context.Context, botID, targetID string) error
 }
 
 // ConnectorManager is the slice of *connectors.Service the service uses.
@@ -282,13 +285,13 @@ func (s *Service) materialize(ctx context.Context, botID, targetID string, relea
 	for _, depID := range release.Dependencies {
 		sink.Send(Event{Type: EventStep, Kind: KindDependency, ID: depID})
 		if err := s.store.AddDependencyRef(ctx, inst.ID, depID); err != nil {
-			return result, s.failInstallation(ctx, inst, fmt.Errorf("apps: record dependency reference %s: %w", depID, err))
+			return result, s.failInstallation(ctx, inst, fail("record dependency reference "+depID, err))
 		}
 		switch {
 		case s.dependencies == nil:
 			record(StepResult{Kind: KindDependency, ID: depID, Status: StepFailed, Error: ErrDependenciesUnavailable.Error()})
 		case statesErr != nil:
-			record(StepResult{Kind: KindDependency, ID: depID, Status: StepFailed, Error: statesErr.Error()})
+			record(StepResult{Kind: KindDependency, ID: depID, Status: StepFailed, Error: publicCause(statesErr)})
 		default:
 			entry, known := states[depID]
 			if known && dependencyPresent(entry) {
@@ -308,11 +311,11 @@ func (s *Service) materialize(ctx context.Context, botID, targetID string, relea
 	sink.Send(Event{Type: EventStep, Kind: KindSkills, ID: release.AppID})
 	tx, installed, err := s.skills.PublishSkills(ctx, botID, targetID, release, expectedRevision)
 	if err != nil {
-		return result, s.failInstallation(ctx, inst, err)
+		return result, s.failInstallation(ctx, inst, fail("publish Skills", err))
 	}
 	if _, err := s.store.SetRelease(ctx, botID, inst.ID, release.Revision, release.Version, releaseBytes); err != nil {
 		rollbackErr := tx.Rollback(ctx)
-		return result, s.failInstallation(ctx, inst, errors.Join(fmt.Errorf("apps: record release: %w", err), rollbackErr))
+		return result, s.failInstallation(ctx, inst, errors.Join(fail("record release", err), rollbackErr))
 	}
 	if err := tx.Commit(ctx); err != nil {
 		s.logger.Warn("cleanup replaced App Skills failed", slog.String("app_id", release.AppID), slog.Any("error", err))
@@ -328,7 +331,7 @@ func (s *Service) materialize(ctx context.Context, botID, targetID string, relea
 			connectionID = conn.ConnectionID
 		}
 		if err := s.store.UpsertConnectorRef(ctx, ConnectorRef{InstallationID: inst.ID, ConnectorType: ref.Type, ConnectionID: connectionID, Required: ref.Required}); err != nil {
-			return result, s.failInstallation(ctx, inst, fmt.Errorf("apps: record connector reference %s: %w", ref.Type, err))
+			return result, s.failInstallation(ctx, inst, fail("record connector reference "+ref.Type, err))
 		}
 		if connectionID != "" {
 			record(StepResult{Kind: KindConnector, ID: ref.Type, Status: StepLinked})
@@ -338,6 +341,12 @@ func (s *Service) materialize(ctx context.Context, botID, targetID string, relea
 			partial = true
 		}
 		record(StepResult{Kind: KindConnector, ID: ref.Type, Status: StepNeedsAuth})
+	}
+
+	// Cleanup is part of materialization so Install/Resume and same-release
+	// update retries all recover retained references before reporting done.
+	if err := s.pruneReferences(ctx, inst, release, sink, &result); err != nil {
+		return result, s.failInstallation(ctx, inst, err)
 	}
 
 	status := StatusInstalled
@@ -353,8 +362,12 @@ func (s *Service) materialize(ctx context.Context, botID, targetID string, relea
 	return result, nil
 }
 
+// failInstallation records a failed operation. last_error keeps only the
+// public description; the cause with its infrastructure detail is logged.
 func (s *Service) failInstallation(ctx context.Context, inst Installation, cause error) error {
-	if _, err := s.store.SetStatus(ctx, inst.BotID, inst.ID, StatusFailed, truncateMessage(cause.Error())); err != nil {
+	s.logger.Warn("App operation failed",
+		slog.String("installation_id", inst.ID), slog.String("app_id", inst.AppID), slog.Any("error", cause))
+	if _, err := s.store.SetStatus(ctx, inst.BotID, inst.ID, StatusFailed, truncateMessage(publicMessage(cause))); err != nil {
 		s.logger.Warn("record failed App installation", slog.String("installation_id", inst.ID), slog.Any("error", err))
 	}
 	return cause

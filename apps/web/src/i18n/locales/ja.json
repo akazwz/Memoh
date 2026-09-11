@@ -3638,7 +3638,7 @@
     "reauthorize": "再認証",
     "disconnect": "切断",
     "disconnectTitle": "コネクターを切断しますか？",
-    "disconnectDescription": "Bot から {name} を削除し、保存された接続も削除します。",
+    "disconnectDescription": "保存された {name} の接続を削除します。これを使用するアプリは再認証が必要になります。",
     "disconnected": "コネクターを切断しました",
     "disconnectFailed": "コネクターを切断できませんでした",
     "loadFailed": "コネクターを読み込めませんでした",
@@ -3793,6 +3793,7 @@
     "components": "{count} 個のコンポーネント",
     "workspaceNotRunningDescription": "アプリのインストールと更新には実行中のワークスペースが必要です。一覧は最後に記録された状態です。",
     "action": {
+      "restore": "インストールを復元",
       "install": "インストール",
       "resume": "セットアップを続行",
       "update": "更新",
@@ -3832,6 +3833,7 @@
       }
     },
     "progress": {
+      "recoveryHint": "失敗したアンインストールを続けるには「アンインストール」を選択してください。「インストールを復元」はアプリを再設定し、削除済みのコンポーネントを再インストールする場合があります。",
       "installing": "{name} をインストール中",
       "updating": "{name} を更新中",
       "resuming": "{name} のセットアップを続行中",
@@ -3867,6 +3869,7 @@
       "skipped": "スキップ",
       "removed": "削除済み",
       "kept": "保持",
+      "unlinked": "関連付け解除",
       "disconnected": "切断済み",
       "updated": "更新済み"
     },
