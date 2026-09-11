@@ -95,10 +95,9 @@
     "preview": "预览"
   },
   "computerAccess": {
-    "nativeAlwaysOn": "始终对此 Bot 可用",
     "emptyBots": "还没有 Bot。",
-    "emptyComputers": "还没有已连接的电脑。",
-    "connectCta": "连接电脑",
+    "yourComputer": "你的电脑",
+    "notConnected": "未连接",
     "updateFailed": "更新访问权失败",
     "done": "完成",
     "subtitleRuntime": "哪些 Bot 可以使用它？",
@@ -769,7 +768,6 @@
       "steerDescription": "在下一个安全步骤加入当前回复",
       "followUpDescription": "当前回复结束后自动发送",
       "steerPlaceholder": "输入要插入当前回复的内容…",
-      "followUpPlaceholder": "输入下一条消息…",
       "enqueueSteer": "插入当前回复",
       "enqueueFollowUp": "添加到接下来",
       "steerQueued": "已加入当前回复队列",
@@ -801,11 +799,11 @@
     "pastedViewerTitle": "粘贴内容",
     "agent": "Agent",
     "continueOn": {
-      "label": "继续位置",
+      "label": "电脑",
       "addComputer": "添加电脑",
+      "addYourComputer": "添加你的电脑",
       "manageAccess": "管理访问权",
-      "manageComputers": "管理电脑",
-      "noAccess": "此 Bot 暂无电脑访问权"
+      "manageComputers": "管理电脑"
     },
     "computerLoading": "正在加载电脑",
     "computerLoadFailed": "无法加载电脑",
@@ -815,7 +813,8 @@
     "folderUnavailable": "不可用的文件夹",
     "folderDetachDraft": "不放入文件夹",
     "folderNewSession": "在 {name} 中新建会话",
-    "attachFiles": "上传文件",
+    "manageConnectors": "管理连接器",
+    "attachFiles": "上传文件或图片",
     "dropToAttach": "将文件拖到这里加入对话",
     "dropFolderUnsupported": "附件不支持文件夹，可拖到左侧文件面板上传。",
     "pdfTooLargeForNative": "PDF 超过 12MB,将以路径形式存入工作区,模型无法直接查看其内容。",

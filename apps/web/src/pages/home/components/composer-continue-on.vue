@@ -10,7 +10,7 @@
            row, so the collapsed circle carries it and the selection is read
            in the menu instead.
            The two forms are ONE element morphing, never two nodes swapping:
-           a single Laptop glyph, a collapsing label slot (max-width/opacity),
+           a single computer glyph, a collapsing label slot (max-width/opacity),
            and a padding transition converge the circle to exactly 32×32
            (44×44 on mobile). Splitting the forms across v-if/v-else nodes
            reads as two different controls mid-switch. The <button> itself
@@ -21,6 +21,7 @@
       <Button
         type="button"
         variant="ghost"
+        tone="muted"
         size="sm"
         shape="circle"
         :disabled="locked"
@@ -32,9 +33,8 @@
           : 'composer-circle-press px-2 max-md:px-3'"
       >
         <span class="composer-pill-content inline-flex min-w-0 items-center">
-          <Laptop
-            class="size-4 max-md:size-5 shrink-0 text-muted-foreground"
-            :stroke-width="1.5"
+          <ComputerIcon
+            class="size-4 max-md:size-5 shrink-0"
           />
           <!-- Spacing lives on the slot's children (ml-2), not the slot itself:
                a gap/padding on the collapsing container would survive the
@@ -45,9 +45,8 @@
             :aria-hidden="!rendersAsPill"
           >
             <span class="ml-2 min-w-0 truncate text-label text-composer-control-label">{{ currentName }}</span>
-            <ChevronDown
-              class="ml-2 size-3.5 shrink-0 text-muted-foreground"
-              :stroke-width="1.5"
+            <ExpandIcon
+              class="ml-2 size-3.5 shrink-0"
             />
           </span>
         </span>
@@ -63,9 +62,7 @@
     <DropdownMenuContent
       class="w-auto min-w-64 max-w-[min(20rem,var(--reka-dropdown-menu-content-available-width))]"
       align="start"
-      side="top"
     >
-      <DropdownMenuLabel>{{ t('chat.continueOn.label') }}</DropdownMenuLabel>
       <DropdownMenuItem
         v-if="initialLoading"
         disabled
@@ -87,7 +84,7 @@
           v-if="selectedMissing"
           disabled
         >
-          <Laptop class="size-4 shrink-0" />
+          <ComputerIcon class="size-4 shrink-0" />
           <span class="min-w-0 flex-1 truncate">
             {{ selectedSnapshotName || t('chat.computerUnavailable') }}
           </span>
@@ -101,7 +98,7 @@
           @select="emit('select', target)"
         >
           <component
-            :is="target.kind === 'native' ? Cloud : Laptop"
+            :is="target.kind === 'native' ? CloudIcon : ComputerIcon"
             class="size-4 shrink-0"
           />
           <span class="min-w-0 flex-1 truncate">{{ displayName(target) }}</span>
@@ -120,40 +117,26 @@
           />
         </DropdownMenuItem>
 
-        <!-- With at least one computer in play, management is one click from
-             the selector — it should not require knowing the settings page. -->
-        <template v-if="hasRemoteTargets">
-          <DropdownMenuSeparator />
-          <DropdownMenuItem @select="goToRuntimes">
-            <Settings class="size-4 shrink-0" />
-            <span class="min-w-0 flex-1 truncate">{{ t('chat.continueOn.manageComputers') }}</span>
-          </DropdownMenuItem>
-        </template>
-
-        <!-- No authorized remote computer: the CTA depends on whether the
-             account has computers at all. -->
-        <template v-if="!hasRemoteTargets">
-          <DropdownMenuSeparator />
+        <!-- Zero-computer accounts skip the management surface entirely: the
+             menu's one action is the connect wizard, opened in place — no
+             detour through the settings page. Until the account query has
+             answered at least once, render NOTHING here: guessing a label
+             shows one wrong frame ("Manage computers" flipping to "Add your
+             computer") to the accounts that have no computers. -->
+        <template v-if="runtimesReady">
           <DropdownMenuItem
-            disabled
-            class="text-muted-foreground"
+            v-if="accountRuntimesEmpty"
+            @select="void startConnect()"
           >
-            <span class="min-w-0 flex-1 truncate">
-              {{ accountRuntimesEmpty ? t('computerAccess.emptyComputers') : t('chat.continueOn.noAccess') }}
-            </span>
+            <AddIcon />
+            <span>{{ t('chat.continueOn.addYourComputer') }}</span>
           </DropdownMenuItem>
-          <DropdownMenuItem @select="accountRuntimesEmpty ? goToRuntimes() : (accessDialogOpen = true)">
-            <Plus
-              v-if="accountRuntimesEmpty"
-              class="size-4 shrink-0"
-            />
-            <Settings
-              v-else
-              class="size-4 shrink-0"
-            />
-            <span class="min-w-0 flex-1 truncate">
-              {{ accountRuntimesEmpty ? t('chat.continueOn.addComputer') : t('chat.continueOn.manageAccess') }}
-            </span>
+          <DropdownMenuItem
+            v-else
+            @select="accessDialogOpen = true"
+          >
+            <SettingsIcon />
+            <span>{{ t('chat.continueOn.manageAccess') }}</span>
           </DropdownMenuItem>
         </template>
       </template>
@@ -164,25 +147,21 @@
     v-if="accessDialogOpen"
     v-model:open="accessDialogOpen"
     :bot="{ id: botId, name: botName }"
+    @add-computer="onAccessAddComputer"
+  />
+  <ConnectComputerDialog
+    v-model:open="connectDialogOpen"
+    :credential="createdCredential"
   />
 </template>
 
 <script setup lang="ts">
+import { AddIcon, SettingsIcon, CloudIcon, ComputerIcon, ExpandIcon } from '@memohai/icon/ui'
 import { computed, inject, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { useRouter } from 'vue-router'
 import type { WorkspaceWorkspaceTarget } from '@memohai/sdk'
-import {
-  Button,
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-  Spinner,
-} from '@felinic/ui'
-import { Check, ChevronDown, Cloud, Laptop, Plus, Settings } from 'lucide-vue-next'
+import { Button, DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, Spinner } from '@felinic/ui'
+import { Check } from 'lucide-vue-next'
 import {
   DesktopRuntimeKey,
   type DesktopRuntimeState,
@@ -194,9 +173,11 @@ import {
   workspaceTargetStatusLabel,
 } from '@/utils/workspace-target'
 import BotComputerAccessDialog from '@/components/computer/bot-computer-access-dialog.vue'
+import ConnectComputerDialog from '@/components/computer/connect-computer-dialog.vue'
 import { useAccountRuntimes } from '@/components/computer/use-computer-access'
+import { useConnectComputer } from '@/components/computer/use-connect-computer'
 
-// The composer's destination selector ("Continue on"): which authorized
+// The composer's execution target selector: which authorized
 // computer this session runs on. It sits in the controls row as a peer of the
 // ＋ menu. Selection only — ACL lives on the account Computers page / bot
 // Computer page / access dialog, never here.
@@ -218,12 +199,29 @@ const emit = defineEmits<{
 }>()
 
 const { t } = useI18n()
-const router = useRouter()
 const desktopRuntimeBridge = inject(DesktopRuntimeKey, undefined)
 const desktopRuntimeState = ref<DesktopRuntimeState>()
 
-const { runtimes, refetch: refetchRuntimes } = useAccountRuntimes()
+const { runtimes, isPending: runtimesPending, refetch: refetchRuntimes } = useAccountRuntimes()
 const accessDialogOpen = ref(false)
+
+// "Ready" = the account query has answered (or failed) at least once. Colada's
+// error ref starts at null, so it cannot witness "failed" — isPending covers
+// both: it stays true until the first success OR the first error. On error the
+// safe fallback is the management dialog, which carries its own retry surface.
+const runtimesReady = computed(() => !runtimesPending.value)
+const accountRuntimesEmpty = computed(() => runtimes.value !== undefined && runtimes.value.length === 0)
+
+// The same one-click credential + stepper the Computers page runs, mounted
+// in place — the chat surface never navigates away for this.
+const { connectOpen: connectDialogOpen, connectCredential: createdCredential, startConnect } = useConnectComputer()
+
+// Ghost row inside the ACL dialog: close that dialog and run the same wizard
+// here, where the dialog's v-if can't take the wizard down with it.
+function onAccessAddComputer(): void {
+  accessDialogOpen.value = false
+  void startConnect()
+}
 
 // Opening the menu is the user's decision moment — refetch so a computer
 // connected or authorized elsewhere just now shows up immediately.
@@ -233,8 +231,6 @@ function onMenuOpen(open: boolean): void {
   emit('menuOpen')
 }
 
-const hasRemoteTargets = computed(() => props.targets.some(target => target.kind === 'remote'))
-const accountRuntimesEmpty = computed(() => (runtimes.value ?? []).length === 0)
 
 const selectedTarget = computed(() => (
   props.targets.find(target => target.target_id === props.selectedTargetId) ?? null
@@ -275,9 +271,6 @@ const isDefaultTarget = computed(() => (
 const isMobileShell = useIsMobile()
 const rendersAsPill = computed(() => !isDefaultTarget.value && !isMobileShell.value)
 
-function goToRuntimes(): void {
-  void router.push({ name: 'runtimes' })
-}
 
 onMounted(async () => {
   if (!desktopRuntimeBridge) return

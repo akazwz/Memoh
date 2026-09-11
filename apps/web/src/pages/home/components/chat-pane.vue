@@ -565,16 +565,16 @@
                       shape="circle"
                       :disabled="!currentBotId || activeChatReadOnly || composerConfigPending || voiceInputState !== 'idle'"
                       :title="$t('chat.composerActions')"
-                      class="order-1 self-end text-muted-foreground max-md:size-11"
+                      tone="muted"
+                      class="order-1 self-end max-md:size-11"
                       :aria-label="$t('chat.composerActions')"
                     >
                       <Spinner
                         v-if="agentChanging"
                         class="size-4 max-md:size-5"
                       />
-                      <Plus
+                      <AddIcon
                         v-else
-                        :stroke-width="1.5"
                         class="size-4 max-md:size-5"
                       />
                     </Button>
@@ -582,7 +582,6 @@
                   <DropdownMenuContent
                     class="w-56"
                     align="start"
-                    side="top"
                   >
                     <!-- The agent runtime is fixed once a session has any turns,
                        so the switcher only appears while the session is still
@@ -669,9 +668,13 @@
                       :disabled="!currentBotId || activeChatReadOnly || streaming || loadingMessages"
                       @select="fileInput?.click()"
                     >
-                      <Paperclip />
+                      <UploadIcon />
                       <span class="min-w-0 flex-1 truncate">{{ $t('chat.attachFiles') }}</span>
                     </DropdownMenuItem>
+                    <ComposerConnectorsMenu
+                      :bot-id="currentBotId || ''"
+                      :bot-name="currentBot?.name || currentBotId || ''"
+                    />
                   </DropdownMenuContent>
                 </DropdownMenu>
 
@@ -1030,11 +1033,11 @@
 </template>
 
 <script setup lang="ts">
+import { AddIcon, UploadIcon } from '@memohai/icon/ui'
+
 import { ref, computed, onBeforeUnmount, useTemplateRef, watch, onWatcherCleanup, nextTick, onActivated, onDeactivated, type Ref } from 'vue'
 import {
   ImagePlus,
-  Paperclip,
-  Plus,
   ChevronDown,
   ArrowDown,
   Check,
@@ -1066,6 +1069,7 @@ import { registerChatFileDropTarget } from '../composables/chat-file-drop-target
 import { readDroppedFiles } from '@/utils/dropped-files'
 import MessageItem from './message-item.vue'
 import ComposerContinueOn from './composer-continue-on.vue'
+import ComposerConnectorsMenu from './composer-connectors-menu.vue'
 import ChatAttachmentCard from './chat-attachment-card.vue'
 import { useChatScroll } from '../composables/useChatScroll'
 import { useComposerPlacementMotion } from '../composables/useComposerPlacementMotion'
@@ -2781,8 +2785,7 @@ const queueSubmissionGate = new SessionQueueSubmissionGate()
 const composerQueueCommand = computed(() => parseSessionQueueCommand(inputText.value, composerACPAvailableCommands.value))
 const composerPlaceholder = computed(() => {
   if (activeChatReadOnly.value) return t('chat.readonlyHint')
-  if (!streaming.value) return t('chat.inputPlaceholder')
-  return t('chat.queue.followUpPlaceholder')
+  return t('chat.inputPlaceholder')
 })
 watch(inputText, (text) => {
   const prefix = slashPanelSuppressedPrefix.value
