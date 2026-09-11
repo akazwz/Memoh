@@ -55,6 +55,9 @@ func (d *Driver) Goal(ctx context.Context, input external.PromptInput) (*externa
 	}
 	var response protocol.ThreadGoalGetResponse
 	if err := srv.conn.Call(ctx, protocol.MethodThreadGoalGet, protocol.ThreadGoalGetParams{ThreadID: id}, &response); err != nil {
+		if goalStateUnavailable(err) {
+			return nil, nil
+		}
 		return nil, err
 	}
 	if response.Goal == nil {
@@ -200,8 +203,7 @@ func (s *appServer) prepareGoal(ctx context.Context, input external.PromptInput)
 	}
 	var response protocol.ThreadGoalGetResponse
 	if err := s.conn.Call(ctx, protocol.MethodThreadGoalGet, protocol.ThreadGoalGetParams{ThreadID: id}, &response); err != nil {
-		var rpcErr *protocol.RPCError
-		if errors.As(err, &rpcErr) && (rpcErr.Code == -32601 || rpcErr.Code == -32602) {
+		if goalStateUnavailable(err) {
 			return false, nil
 		}
 		return false, err
@@ -213,6 +215,26 @@ func (s *appServer) prepareGoal(ctx context.Context, input external.PromptInput)
 		return false, err
 	}
 	return input.Command == "" && goalExecutionAllowed(input), nil
+}
+
+// goalStateUnavailable reports goal reads that mean "nothing to read" rather
+// than a failure: the goals API is absent (-32601), or Codex no longer knows
+// the stored thread (wiped state). The latter must fall through to
+// ensureThread's reseed path, which is the only way such a session can run
+// again. Codex reports it under the generic invalid-request code, so match
+// the message; every other error remains an error.
+func goalStateUnavailable(err error) bool {
+	var rpcErr *protocol.RPCError
+	if !errors.As(err, &rpcErr) {
+		return false
+	}
+	switch rpcErr.Code {
+	case -32601:
+		return true
+	case -32600:
+		return strings.HasPrefix(rpcErr.Message, "thread not found")
+	}
+	return false
 }
 
 func (s *appServer) activateGoal(ctx context.Context, threadID string) error {

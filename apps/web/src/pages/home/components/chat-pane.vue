@@ -3928,7 +3928,7 @@ async function handleSend() {
     saveInputDraft(draftKey, '')
     try {
       const result = await runtimeControls.execute(runtimeCommand.name!)
-      remember(result || runtimeCommand.completed_text || t('common.success'), true)
+      remember(result || runtimeCommand.completed_text || t('common.toast.success'), true)
     } catch (error) {
       chatStore.showCommandError(parseMemohError(error)?.code || 'runtime_control.failed', resolveApiErrorMessage(error, t('errors.runtime_control.failed')), scope)
     }
@@ -3948,6 +3948,17 @@ async function handleSend() {
     }
   }
   if (streaming.value || queueCommand) {
+    // Until controls load, a slash input may be a runtime command.
+    const runtimeCommandUnresolved = activeUsesExternalAgentComposer.value
+      && !runtimeControlSnapshot.value
+      && text.startsWith('/')
+      && !queueCommand
+    // The queue carries plain text only: a runtime turn command or a goal
+    // draft would run as an ordinary message once dequeued.
+    if (runtimeCommand || runtimeCommandUnresolved || (goalDraftEnabled.value && text && !text.startsWith('/'))) {
+      composerError.value = t('errors.session_runtime.session_busy')
+      return
+    }
     if (!text || files.length || skills.length || !currentBotId.value || !activeSessionId.value || activeChatReadOnly.value) return
     const botId = currentBotId.value
     const sessionId = activeSessionId.value

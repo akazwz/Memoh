@@ -150,7 +150,9 @@ func (s *Service) SetRuntimeMode(ctx context.Context, request RuntimeControlRequ
 				break
 			}
 		}
-		if !valid {
+		// An unsupported snapshot may only mean the runtime is cold (ACP
+		// reads its live session); let the driver's own set decide then.
+		if modes.Supported && !valid {
 			return external.ErrModeUnavailable
 		}
 		out, err = set(ctx, input, request.ModeID)
