@@ -64,6 +64,33 @@
                 </p>
               </div>
 
+              <!-- Cold-open placeholder while a session's first page is on the
+                   wire — Arkloop's ChatSkeleton shape, re-derived on Memoh
+                   geometry: chat text is 16px at --chat-leading 1.48 ≈ 24px
+                   line pitch, so a real one-line user bubble is py-3 + 24px =
+                   48px tall and ~10 CJK chars + px-4 ≈ 192px wide; each reply
+                   bar (12px + 12px gap) occupies one text line's 24px pitch.
+                   The shared Skeleton primitive owns the loading motion and
+                   base tone; only the width stagger is kept from the old
+                   hand-rolled version. -->
+              <div
+                v-if="messages.length === 0 && loadingMessages"
+                class="flex flex-col gap-6"
+                aria-hidden="true"
+              >
+                <div class="flex justify-end">
+                  <Skeleton class="h-12 w-48 rounded-2xl" />
+                </div>
+                <div class="flex flex-col gap-3">
+                  <Skeleton
+                    v-for="w in CHAT_SKELETON_BAR_WIDTHS"
+                    :key="w"
+                    class="h-3 rounded"
+                    :style="{ width: w }"
+                  />
+                </div>
+              </div>
+
               <!-- One persistent container per turn, keyed by the turn's
                    opening message id — a send APPENDS a container; previous
                    turns' DOM is never re-parented (see messageTurns for why
@@ -916,7 +943,7 @@
                          stays hidden, while a VISIBLE disabled button still
                          dims as designed. -->
                     <div
-                      class="absolute inset-0 transition-[opacity,scale] duration-[188ms] ease motion-reduce:transition-none"
+                      class="absolute inset-0 transition-[opacity,scale] duration-[188ms] ease-[ease] motion-reduce:transition-none"
                       :class="micVisible ? 'scale-100 opacity-100' : 'pointer-events-none scale-70 opacity-0'"
                     >
                       <Button
@@ -1051,7 +1078,7 @@ import {
   SquarePen,
   ShieldCheck,
 } from 'lucide-vue-next'
-import { Button, Command, CommandGroup, CommandItem, CommandKeyBridge, CommandList, CommandSeparator, Dialog, DialogContent, DialogHeader, DialogTitle, DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger, InlineLoadingRow, PanePlaceholder, Popover, PopoverContent, PopoverTrigger, ScrollArea, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, Spinner, menuChromeClass, toast } from '@felinic/ui'
+import { Button, Command, CommandGroup, CommandItem, CommandKeyBridge, CommandList, CommandSeparator, Dialog, DialogContent, DialogHeader, DialogTitle, DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger, InlineLoadingRow, PanePlaceholder, Popover, PopoverContent, PopoverTrigger, ScrollArea, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, Skeleton, Spinner, menuChromeClass, toast } from '@felinic/ui'
 import { useChatStore, type ExternalAgentSessionInput, type ChatMessage, type ChatWorkspaceTargetSnapshot, type SendMessageResult } from '@/store/chat-list'
 import { useWorkdirsStore } from '@/store/workdirs'
 import type { BotWorkdir } from '@/composables/api/useWorkdirs'
@@ -1262,7 +1289,15 @@ const isWelcome = computed(() =>
 // from the first frame, so this gate never engages on session routes.
 const composerPlacementPending = computed(() => loadingChats.value && !hasRenderedSession.value)
 const composerPlacementEl = useTemplateRef<HTMLElement>('composerPlacementEl')
-useComposerPlacementMotion(composerPlacementEl, isWelcome)
+// Armed by handleSend when the send leaves from welcome; consumed on the
+// welcome→chat flip. Without an armed send the flip is navigation, and the
+// composer just lands docked with the rest of the pane.
+const welcomeSendMotionArmed = ref(false)
+useComposerPlacementMotion(composerPlacementEl, isWelcome, () => {
+  const armed = welcomeSendMotionArmed.value
+  welcomeSendMotionArmed.value = false
+  return armed
+})
 
 // Rotate the greeting per fresh chat so the entry point feels alive rather than
 // a fixed banner; the pick stays stable while a single welcome screen is shown
@@ -1272,6 +1307,11 @@ const WELCOME_GREETING_KEYS = [
   'chat.welcome.g5', 'chat.welcome.g6', 'chat.welcome.g7', 'chat.welcome.g8',
   'chat.welcome.g9', 'chat.welcome.g10', 'chat.welcome.g11', 'chat.welcome.g12',
 ] as const
+
+// Arkloop ChatSkeleton's width sequence, verbatim — percentages of the column,
+// so they scale with Memoh's layout; heights/pitches above are derived from
+// Memoh's own chat metrics, not copied.
+const CHAT_SKELETON_BAR_WIDTHS = ['85%', '65%', '90%', '55%', '75%', '60%', '80%', '50%', '70%', '40%'] as const
 function pickWelcomeGreetingIndex() {
   return Math.floor(Math.random() * WELCOME_GREETING_KEYS.length)
 }
@@ -3618,6 +3658,10 @@ async function handleSend() {
     return
   }
 
+  // Arm the placement FLIP only after attachment conversion has succeeded and
+  // the send is really going out: arming earlier lets a navigation during the
+  // async read (or a failed conversion) consume/inherit the flag.
+  welcomeSendMotionArmed.value = isWelcome.value
   // Arm the pin only once the store has passed command handling and session
   // setup and is about to start a real turn. Command-only sends therefore do
   // not leave a latent pin behind; startup failures roll the arm back.
@@ -3653,6 +3697,11 @@ async function handleSend() {
     pairSend.releaseReads()
   })
   rollbackPin = null
+  // A send that never promoted the draft (command-only, or failed before the
+  // turn) leaves the motion armed; disarm so a later navigation can't inherit it.
+  void nextTick(() => {
+    if (isWelcome.value) welcomeSendMotionArmed.value = false
+  })
   pairSend.finish(result.messageSent === true || result.stage === 'stream')
   await refreshACPComposerConfigAfterSelectionError(result)
   if (!result.ok && result.stage === 'startup') {
