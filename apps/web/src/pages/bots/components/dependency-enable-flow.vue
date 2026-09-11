@@ -7,7 +7,7 @@
 // afterwards like anything else installed from the Supermarket. Cancellation,
 // an unavailable workspace or platform, and failed or backgrounded
 // installation all leave the agent disabled.
-import { computed, onBeforeUnmount, ref, shallowRef } from 'vue'
+import { computed, onBeforeUnmount, onDeactivated, ref, shallowRef } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import {
@@ -53,6 +53,7 @@ const router = useRouter()
 const store = useAppOperationsStore()
 
 let settle: ((ok: boolean) => void) | null = null
+let generation = 0
 const requirement = ref<EnableFlowRequirement | null>(null)
 const item = ref<DependencyItem | null>(null)
 const name = computed(() => (item.value ? dependencyDisplayName(item.value) : ''))
@@ -88,6 +89,8 @@ async function run(agent: BotagentsBotAgent): Promise<boolean> {
 }
 
 function finish(ok: boolean) {
+  generation += 1
+  checking.value = false
   const resolve = settle
   settle = null
   workspaceOpen.value = false
@@ -97,18 +100,21 @@ function finish(ok: boolean) {
 }
 
 async function preflight() {
+  const currentGeneration = generation
   const declared = requirement.value
   if (!declared) return finish(false)
   checking.value = true
   let step
   try {
     const response = await preflightDependencies(props.botId, '', [declared.dependencyId])
+    if (!settle || currentGeneration !== generation) return
     step = resolveEnableFlowStep(declared, response)
   } catch (error) {
+    if (currentGeneration !== generation) return
     toast.error(resolveApiErrorMessage(error, t('bots.dependencies.preflight.failed'), { prefixFallback: true }))
     return finish(false)
   } finally {
-    checking.value = false
+    if (currentGeneration === generation) checking.value = false
   }
   switch (step.kind) {
     case 'satisfied':
@@ -237,7 +243,8 @@ function onProgressOpenChange(value: boolean) {
   finish(displayed.value?.status === 'done' && displayed.value.result === 'installed')
 }
 
-onBeforeUnmount(hideProgress)
+onDeactivated(() => finish(false))
+onBeforeUnmount(() => finish(false))
 
 defineExpose({ run, checking })
 </script>

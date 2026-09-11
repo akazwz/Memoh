@@ -10,6 +10,7 @@ const LEGACY_SESSION_KEYS = [
 ] as const
 
 export interface OnboardingAgentResult {
+  authorizationId?: string
   agentId: string
   botAgentId: string
 }
@@ -41,10 +42,11 @@ function normalizeBotResult(value: unknown): OnboardingBotResult | null {
   return {
     botId,
     modelConfigured: candidate.modelConfigured === true,
-    ...(agentId && botAgentId && {
+    ...(agentId && (botAgentId || agentId === 'codex' || agentId === 'claude-code') && {
       agent: {
         agentId,
         botAgentId,
+        authorizationId: normalizeProviderId(selectedAgent?.authorizationId) || undefined,
       },
     }),
   }
