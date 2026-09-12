@@ -1142,10 +1142,12 @@
                   >
                     <DropdownMenuLabel>{{ $t('chat.agent') }}</DropdownMenuLabel>
                     <DropdownMenuItem
+                      @mouseenter="hoveredAgentChoice = 'memoh'"
+                      @mouseleave="hoveredAgentChoice = ''"
                       @select="selectMemohAgent"
                     >
                       <component
-                        :is="activeUsesExternalAgentComposer ? MemohIcon : MemohColor"
+                        :is="hoveredAgentChoice === 'memoh' ? MemohColor : MemohIcon"
                         class="size-4 shrink-0 text-muted-foreground"
                         aria-hidden="true"
                       />
@@ -1158,10 +1160,12 @@
                     <DropdownMenuItem
                       v-for="agent in enabledBotAgents"
                       :key="agent.id"
+                      @mouseenter="hoveredAgentChoice = agent.id || ''"
+                      @mouseleave="hoveredAgentChoice = ''"
                       @select="selectBotAgent(agent)"
                     >
                       <component
-                        :is="botAgentIcon(agent, activeBotAgentID === agent.id)"
+                        :is="botAgentIcon(agent, hoveredAgentChoice === agent.id)"
                         class="size-4 shrink-0 text-muted-foreground"
                       />
                       <span class="min-w-0 flex-1 truncate">{{ botAgentName(agent) }}</span>
@@ -1355,6 +1359,10 @@ const forkDialogOpen = ref(false)
 const pendingForkTurnId = ref('')
 const modelPopoverOpen = ref(false)
 const agentPopoverOpen = ref(false)
+const hoveredAgentChoice = ref('')
+watch(agentPopoverOpen, (open) => {
+  if (!open) hoveredAgentChoice.value = ''
+})
 const agentChanging = ref(false)
 const acpConfigChangeScope = ref('')
 
