@@ -728,7 +728,7 @@
                         :warning="currentRuntimeMode?.warning"
                       />
                       <span
-                        class="truncate @max-lg/composer:hidden"
+                        class="truncate text-label @max-lg/composer:hidden"
                         :class="currentRuntimeMode?.warning ? 'text-warning-foreground' : undefined"
                       >{{ currentRuntimeMode?.name || currentRuntimeModeId }}</span>
                     </Button>
@@ -736,12 +736,16 @@
                   <DropdownMenuContent
                     align="start"
                     side="top"
-                    class="w-80 max-w-[calc(100vw-2rem)] sm:w-96"
+                    :collision-padding="16"
+                    class="w-80 max-w-[calc(100vw-2rem)] sm:w-md"
                   >
-                    <DropdownMenuLabel>{{ $t('chat.sessionPermissionMode') }}</DropdownMenuLabel>
+                    <DropdownMenuLabel class="text-label font-normal">
+                      {{ $t('chat.sessionPermissionMode') }}
+                    </DropdownMenuLabel>
                     <DropdownMenuItem
                       v-for="mode in runtimeModes"
                       :key="mode.id"
+                      class="py-1 max-md:py-1.5"
                       :disabled="runtimeModeDisabled"
                       @select="onRuntimeModeSelected(mode.id)"
                     >
@@ -753,10 +757,10 @@
                         class="min-w-0 flex-1"
                         :class="mode.warning ? 'text-warning-foreground' : undefined"
                       >
-                        <span class="block">{{ mode.name || mode.id }}</span>
+                        <span class="block text-label">{{ mode.name || mode.id }}</span>
                         <span
                           v-if="mode.description"
-                          class="block whitespace-normal text-caption"
+                          class="block whitespace-normal text-body"
                           :class="mode.warning ? 'text-warning-foreground' : 'text-muted-foreground'"
                         >{{ mode.description }}</span>
                       </span>
@@ -1122,12 +1126,11 @@
                         v-if="composerAgent"
                         class="size-4 shrink-0"
                       />
-                      <img
+                      <MemohIcon
                         v-else
-                        src="/logo.svg"
-                        alt=""
                         class="size-4 shrink-0"
-                      >
+                        aria-hidden="true"
+                      />
                       <span class="truncate">{{ composerAgentName }}</span>
                       <ChevronDown class="size-3.5 shrink-0" />
                     </Button>
@@ -1139,11 +1142,10 @@
                   >
                     <DropdownMenuLabel>{{ $t('chat.agent') }}</DropdownMenuLabel>
                     <DropdownMenuItem @select="selectMemohAgent">
-                      <img
-                        src="/logo.svg"
-                        alt=""
+                      <MemohIcon
                         class="size-4 shrink-0"
-                      >
+                        aria-hidden="true"
+                      />
                       <span class="min-w-0 flex-1 truncate">{{ $t('chat.agentMemoh') }}</span>
                       <Check
                         v-if="!activeUsesExternalAgentComposer"
@@ -1156,7 +1158,7 @@
                       @select="selectBotAgent(agent)"
                     >
                       <component
-                        :is="botAgentIcon(agent, true)"
+                        :is="botAgentIcon(agent)"
                         class="size-4 shrink-0"
                       />
                       <span class="min-w-0 flex-1 truncate">{{ botAgentName(agent) }}</span>
@@ -1178,12 +1180,11 @@
                     v-if="composerAgent"
                     class="size-4 shrink-0"
                   />
-                  <img
+                  <MemohIcon
                     v-else
-                    src="/logo.svg"
-                    alt=""
                     class="size-4 shrink-0"
-                  >
+                    aria-hidden="true"
+                  />
                   <span class="truncate">{{ composerAgentName }}</span>
                 </span>
                 <SessionInfoRing
@@ -1215,6 +1216,7 @@
 </template>
 
 <script setup lang="ts">
+import { Memoh as MemohIcon } from '@memohai/icon'
 import { AddIcon, UploadIcon } from '@memohai/icon/ui'
 
 import { EXTERNAL_AGENT_DEFAULT_PROJECT_MODE, EXTERNAL_AGENT_DEFAULT_PROJECT_PATH, normalizeAgentID } from '@/utils/external-agent'
