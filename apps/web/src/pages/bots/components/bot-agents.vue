@@ -132,20 +132,6 @@
         </SettingsRow>
       </SettingsSection>
 
-      <AddBotAgentDialog
-        v-model:open="addOpen"
-        :bot-id="botId"
-        :profiles="profiles"
-        :agents="agents"
-        :bot-metadata="botMetadata"
-        @created="onAgentCreated"
-      />
-
-      <DependencyEnableFlow
-        ref="enableFlow"
-        :bot-id="botId"
-      />
-
       <ConfirmDeleteDialog
         :open="!!deleteTarget"
         :title="t('bots.agent.deleteTitle')"
@@ -202,11 +188,24 @@
       </SettingsShell>
     </DetailPane>
   </SwapTransition>
+  <DependencyEnableFlow
+    ref="enableFlow"
+    :bot-id="botId"
+  />
+  <AddBotAgentDialog
+    v-model:open="addOpen"
+    :bot-id="botId"
+    :profiles="profiles"
+    :agents="agents"
+    :bot-metadata="botMetadata"
+    @created="onAgentCreated"
+  />
 </template>
 
 <script setup lang="ts">
 import { externalAgentDisplayName, normalizeAgentID } from '@/utils/external-agent'
-import { computed, reactive, ref, useTemplateRef, watch } from 'vue'
+import { computed, nextTick, reactive, ref, useTemplateRef, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useMutation, useQuery, useQueryCache } from '@pinia/colada'
 import {
@@ -293,6 +292,22 @@ const deleting = ref(false)
 const { view, direction, openDetail, backToList } = useViewSwap()
 const selectedID = ref('')
 const selectedName = ref('')
+
+const route = useRoute()
+const router = useRouter()
+const addRequested = computed(() => route.name === 'bot-detail'
+  && route.query.tab === 'agents'
+  && route.query.addAgent === props.botId)
+watch(addRequested, async (requested) => {
+  if (!requested) return
+  // Wait for the existing dialog to mount, including when this tab was cached.
+  await nextTick()
+  if (!addRequested.value) return
+  addOpen.value = true
+  const query = { ...route.query }
+  delete query.addAgent
+  await router.replace({ query })
+}, { immediate: true, flush: 'post' })
 
 const { data: profileData } = useQuery({
   key: () => ['acp-profiles'],

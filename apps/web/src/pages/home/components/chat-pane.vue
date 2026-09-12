@@ -906,7 +906,7 @@
                             variant="outline"
                             size="sm"
                             class="w-full"
-                            @click="openDirectAgentSettings"
+                            @click="openAgentSettings(false)"
                           >
                             {{ $t('bots.agent.openSettings') }}
                           </Button>
@@ -1107,7 +1107,7 @@
                    height while recording so the dock remains stable. -->
               <div class="flex min-h-10 min-w-0 items-center justify-between gap-2 px-2 pt-1 max-md:min-h-12">
                 <DropdownMenu
-                  v-if="!hasRenderedSession && enabledBotAgents.length && voiceInputState === 'idle'"
+                  v-if="!hasRenderedSession && (enabledBotAgents.length || canAddAgent) && voiceInputState === 'idle'"
                   v-model:open="agentPopoverOpen"
                 >
                   <DropdownMenuTrigger as-child>
@@ -1122,12 +1122,7 @@
                       class="min-w-0 max-w-60 font-normal text-muted-foreground max-md:h-11"
                     >
                       <component
-                        :is="botAgentIcon(composerAgent)"
-                        v-if="composerAgent"
-                        class="size-4 shrink-0"
-                      />
-                      <MemohIcon
-                        v-else
+                        :is="composerAgentIcon"
                         class="size-4 shrink-0"
                         aria-hidden="true"
                       />
@@ -1174,6 +1169,13 @@
                         class="ml-auto"
                       />
                     </DropdownMenuItem>
+                    <template v-if="canAddAgent">
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem @select="openAgentSettings(true)">
+                        <AddIcon />
+                        {{ $t('bots.agent.add') }}
+                      </DropdownMenuItem>
+                    </template>
                   </DropdownMenuContent>
                 </DropdownMenu>
                 <span
@@ -1183,12 +1185,7 @@
                   :aria-label="$t('chat.agent') + ': ' + composerAgentName"
                 >
                   <component
-                    :is="botAgentIcon(composerAgent)"
-                    v-if="composerAgent"
-                    class="size-4 shrink-0"
-                  />
-                  <MemohIcon
-                    v-else
+                    :is="composerAgentIcon"
                     class="size-4 shrink-0"
                     aria-hidden="true"
                   />
@@ -1910,6 +1907,7 @@ const composerAgent = computed(() => {
     metadata: { provider: activeDirectRuntime.value || activeACPAgentId.value },
   }
 })
+const composerAgentIcon = computed(() => composerAgent.value ? botAgentIcon(composerAgent.value) : MemohIcon)
 const composerAgentName = computed(() => composerAgent.value
   ? botAgentName(composerAgent.value)
   : t('chat.agentMemoh'))
@@ -2505,6 +2503,7 @@ const composerSpinnerVisible = useDelayedTrue(
   computed(() => composerAgentConfigPending.value || composerModelsLoading.value),
   3000,
 )
+const canAddAgent = computed(() => !!currentBotId.value && hasBotPermission(currentBot.value?.current_user_permissions, 'manage'))
 const canChangeAgent = computed(() => !!currentBotId.value
   && !hasRenderedSession.value
   && !activeChatReadOnly.value
@@ -2562,14 +2561,16 @@ const composerReasoningOptions = computed(() => {
   })
 })
 
-function openDirectAgentSettings() {
+function openAgentSettings(addAgent: boolean) {
+  if (addAgent && !canAddAgent.value) return
   const botName = currentBot.value?.name || currentBot.value?.id || currentBotId.value
   if (!botName) return
   modelPopoverOpen.value = false
+  agentPopoverOpen.value = false
   void router.push({
     name: 'bot-detail',
     params: { botName },
-    query: { tab: 'agents' },
+    query: { tab: 'agents', ...(addAgent ? { addAgent: currentBotId.value } : {}) },
   })
 }
 

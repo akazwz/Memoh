@@ -1654,16 +1654,15 @@ func (m *Manager) cleanupFinishedRun(ctx context.Context, handle RunHandle) {
 }
 
 type agentTerminalProposal struct {
-	prepared  bool
-	status    string
-	errorCode string
-	error     string
-	at        time.Time
+	prepared bool
+	status   string
+	at       time.Time
 }
 
 // prepareAgentTerminalEvent persists the recoverable outcome before the live
-// projection enters finishing. A waiting decision is deliberately excluded:
-// Native closes that stream too, but the same run must resume after the answer.
+// projection enters finishing. Deferred Native decisions retain their run for
+// continuation; an inline runtime's terminal event ends execution even if a
+// decision notification was lost.
 func (m *Manager) prepareAgentTerminalEvent(
 	ctx context.Context,
 	handle RunHandle,
@@ -1680,7 +1679,8 @@ func (m *Manager) prepareAgentTerminalEvent(
 		return agentTerminalProposal{}, ErrRunOwnershipLost
 	}
 	run := snapshot.CurrentRunView
-	if strings.EqualFold(run.Status, RunStatusWaitingDecision) && m.localControlForHandle(handle).canParkForDecision() {
+	ctrl := m.localControlForHandle(handle)
+	if strings.EqualFold(run.Status, RunStatusWaitingDecision) && ctrl.canParkForDecision() {
 		return agentTerminalProposal{}, nil
 	}
 	status := RunStatusCompleted
@@ -1700,7 +1700,7 @@ func (m *Manager) prepareAgentTerminalEvent(
 		status,
 		errorCode,
 		"",
-		m.localControlForHandle(handle).resumesOnTerminalDecision(),
+		ctrl.resumesOnTerminalDecision(),
 	)
 	if err != nil {
 		return agentTerminalProposal{}, err
@@ -1716,21 +1716,17 @@ func (m *Manager) prepareAgentTerminalEvent(
 			return agentTerminalProposal{}, ErrRunOwnershipLost
 		}
 		return agentTerminalProposal{
-			prepared:  true,
-			status:    liveRunStatus(prepared.State),
-			errorCode: strings.TrimSpace(prepared.ErrorCode),
-			error:     strings.TrimSpace(prepared.ErrorMessage),
-			at:        prepared.FinishProposedAt,
+			prepared: true,
+			status:   liveRunStatus(prepared.State),
+			at:       prepared.FinishProposedAt,
 		}, nil
 	}
 	if prepared.State == ledger.StateFinishing {
 		status = liveRunStatus(prepared.ProposedState)
 		return agentTerminalProposal{
-			prepared:  true,
-			status:    status,
-			errorCode: strings.TrimSpace(prepared.ProposedErrorCode),
-			error:     strings.TrimSpace(prepared.ProposedErrorMessage),
-			at:        prepared.FinishProposedAt,
+			prepared: true,
+			status:   status,
+			at:       prepared.FinishProposedAt,
 		}, nil
 	}
 	return agentTerminalProposal{}, ErrRunOwnershipLost
