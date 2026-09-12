@@ -1120,13 +1120,16 @@
                       :title="composerAgentName"
                       :aria-label="$t('chat.agent') + ': ' + composerAgentName"
                       class="min-w-0 max-w-60 font-normal text-muted-foreground max-md:h-11"
+                      @mouseenter="composerAgentHovered = true"
+                      @mouseleave="composerAgentHovered = false"
                     >
                       <component
-                        :is="botAgentIcon(composerAgent)"
+                        :is="botAgentIcon(composerAgent, composerAgentHovered)"
                         v-if="composerAgent"
                         class="size-4 shrink-0"
                       />
-                      <MemohIcon
+                      <component
+                        :is="composerAgentHovered ? MemohColor : MemohIcon"
                         v-else
                         class="size-4 shrink-0"
                         aria-hidden="true"
@@ -1141,9 +1144,14 @@
                     class="w-56"
                   >
                     <DropdownMenuLabel>{{ $t('chat.agent') }}</DropdownMenuLabel>
-                    <DropdownMenuItem @select="selectMemohAgent">
-                      <MemohIcon
-                        class="size-4 shrink-0"
+                    <DropdownMenuItem
+                      @mouseenter="hoveredAgentChoice = 'memoh'"
+                      @mouseleave="hoveredAgentChoice = ''"
+                      @select="selectMemohAgent"
+                    >
+                      <component
+                        :is="hoveredAgentChoice === 'memoh' ? MemohColor : MemohIcon"
+                        class="size-4 shrink-0 text-muted-foreground"
                         aria-hidden="true"
                       />
                       <span class="min-w-0 flex-1 truncate">{{ $t('chat.agentMemoh') }}</span>
@@ -1155,11 +1163,13 @@
                     <DropdownMenuItem
                       v-for="agent in enabledBotAgents"
                       :key="agent.id"
+                      @mouseenter="hoveredAgentChoice = agent.id || ''"
+                      @mouseleave="hoveredAgentChoice = ''"
                       @select="selectBotAgent(agent)"
                     >
                       <component
-                        :is="botAgentIcon(agent)"
-                        class="size-4 shrink-0"
+                        :is="botAgentIcon(agent, hoveredAgentChoice === agent.id)"
+                        class="size-4 shrink-0 text-muted-foreground"
                       />
                       <span class="min-w-0 flex-1 truncate">{{ botAgentName(agent) }}</span>
                       <Check
@@ -1174,13 +1184,16 @@
                   class="inline-flex h-8 min-w-0 max-w-60 items-center gap-1.5 px-2.5 text-control font-normal text-muted-foreground max-md:h-11"
                   :title="composerAgentName"
                   :aria-label="$t('chat.agent') + ': ' + composerAgentName"
+                  @mouseenter="composerAgentHovered = true"
+                  @mouseleave="composerAgentHovered = false"
                 >
                   <component
-                    :is="botAgentIcon(composerAgent)"
+                    :is="botAgentIcon(composerAgent, composerAgentHovered)"
                     v-if="composerAgent"
                     class="size-4 shrink-0"
                   />
-                  <MemohIcon
+                  <component
+                    :is="composerAgentHovered ? MemohColor : MemohIcon"
                     v-else
                     class="size-4 shrink-0"
                     aria-hidden="true"
@@ -1216,7 +1229,7 @@
 </template>
 
 <script setup lang="ts">
-import { Memoh as MemohIcon } from '@memohai/icon'
+import { Memoh as MemohIcon, MemohColor } from '@memohai/icon'
 import { AddIcon, UploadIcon } from '@memohai/icon/ui'
 
 import { EXTERNAL_AGENT_DEFAULT_PROJECT_MODE, EXTERNAL_AGENT_DEFAULT_PROJECT_PATH, normalizeAgentID } from '@/utils/external-agent'
@@ -1352,6 +1365,11 @@ const forkDialogOpen = ref(false)
 const pendingForkTurnId = ref('')
 const modelPopoverOpen = ref(false)
 const agentPopoverOpen = ref(false)
+const composerAgentHovered = ref(false)
+const hoveredAgentChoice = ref('')
+watch(agentPopoverOpen, (open) => {
+  if (!open) hoveredAgentChoice.value = ''
+})
 const agentChanging = ref(false)
 const acpConfigChangeScope = ref('')
 
