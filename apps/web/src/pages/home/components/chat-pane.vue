@@ -1120,16 +1120,13 @@
                       :title="composerAgentName"
                       :aria-label="$t('chat.agent') + ': ' + composerAgentName"
                       class="min-w-0 max-w-60 font-normal text-muted-foreground max-md:h-11"
-                      @mouseenter="composerAgentHovered = true"
-                      @mouseleave="composerAgentHovered = false"
                     >
                       <component
-                        :is="botAgentIcon(composerAgent, composerAgentHovered)"
+                        :is="botAgentIcon(composerAgent)"
                         v-if="composerAgent"
                         class="size-4 shrink-0"
                       />
-                      <component
-                        :is="composerAgentHovered ? MemohColor : MemohIcon"
+                      <MemohIcon
                         v-else
                         class="size-4 shrink-0"
                         aria-hidden="true"
@@ -1145,12 +1142,10 @@
                   >
                     <DropdownMenuLabel>{{ $t('chat.agent') }}</DropdownMenuLabel>
                     <DropdownMenuItem
-                      @mouseenter="hoveredAgentChoice = 'memoh'"
-                      @mouseleave="hoveredAgentChoice = ''"
                       @select="selectMemohAgent"
                     >
                       <component
-                        :is="hoveredAgentChoice === 'memoh' ? MemohColor : MemohIcon"
+                        :is="activeUsesExternalAgentComposer ? MemohIcon : MemohColor"
                         class="size-4 shrink-0 text-muted-foreground"
                         aria-hidden="true"
                       />
@@ -1163,12 +1158,10 @@
                     <DropdownMenuItem
                       v-for="agent in enabledBotAgents"
                       :key="agent.id"
-                      @mouseenter="hoveredAgentChoice = agent.id || ''"
-                      @mouseleave="hoveredAgentChoice = ''"
                       @select="selectBotAgent(agent)"
                     >
                       <component
-                        :is="botAgentIcon(agent, hoveredAgentChoice === agent.id)"
+                        :is="botAgentIcon(agent, activeBotAgentID === agent.id)"
                         class="size-4 shrink-0 text-muted-foreground"
                       />
                       <span class="min-w-0 flex-1 truncate">{{ botAgentName(agent) }}</span>
@@ -1184,16 +1177,13 @@
                   class="inline-flex h-8 min-w-0 max-w-60 items-center gap-1.5 px-2.5 text-control font-normal text-muted-foreground max-md:h-11"
                   :title="composerAgentName"
                   :aria-label="$t('chat.agent') + ': ' + composerAgentName"
-                  @mouseenter="composerAgentHovered = true"
-                  @mouseleave="composerAgentHovered = false"
                 >
                   <component
-                    :is="botAgentIcon(composerAgent, composerAgentHovered)"
+                    :is="botAgentIcon(composerAgent)"
                     v-if="composerAgent"
                     class="size-4 shrink-0"
                   />
-                  <component
-                    :is="composerAgentHovered ? MemohColor : MemohIcon"
+                  <MemohIcon
                     v-else
                     class="size-4 shrink-0"
                     aria-hidden="true"
@@ -1365,11 +1355,6 @@ const forkDialogOpen = ref(false)
 const pendingForkTurnId = ref('')
 const modelPopoverOpen = ref(false)
 const agentPopoverOpen = ref(false)
-const composerAgentHovered = ref(false)
-const hoveredAgentChoice = ref('')
-watch(agentPopoverOpen, (open) => {
-  if (!open) hoveredAgentChoice.value = ''
-})
 const agentChanging = ref(false)
 const acpConfigChangeScope = ref('')
 
