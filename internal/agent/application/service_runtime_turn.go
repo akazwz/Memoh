@@ -1024,7 +1024,7 @@ func runtimeFailureEvent(cause error) native.StreamEvent {
 	if strings.TrimSpace(code) == "" {
 		code = "runtime_prompt_failed"
 	}
-	return native.StreamEvent{Type: native.EventError, Error: code}
+	return native.StreamEvent{Type: native.EventError, Code: code, Error: code}
 }
 
 func runtimeTerminalStreamEvent(eventType native.StreamEventType, result external.PromptResult) native.StreamEvent {
