@@ -55,6 +55,7 @@ type Manager struct {
 	commandHandler         func(context.Context, Command) error
 	decisionStore          DecisionStore
 	terminalObserver       func(context.Context, TerminalRun)
+	admissionObserver      func(botID, sessionID string)
 	decisionFinalizer      func(context.Context, RunHandle) error
 	terminalReconciler     func(context.Context) error
 	cancelLostRunDecisions func(context.Context, string, string, string, int64, string) error
@@ -1242,6 +1243,11 @@ func (m *Manager) startRun(ctx context.Context, start runStart) (RunHandle, Curs
 	if !ctrl.completeAdmissionForAbort() {
 		return RunHandle{}, Cursor{}, context.Canceled
 	}
+	// Every admitted run — not only edits/retries — changes the visible
+	// projection before its messages are persisted (a plain user turn already
+	// commits visible content at admission). Notify cached-view observers
+	// before the admitted run returns to its caller and starts generating.
+	m.observeAdmission(botID, sessionID)
 	ctrl.markReady()
 	return handle, activated.cursor(), nil
 }

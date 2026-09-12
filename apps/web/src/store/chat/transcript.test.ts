@@ -504,6 +504,31 @@ describe('chat transcript controller', () => {
     expect(transcript.visibleMessages.value.map(turn => turn.id)).toEqual(['fresh-user'])
   })
 
+  it('keeps a trusted cached transcript visible while revalidating unmasked', async () => {
+    const { transcript, fetchMessages } = makeTranscript()
+    transcript.replaceMessages([rawUser('cached-user', 'cached')], 'session-1')
+    const pending = deferred<UITurn[]>()
+    fetchMessages.mockReturnValueOnce(pending.promise)
+
+    const hydration = transcript.loadInitialMessages(
+      'bot-1',
+      'session-1',
+      async applyHistory => applyHistory(),
+      { mask: false },
+    )
+
+    // No mask: the cache stays on screen and loadingMessages is untouched
+    // while the same atomic commit path applies the fresh history.
+    expect(transcript.loadingMessages.value).toBe(false)
+    expect(transcript.visibleMessages.value.map(turn => turn.id)).toEqual(['cached-user'])
+
+    pending.resolve([rawUser('fresh-user', 'fresh')])
+    await hydration
+
+    expect(transcript.loadingMessages.value).toBe(false)
+    expect(transcript.visibleMessages.value.map(turn => turn.id)).toEqual(['fresh-user'])
+  })
+
   it('replaces staged database history with an active edit projection', async () => {
     const { transcript, fetchMessages } = makeTranscript()
     fetchMessages.mockResolvedValueOnce([
@@ -851,7 +876,7 @@ describe('chat transcript controller', () => {
 
     expect(transcript.loadingMessages.value).toBe(false)
     expect(transcript.hasMoreOlder.value).toBe(true)
-    expect(onRefreshApplied).toHaveBeenCalledWith('session-1', '2026-01-01T00:00:02.000Z')
+    expect(onRefreshApplied).toHaveBeenCalledWith('session-1', '2026-01-01T00:00:02.000Z', undefined)
   })
 
   it('drops an older-page response that resolves after the active session changes', async () => {
