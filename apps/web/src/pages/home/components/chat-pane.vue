@@ -835,27 +835,8 @@
                   @menu-open="refetchWorkspaceTargets"
                 />
 
-                <!-- The controls row owns the remaining width and right-aligns,
-                     so a long model name truncates instead of overflowing.
-                     min-h-9 during voice: the session ring (size-9) is the row's
-                     tallest child and v-if's off while recording; without the pin
-                     the row shrinks 36→32 and the welcome card's content-between
-                     drops the freed 4px between the rows — the voice buttons
-                     visibly sink. Coupled to the ring's size-9 by design. -->
-                <div
-                  class="order-3 flex min-w-0 flex-1 basis-48 items-center justify-end gap-1 self-end"
-                  :class="showSessionInfoRing && voiceInputState !== 'idle' ? 'min-h-9' : undefined"
-                >
-                  <!-- shrink-0 keeps the model name the one that truncates.
-                       Native and ACP turns persist a context lifecycle; direct
-                       runtimes own their own context, so the ring stays off. -->
-                  <SessionInfoRing
-                    v-if="showSessionInfoRing && voiceInputState === 'idle'"
-                    class="shrink-0"
-                    :visible="isVisible"
-                    :override-model-id="overrideModelId"
-                    :fallback-context-window="sessionFallbackContextWindow"
-                  />
+                <!-- The model selector truncates within the input controls row. -->
+                <div class="order-3 flex min-w-0 flex-1 basis-48 items-center justify-end gap-1 self-end">
                   <Popover
                     v-if="(!activeUsesExternalAgentComposer || activeUsesACPRuntime || activeUsesDirectRuntime) && voiceInputState === 'idle'"
                     v-model:open="modelPopoverOpen"
@@ -953,90 +934,6 @@
                       </div>
                     </PopoverContent>
                   </Popover>
-
-                  <DropdownMenu
-                    v-if="!hasRenderedSession && enabledBotAgents.length && voiceInputState === 'idle'"
-                    v-model:open="agentPopoverOpen"
-                  >
-                    <DropdownMenuTrigger as-child>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="sm"
-                        :disabled="!canChangeAgent"
-                        :class="runtimeModeChanging ? 'disabled:opacity-100' : undefined"
-                        :title="composerAgentName"
-                        :aria-label="$t('chat.agent') + ': ' + composerAgentName"
-                        class="max-w-32 shrink-0 px-2.5 font-normal text-muted-foreground max-md:h-11 @max-lg/composer:w-11 @max-lg/composer:px-0"
-                      >
-                        <component
-                          :is="botAgentIcon(composerAgent)"
-                          v-if="composerAgent"
-                          class="size-4 shrink-0"
-                        />
-                        <img
-                          v-else
-                          src="/logo.svg"
-                          alt=""
-                          class="size-4 shrink-0"
-                        >
-                        <span class="truncate @max-lg/composer:hidden">{{ composerAgentName }}</span>
-                      </Button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent
-                      align="end"
-                      side="top"
-                      class="w-56"
-                    >
-                      <DropdownMenuLabel>{{ $t('chat.agent') }}</DropdownMenuLabel>
-                      <DropdownMenuItem @select="selectMemohAgent">
-                        <img
-                          src="/logo.svg"
-                          alt=""
-                          class="size-4 shrink-0"
-                        >
-                        <span class="min-w-0 flex-1 truncate">{{ $t('chat.agentMemoh') }}</span>
-                        <Check
-                          v-if="!activeUsesExternalAgentComposer"
-                          class="ml-auto"
-                        />
-                      </DropdownMenuItem>
-                      <DropdownMenuItem
-                        v-for="agent in enabledBotAgents"
-                        :key="agent.id"
-                        @select="selectBotAgent(agent)"
-                      >
-                        <component
-                          :is="botAgentIcon(agent, true)"
-                          class="size-4 shrink-0"
-                        />
-                        <span class="min-w-0 flex-1 truncate">{{ botAgentName(agent) }}</span>
-                        <Check
-                          v-if="activeBotAgentID === agent.id"
-                          class="ml-auto"
-                        />
-                      </DropdownMenuItem>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                  <span
-                    v-else-if="voiceInputState === 'idle'"
-                    class="inline-flex h-8 max-w-32 shrink-0 items-center gap-1.5 px-2.5 text-control font-normal text-muted-foreground max-md:h-11 @max-lg/composer:w-11 @max-lg/composer:justify-center @max-lg/composer:px-0"
-                    :title="composerAgentName"
-                    :aria-label="$t('chat.agent') + ': ' + composerAgentName"
-                  >
-                    <component
-                      :is="botAgentIcon(composerAgent)"
-                      v-if="composerAgent"
-                      class="size-4 shrink-0"
-                    />
-                    <img
-                      v-else
-                      src="/logo.svg"
-                      alt=""
-                      class="size-4 shrink-0"
-                    >
-                    <span class="truncate @max-lg/composer:hidden">{{ composerAgentName }}</span>
-                  </span>
 
                   <!-- While voice owns the composer the trailing slot holds
                        the voice pair instead of mic/send: ✗ cancels (also
@@ -1201,6 +1098,101 @@
                     </div>
                   </div>
                 </div>
+              </div>
+              <!-- Session controls sit below the input surface. Keep this row's
+                   height while recording so the dock remains stable. -->
+              <div class="flex min-h-10 min-w-0 items-center justify-between gap-2 px-2 pt-1 max-md:min-h-12">
+                <DropdownMenu
+                  v-if="!hasRenderedSession && enabledBotAgents.length && voiceInputState === 'idle'"
+                  v-model:open="agentPopoverOpen"
+                >
+                  <DropdownMenuTrigger as-child>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      :disabled="!canChangeAgent"
+                      :class="runtimeModeChanging ? 'disabled:opacity-100' : undefined"
+                      :title="composerAgentName"
+                      :aria-label="$t('chat.agent') + ': ' + composerAgentName"
+                      class="min-w-0 max-w-60 font-normal text-muted-foreground max-md:h-11"
+                    >
+                      <component
+                        :is="botAgentIcon(composerAgent)"
+                        v-if="composerAgent"
+                        class="size-4 shrink-0"
+                      />
+                      <img
+                        v-else
+                        src="/logo.svg"
+                        alt=""
+                        class="size-4 shrink-0"
+                      >
+                      <span class="truncate">{{ composerAgentName }}</span>
+                      <ChevronDown class="size-3.5 shrink-0" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent
+                    align="start"
+                    side="top"
+                    class="w-56"
+                  >
+                    <DropdownMenuLabel>{{ $t('chat.agent') }}</DropdownMenuLabel>
+                    <DropdownMenuItem @select="selectMemohAgent">
+                      <img
+                        src="/logo.svg"
+                        alt=""
+                        class="size-4 shrink-0"
+                      >
+                      <span class="min-w-0 flex-1 truncate">{{ $t('chat.agentMemoh') }}</span>
+                      <Check
+                        v-if="!activeUsesExternalAgentComposer"
+                        class="ml-auto"
+                      />
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      v-for="agent in enabledBotAgents"
+                      :key="agent.id"
+                      @select="selectBotAgent(agent)"
+                    >
+                      <component
+                        :is="botAgentIcon(agent, true)"
+                        class="size-4 shrink-0"
+                      />
+                      <span class="min-w-0 flex-1 truncate">{{ botAgentName(agent) }}</span>
+                      <Check
+                        v-if="activeBotAgentID === agent.id"
+                        class="ml-auto"
+                      />
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+                <span
+                  v-else-if="voiceInputState === 'idle'"
+                  class="inline-flex h-8 min-w-0 max-w-60 items-center gap-1.5 px-2.5 text-control font-normal text-muted-foreground max-md:h-11"
+                  :title="composerAgentName"
+                  :aria-label="$t('chat.agent') + ': ' + composerAgentName"
+                >
+                  <component
+                    :is="botAgentIcon(composerAgent)"
+                    v-if="composerAgent"
+                    class="size-4 shrink-0"
+                  />
+                  <img
+                    v-else
+                    src="/logo.svg"
+                    alt=""
+                    class="size-4 shrink-0"
+                  >
+                  <span class="truncate">{{ composerAgentName }}</span>
+                </span>
+                <SessionInfoRing
+                  v-if="showSessionInfoRing && voiceInputState === 'idle'"
+                  class="ml-auto shrink-0"
+                  :visible="isVisible"
+                  :override-model-id="overrideModelId"
+                  :fallback-context-window="sessionFallbackContextWindow"
+                />
               </div>
             </ComposerDock>
           </div>
