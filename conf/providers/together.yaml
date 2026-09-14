@@ -147,6 +147,8 @@ models:
     config:
       compatibilities: [tool-call]
       context_window: 256000
+      thinking_mode: toggle
+      reasoning_efforts: [low, medium, high]
   - model_id: "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8"
     name: "Qwen3 Coder 480B A35B Instruct FP8"
     type: chat

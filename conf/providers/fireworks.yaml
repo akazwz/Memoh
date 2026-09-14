@@ -176,6 +176,8 @@ models:
     type: chat
     config:
       context_window: 160000
+      thinking_mode: toggle
+      reasoning_efforts: [low, medium, high]
   - model_id: "accounts/fireworks/models/deepseek-r1-0528-distill-qwen3-8b"
     name: "Deepseek R1 0528 Distill Qwen3 8b"
     type: chat
@@ -1149,6 +1151,8 @@ models:
     type: chat
     config:
       context_window: 262144
+      thinking_mode: toggle
+      reasoning_efforts: [low, medium, high]
   - model_id: "accounts/fireworks/models/qwen3-30b-a3b"
     name: "Qwen3 30b A3b"
     type: chat
