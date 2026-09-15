@@ -106,7 +106,7 @@
   "computerConnect": {
     "title": "连接电脑",
     "commandLabel": "连接命令",
-    "commandDescription": "在要连接的电脑上运行，保持进程运行。",
+    "commandDescription": "在要连接的电脑上安装 Node.js 20+，然后在终端（macOS/Linux）或命令提示符（Windows）中运行。命令会安装并连接后台服务，完成后可关闭终端。",
     "waiting": "等待电脑连接…",
     "finish": "完成"
   },

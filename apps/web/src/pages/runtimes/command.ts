@@ -11,9 +11,8 @@ export function buildRuntimeConnectCommand(
   if (!key) return ''
 
   const args = [
-    'npx',
-    '--yes',
-    '@memohai/runtime',
+    'memoh-runtime',
+    'enroll',
     '--server',
     serverUrl,
     '--key',
@@ -26,7 +25,14 @@ export function buildRuntimeConnectCommand(
   if (isInsecureLocalhost(serverUrl)) {
     args.push('--insecure-localhost')
   }
-  return args.join(' ')
+  // Stop on failure so a rejected enrollment cannot start a different saved connection.
+  return [
+    // Earlier published versions only support foreground connections.
+    'npm install -g "@memohai/runtime@>=0.20.0"',
+    args.join(' '),
+    'memoh-runtime service install',
+    'memoh-runtime service start',
+  ].join(' && ')
 }
 
 function isInsecureLocalhost(serverUrl: string): boolean {

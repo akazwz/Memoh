@@ -106,7 +106,7 @@
   "computerConnect": {
     "title": "Connect computer",
     "commandLabel": "Connection command",
-    "commandDescription": "Run it on the computer you want to connect, and keep it running.",
+    "commandDescription": "Install Node.js 20+, then run this command in Terminal (macOS/Linux) or Command Prompt (Windows). It installs and connects the runtime in the background, so you can close the terminal afterward.",
     "waiting": "Waiting for the computer to connect…",
     "finish": "Done"
   },

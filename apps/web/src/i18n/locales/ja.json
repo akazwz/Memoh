@@ -103,7 +103,7 @@
   "computerConnect": {
     "title": "コンピューターを接続",
     "commandLabel": "接続コマンド",
-    "commandDescription": "接続したいコンピューターで実行し、起動したままにしてください。",
+    "commandDescription": "接続するコンピューターに Node.js 20+ をインストールし、ターミナル（macOS/Linux）またはコマンドプロンプト（Windows）で実行してください。Runtime がインストールされ、バックグラウンドで接続します。完了後はターミナルを閉じられます。",
     "waiting": "コンピューターの接続を待っています…",
     "finish": "完了"
   },
