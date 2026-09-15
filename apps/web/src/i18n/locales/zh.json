@@ -106,8 +106,7 @@
   "computerConnect": {
     "title": "连接电脑",
     "replaceAction": "替换本机已有绑定",
-    "cancelReplace": "取消替换",
-    "replaceDescription": "运行此命令会覆盖这台电脑保存的绑定，后台服务将改用当前连接。",
+    "replaceDescription": "开启后，运行下方命令会覆盖这台电脑保存的绑定，后台服务将改用当前连接。",
     "restore": "恢复连接",
     "existingDescription": "在「{name}」上运行命令，沿用原凭证恢复后台连接。电脑记录和 Bot 权限会保留。",
     "commandLabel": "连接命令",

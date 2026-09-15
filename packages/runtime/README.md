@@ -44,6 +44,13 @@ Keep that CLI installation available; an `npx` cache is not a persistent install
 Package managers own program installation and upgrades. If an upgrade moves Node
 or the CLI, rerun `service install` and `service start`.
 
+On macOS, installation creates a small `Memoh Runtime` launcher in
+`~/.memoh/runtime/service/` so Login Items identifies the background service by
+name. It forwards to the installed Node and CLI without copying either program.
+Reinstalling updates the launcher; uninstalling removes it while retaining the
+saved enrollment. After upgrading from a version that showed `Node.js Foundation`,
+run `service install` and `service start` again to register the named launcher.
+
 The OS owns process supervision and automatic startup:
 
 | OS | Service manager | Automatic startup | Logs |

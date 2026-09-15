@@ -13,6 +13,18 @@
           </DialogDescription>
         </DialogHeader>
 
+        <SettingsSection>
+          <SettingsRow
+            :label="t('computerConnect.replaceAction')"
+            :description="t('computerConnect.replaceDescription')"
+          >
+            <Switch
+              v-model="replaceBinding"
+              :aria-label="t('computerConnect.replaceAction')"
+            />
+          </SettingsRow>
+        </SettingsSection>
+
         <div>
           <p class="text-sm text-foreground">
             {{ t('computerConnect.commandDescription') }}
@@ -36,14 +48,6 @@
             </Button>
           </div>
         </div>
-
-        <AutoHeight>
-          <FieldStack :help="replaceBinding ? t('computerConnect.replaceDescription') : ''">
-            <TextButton @click="replaceBinding = !replaceBinding">
-              {{ replaceBinding ? t('computerConnect.cancelReplace') : t('computerConnect.replaceAction') }}
-            </TextButton>
-          </FieldStack>
-        </AutoHeight>
 
         <!-- The waiting banner is a static card — no spinner chrome. -->
         <div class="flex items-center gap-2 rounded-lg border border-border-soft px-3 py-2.5">
@@ -95,7 +99,6 @@ import { useQuery } from '@pinia/colada'
 import { deleteUsersMeRuntimesById, type UserruntimeRuntime } from '@memohai/sdk'
 import { getBotsQuery } from '@memohai/sdk/colada'
 import {
-  AutoHeight,
   Button,
   Dialog,
   DialogScrollContent,
@@ -103,8 +106,9 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-  FieldStack,
-  TextButton,
+  SettingsRow,
+  SettingsSection,
+  Switch,
   toast,
   useClipboard,
 } from '@felinic/ui'

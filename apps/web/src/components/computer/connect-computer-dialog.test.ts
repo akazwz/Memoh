@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { createApp, h, nextTick, reactive, ref, type App, type Slots } from 'vue'
+import { createApp, defineComponent, h, nextTick, reactive, ref, type App, type Slots } from 'vue'
 import { createPinia } from 'pinia'
 import { PiniaColada } from '@pinia/colada'
 import type { UserruntimeRuntime } from '@memohai/sdk'
@@ -22,10 +22,19 @@ vi.mock('@felinic/ui', () => {
   const Wrapper = (_props: unknown, { slots }: { slots: Slots }) => h('div', slots.default?.())
   const Button = (_props: unknown, { slots, attrs }: { slots: Slots, attrs: Record<string, unknown> }) => h('button', attrs, slots.default?.())
   return {
-    Button, TextButton: Button, AutoHeight: Wrapper,
+    Button, SettingsSection: Wrapper,
+    SettingsRow: (props: { label: string, description: string }, { slots }: { slots: Slots }) => h('div', [props.label, props.description, slots.default?.()]),
+    Switch: defineComponent({
+      props: { modelValue: Boolean },
+      emits: ['update:modelValue'],
+      setup: (props, { emit }) => () => h('button', {
+        role: 'switch',
+        'aria-checked': props.modelValue,
+        onClick: () => emit('update:modelValue', !props.modelValue),
+      }),
+    }),
     Dialog: Wrapper, DialogScrollContent: Wrapper, DialogDescription: Wrapper,
     DialogFooter: Wrapper, DialogHeader: Wrapper, DialogTitle: Wrapper,
-    FieldStack: (props: { help: string }, { slots }: { slots: Slots }) => h('div', [slots.default?.(), props.help]),
     toast: { success: vi.fn(), error: vi.fn() },
     useClipboard: () => ({ copyText: api.copy }),
   }
@@ -69,26 +78,40 @@ function clickButton(text: string): void {
   button!.click()
 }
 
+function toggleReplacement(): void {
+  const control = root.querySelector<HTMLButtonElement>('[role="switch"][aria-label="computerConnect.replaceAction"]')
+  expect(control).not.toBeNull()
+  control!.click()
+}
+
 describe('connection and recovery', () => {
   it('only adds --replace after opting in and copies the selected command', async () => {
     await mount()
+    const control = root.querySelector('[role="switch"]')!
+    expect(control.getAttribute('aria-checked')).toBe('false')
+    expect(control.compareDocumentPosition(root.querySelector('code')!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     expect(root.querySelector('code')?.textContent).not.toContain('--replace')
-    clickButton('computerConnect.replaceAction')
+    toggleReplacement()
     await flush()
+    expect(control.getAttribute('aria-checked')).toBe('true')
     const command = root.querySelector('code')?.textContent
     expect(command).toContain('--replace && memoh-runtime service install && memoh-runtime service start')
     expect(root.textContent).toContain('computerConnect.replaceDescription')
     root.querySelector<HTMLButtonElement>('[aria-label="common.copy"]')!.click()
     await flush()
     expect(api.copy).toHaveBeenCalledWith(command)
-    clickButton('computerConnect.cancelReplace')
+    toggleReplacement()
     await flush()
+    expect(control.getAttribute('aria-checked')).toBe('false')
     expect(root.querySelector('code')?.textContent).not.toContain('--replace')
+    root.querySelector<HTMLButtonElement>('[aria-label="common.copy"]')!.click()
+    await flush()
+    expect(api.copy).toHaveBeenLastCalledWith(root.querySelector('code')?.textContent)
   })
 
   it('revokes an abandoned new credential even if replacement was selected', async () => {
     const props = await mount()
-    clickButton('computerConnect.replaceAction')
+    toggleReplacement()
     await flush()
     clickButton('common.cancel')
     await flush()
@@ -100,7 +123,7 @@ describe('connection and recovery', () => {
     const props = await mount(true, true)
     expect(root.querySelector('code')?.textContent).toContain(`--key ${credential.key} --insecure-localhost`)
     expect(root.querySelector('code')?.textContent).not.toContain('--replace')
-    clickButton('computerConnect.replaceAction')
+    toggleReplacement()
     await flush()
     expect(root.querySelector('code')?.textContent).toContain('--replace')
     clickButton('common.cancel')
@@ -123,7 +146,7 @@ describe('connection and recovery', () => {
 
   it('resets the mode when starting another new connection', async () => {
     const props = await mount()
-    clickButton('computerConnect.replaceAction')
+    toggleReplacement()
     await flush()
     props.open = false
     await flush()
@@ -136,7 +159,7 @@ describe('connection and recovery', () => {
 
   it('requires opting in again when reopening the same historical computer', async () => {
     const props = await mount(true, true)
-    clickButton('computerConnect.replaceAction')
+    toggleReplacement()
     await flush()
     clickButton('common.cancel')
     await flush()

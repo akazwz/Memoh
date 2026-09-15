@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { spawnSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -23,9 +23,9 @@ describe('native service definitions', () => {
     expect(unit).toContain(`ExecStart="${spec.nodePath}" "${spec.entryPath}" run --config "${spec.configPath}"`)
     expect(unit).toContain('WorkingDirectory=/home/a &b\n')
     expect(unit).toContain('Restart=always')
-    const plist = renderLaunchdPlist(spec)
-    expect(plist).toContain('<string>/home/a &amp;b/node</string>')
-    expect(plist).toContain('<string>/home/a &amp;b/cli.mjs</string>')
+    const plist = renderLaunchdPlist(spec, '/home/a &b/service/Memoh Runtime')
+    expect(plist).toContain('<string>/home/a &amp;b/service/Memoh Runtime</string>')
+    expect(plist).not.toContain('<string>/home/a &amp;b/node</string>')
     expect(plist).toContain('<string>run</string>')
     expect(plist).toContain('<key>KeepAlive</key>')
     if (process.platform === 'darwin') {
@@ -54,6 +54,33 @@ describe('native service definitions', () => {
     expect(await findNodeExecutable(root, process.platform)).toBe(join(root, 'node'))
     await expect(findNodeExecutable('', process.platform)).rejects.toThrow('Node was not found')
   })
+
+  it.runIf(process.platform !== 'win32')('executes the named macOS launcher with literal paths and updates it on reinstall', async () => {
+    const { root, paths } = await fixture()
+    const nodePath = join(root, 'node\'s $stable `entry`')
+    await symlink(process.execPath, nodePath)
+    const entryPath = join(root, 'cli\'s $literal `entry`.mjs')
+    await writeFile(entryPath, 'console.log(JSON.stringify(process.argv.slice(2))); process.exit(23)\n')
+    const configPath = join(root, 'config\'s $literal `value`.json')
+    const runner = vi.fn<CommandRunner>(async () => ({ code: 0, stdout: '', stderr: '' }))
+    const manager = createLaunchdServiceManager(paths, runner, 501)
+    const spec = { ...serviceSpec(root), nodePath, entryPath, configPath }
+    await manager.register(spec)
+    const launcherPath = join(paths.serviceDir, 'Memoh Runtime')
+    expect((await stat(launcherPath)).mode & 0o777).toBe(0o700)
+    expect(await readFile(paths.launchdPlistPath, 'utf8')).toContain(`<string>${launcherPath}</string>`)
+    const args = ['run', '--config', configPath]
+    const result = spawnSync(launcherPath, args, { encoding: 'utf8', env: { PATH: '/usr/bin:/bin' } })
+    expect(result.status, result.stderr).toBe(23)
+    expect(JSON.parse(result.stdout)).toEqual(args)
+
+    const upgradedEntry = join(root, 'upgraded-cli.mjs')
+    await writeFile(upgradedEntry, 'console.log("upgraded"); process.exit(24)\n')
+    await manager.register({ ...spec, entryPath: upgradedEntry })
+    const upgraded = spawnSync(launcherPath, args, { encoding: 'utf8' })
+    expect(upgraded.status, upgraded.stderr).toBe(24)
+    expect(upgraded.stdout.trim()).toBe('upgraded')
+  })
 })
 
 describe('native service lifecycle', () => {
@@ -67,6 +94,7 @@ describe('native service lifecycle', () => {
     })
     const manager = createLaunchdServiceManager(paths, runner, 501)
     await manager.register({ ...serviceSpec(root), logsDir: paths.logsDir })
+    await writeFile(paths.configPath, 'saved enrollment', { mode: 0o600 })
     expect((await manager.status()).state).toBe('stopped')
     await manager.start()
     expect((await manager.status()).state).toBe('running')
@@ -74,6 +102,8 @@ describe('native service lifecycle', () => {
     expect((await manager.status()).state).toBe('stopped')
     await manager.uninstall()
     expect((await manager.status()).state).toBe('not-installed')
+    await expect(stat(join(paths.serviceDir, 'Memoh Runtime'))).rejects.toMatchObject({ code: 'ENOENT' })
+    expect(await readFile(paths.configPath, 'utf8')).toBe('saved enrollment')
     expect(runner).toHaveBeenCalledWith('/bin/launchctl', ['bootstrap', 'gui/501', paths.launchdPlistPath], expect.any(Object))
   })
 

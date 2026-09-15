@@ -1,5 +1,6 @@
 import { access, rm } from 'node:fs/promises'
 import { setTimeout as sleep } from 'node:timers/promises'
+import { join } from 'node:path'
 
 import { ensureDirectory, writeFileAtomic, type RuntimePaths } from '../runtime-config'
 import {
@@ -15,7 +16,7 @@ const bootstrapAttempts = 5
 const defaultBootstrapRetryDelayMs = 300
 const bootoutWaitAttempts = 50
 
-export function renderLaunchdPlist(spec: RuntimeServiceSpec): string {
+export function renderLaunchdPlist(spec: RuntimeServiceSpec, launcherPath: string): string {
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -24,8 +25,7 @@ export function renderLaunchdPlist(spec: RuntimeServiceSpec): string {
   <string>${xmlEscape(launchdLabel)}</string>
   <key>ProgramArguments</key>
   <array>
-    <string>${xmlEscape(spec.nodePath)}</string>
-    <string>${xmlEscape(spec.entryPath)}</string>
+    <string>${xmlEscape(launcherPath)}</string>
     <string>run</string>
     <string>--config</string>
     <string>${xmlEscape(spec.configPath)}</string>
@@ -61,6 +61,7 @@ export function createLaunchdServiceManager(
   const launchctl = '/bin/launchctl'
   const domain = `gui/${uid}`
   const target = `${domain}/${launchdLabel}`
+  const launcherPath = join(paths.serviceDir, 'Memoh Runtime')
   const retryDelayMs = options.bootstrapRetryDelayMs ?? defaultBootstrapRetryDelayMs
   const loaded = async () => (await runner(launchctl, ['print', target])).code === 0
   // `launchctl bootout` returns before launchd has finished tearing the job
@@ -95,7 +96,12 @@ export function createLaunchdServiceManager(
     backend: 'launchd-user',
     async register(spec) {
       await ensureDirectory(spec.logsDir)
-      await writeFileAtomic(paths.launchdPlistPath, renderLaunchdPlist(spec), 0o600)
+      // macOS attributes a legacy agent to its executable. Launch a named
+      // script so Login Items shows Memoh Runtime rather than Node's signer.
+      // exec preserves launchd's process supervision; npm still owns the CLI.
+      const launcher = `#!/bin/sh\nexec ${shellQuote(spec.nodePath)} ${shellQuote(spec.entryPath)} "$@"\n`
+      await writeFileAtomic(launcherPath, launcher, 0o700)
+      await writeFileAtomic(paths.launchdPlistPath, renderLaunchdPlist(spec, launcherPath), 0o600)
       await requireCommand(runner, '/usr/bin/plutil', ['-lint', paths.launchdPlistPath])
     },
     async start() {
@@ -122,8 +128,14 @@ export function createLaunchdServiceManager(
     async uninstall() {
       await bootout()
       await rm(paths.launchdPlistPath, { force: true })
+      await rm(launcherPath, { force: true })
     },
   }
+}
+
+function shellQuote(value: string): string {
+  if (value.includes('\0')) throw new Error('launchd service value contains a null byte')
+  return `'${value.replaceAll('\'', '\'\\\'\'')}'`
 }
 
 function xmlEscape(value: string): string {

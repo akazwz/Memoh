@@ -106,8 +106,7 @@
   "computerConnect": {
     "title": "Connect computer",
     "replaceAction": "Replace saved binding",
-    "cancelReplace": "Cancel replacement",
-    "replaceDescription": "Running this command overwrites the binding saved on this computer. The background service will switch to the current connection.",
+    "replaceDescription": "When enabled, running the command below overwrites this computer's saved binding and switches the background service to the current connection.",
     "restore": "Reconnect",
     "existingDescription": "Run the command on “{name}” to restore its background connection with its original credentials. Its computer record and Bot permissions are preserved.",
     "commandLabel": "Connection command",
