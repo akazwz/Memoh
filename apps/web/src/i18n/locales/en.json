@@ -105,6 +105,11 @@
   },
   "computerConnect": {
     "title": "Connect computer",
+    "replaceAction": "Replace saved binding",
+    "cancelReplace": "Cancel replacement",
+    "replaceDescription": "Running this command overwrites the binding saved on this computer. The background service will switch to the current connection.",
+    "restore": "Reconnect",
+    "existingDescription": "Run the command on “{name}” to restore its background connection with its original credentials. Its computer record and Bot permissions are preserved.",
     "commandLabel": "Connection command",
     "commandDescription": "Install Node.js 20+, then run this command in Terminal (macOS/Linux) or Command Prompt (Windows). It installs and connects the runtime in the background, so you can close the terminal afterward.",
     "waiting": "Waiting for the computer to connect…",

@@ -3,9 +3,12 @@ export interface RuntimeCommandCredential {
   team_id?: string
 }
 
+export type RuntimeConnectMode = 'connect' | 'replace'
+
 export function buildRuntimeConnectCommand(
   serverUrl: string,
   credential: RuntimeCommandCredential | null | undefined,
+  mode: RuntimeConnectMode = 'connect',
 ): string {
   const key = credential?.key?.trim()
   if (!key) return ''
@@ -24,6 +27,9 @@ export function buildRuntimeConnectCommand(
   }
   if (isInsecureLocalhost(serverUrl)) {
     args.push('--insecure-localhost')
+  }
+  if (mode === 'replace') {
+    args.push('--replace')
   }
   // Stop on failure so a rejected enrollment cannot start a different saved connection.
   return [

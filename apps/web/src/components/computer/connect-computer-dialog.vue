@@ -3,11 +3,14 @@
     :open="open"
     @update:open="onOpenChange"
   >
-    <DialogContent>
-      <!-- Step 1: the command. One action — copy and run it. -->
+    <DialogScrollContent>
+      <!-- Step 1: copy and run the command; replacing a binding is opt-in. -->
       <template v-if="step === 'command'">
         <DialogHeader class="pr-8">
-          <DialogTitle>{{ t('computerConnect.title') }}</DialogTitle>
+          <DialogTitle>{{ existing ? t('computerConnect.restore') : t('computerConnect.title') }}</DialogTitle>
+          <DialogDescription v-if="existing">
+            {{ t('computerConnect.existingDescription', { name: credential?.name }) }}
+          </DialogDescription>
         </DialogHeader>
 
         <div>
@@ -33,6 +36,14 @@
             </Button>
           </div>
         </div>
+
+        <AutoHeight>
+          <FieldStack :help="replaceBinding ? t('computerConnect.replaceDescription') : ''">
+            <TextButton @click="replaceBinding = !replaceBinding">
+              {{ replaceBinding ? t('computerConnect.cancelReplace') : t('computerConnect.replaceAction') }}
+            </TextButton>
+          </FieldStack>
+        </AutoHeight>
 
         <!-- The waiting banner is a static card — no spinner chrome. -->
         <div class="flex items-center gap-2 rounded-lg border border-border-soft px-3 py-2.5">
@@ -73,7 +84,7 @@
           </Button>
         </DialogFooter>
       </template>
-    </DialogContent>
+    </DialogScrollContent>
   </Dialog>
 </template>
 
@@ -84,13 +95,16 @@ import { useQuery } from '@pinia/colada'
 import { deleteUsersMeRuntimesById, type UserruntimeRuntime } from '@memohai/sdk'
 import { getBotsQuery } from '@memohai/sdk/colada'
 import {
+  AutoHeight,
   Button,
   Dialog,
-  DialogContent,
+  DialogScrollContent,
   DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
+  FieldStack,
+  TextButton,
   toast,
   useClipboard,
 } from '@felinic/ui'
@@ -102,10 +116,11 @@ import ComputerAccessList from './computer-access-list.vue'
 import { useAccountRuntimes, useComputerAccessActions } from './use-computer-access'
 
 // The connect stepper, one continuous dialog: command (+ waiting) → connected
-// → bot permissions. Closing at the command step revokes the credential so
-// abandoned attempts leave nothing behind.
+// → bot permissions. Only new credentials are revoked on cancellation;
+// reconnecting a historical computer keeps its identity and permissions.
 const props = defineProps<{
   credential: UserruntimeRuntime | null
+  existing?: boolean
 }>()
 
 const open = defineModel<boolean>('open', { default: false })
@@ -114,8 +129,11 @@ const { t } = useI18n()
 const { copyText } = useClipboard()
 
 const step = ref<'command' | 'access'>('command')
+const replaceBinding = ref(false)
 const runtimeId = computed(() => props.credential?.id ?? '')
-const command = computed(() => buildRuntimeConnectCommand(sdkApiBaseUrl(), props.credential))
+const command = computed(() => buildRuntimeConnectCommand(
+  sdkApiBaseUrl(), props.credential, replaceBinding.value ? 'replace' : 'connect',
+))
 
 const { runtimes, refetch: refetchRuntimes } = useAccountRuntimes()
 const { data: botsData } = useQuery(getBotsQuery())
@@ -123,8 +141,16 @@ const { grantAccess } = useComputerAccessActions()
 
 const adoptedName = ref('')
 
-// Auto-advance the moment the machine shows up online: grant every bot by
-// default and land straight on the permissions step.
+// Every attempt starts without replacement, including reopening the same computer.
+watch([runtimeId, open], ([id, isOpen]) => {
+  if (!id || !isOpen) return
+  step.value = 'command'
+  replaceBinding.value = false
+  adoptedName.value = ''
+}, { immediate: true })
+
+// New computers proceed to permissions; restored computers return to the list
+// without changing their grants.
 const connectedRuntime = computed(() => (
   (runtimes.value ?? []).find(runtime => runtime.id === runtimeId.value && runtime.online)
 ))
@@ -153,6 +179,10 @@ watch([connectedRuntime, granting, open], async ([runtime]) => {
   if (!open.value || !runtime || step.value !== 'command' || granting.value) return
   adoptedName.value = runtime.name || runtime.hostname || runtimeId.value
   toast.success(t('runtimes.computerOnline', { name: adoptedName.value }))
+  if (props.existing) {
+    close()
+    return
+  }
   const connectedId = runtimeId.value
   granting.value = true
   try {
@@ -184,7 +214,7 @@ function close(): void {
   // the computers list — left alone it would be an active credential the user
   // can neither see nor revoke. Capture the id BEFORE open=false: the parent
   // clears the credential on close and runtimeId would recompute to ''.
-  const abandonedId = step.value === 'command' ? runtimeId.value : ''
+  const abandonedId = step.value === 'command' && !props.existing ? runtimeId.value : ''
   open.value = false
   if (abandonedId) void revokeAbandonedCredential(abandonedId)
 }
@@ -221,11 +251,4 @@ async function copyCommand(): Promise<void> {
     toast.error(t('common.copyFailed'))
   }
 }
-
-// A fresh credential starts the flow from the top.
-watch(() => props.credential?.id, (id) => {
-  if (!id) return
-  step.value = 'command'
-  adoptedName.value = ''
-})
 </script>

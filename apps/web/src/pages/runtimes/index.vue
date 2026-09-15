@@ -103,7 +103,7 @@
           stack="sm"
         >
           <template #content>
-            <div class="flex items-center justify-between gap-3">
+            <div class="flex flex-wrap items-center justify-between gap-3">
               <p class="flex min-w-0 items-center gap-2 text-sm">
                 <span class="truncate font-medium text-foreground">{{ runtime.name }}</span>
                 <Badge
@@ -129,6 +129,14 @@
                   />
                   {{ runtime.online ? t('runtimes.status.online') : t('runtimes.status.offline') }}
                 </span>
+                <Button
+                  v-if="!runtime.online && runtime.key"
+                  variant="outline"
+                  size="sm"
+                  @click="restoreComputer(runtime)"
+                >
+                  {{ t('computerConnect.restore') }}
+                </Button>
                 <Button
                   variant="ghost"
                   size="icon-sm"
@@ -217,7 +225,8 @@
 
   <ConnectComputerDialog
     v-model:open="connectDialogOpen"
-    :credential="createdCredential"
+    :credential="connectCredential"
+    :existing="reconnectingExisting"
   />
 
   <BotComputerAccessDialog
@@ -369,7 +378,8 @@ const desktopRuntimeStatusDot = computed(() => {
 })
 
 const connectDialogOpen = ref(false)
-const createdCredential = ref<UserruntimeRuntime | null>(null)
+const connectCredential = ref<UserruntimeRuntime | null>(null)
+const reconnectingExisting = ref(false)
 
 const connectSchema = toTypedSchema(z.object({
   name: z.string().trim().min(1, t('runtimes.connectDialog.nameRequired')),
@@ -474,12 +484,19 @@ const enableDesktopRuntime = connectForm.handleSubmit(async (values) => {
 async function startConnect(): Promise<void> {
   if (creatingRuntime.value) return
   try {
-    createdCredential.value = await createRuntime('')
+    connectCredential.value = await createRuntime('')
+    reconnectingExisting.value = false
     connectDialogOpen.value = true
     void refetchRuntimes()
   } catch (error) {
     toast.error(resolveApiErrorMessage(error, t('runtimes.connectDialog.createFailed')))
   }
+}
+
+function restoreComputer(runtime: UserruntimeRuntime): void {
+  connectCredential.value = runtime
+  reconnectingExisting.value = true
+  connectDialogOpen.value = true
 }
 
 // Consume the add entry from chat once; reloading the page must not create
@@ -507,7 +524,7 @@ async function revokeRuntime(runtime: UserruntimeRuntime): Promise<void> {
 
 watch(connectDialogOpen, (open) => {
   if (open) return
-  createdCredential.value = null
+  connectCredential.value = null
   connectForm.resetForm({ values: { name: '' } })
 })
 

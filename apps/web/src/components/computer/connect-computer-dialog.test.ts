@@ -6,7 +6,7 @@ import { PiniaColada } from '@pinia/colada'
 import type { UserruntimeRuntime } from '@memohai/sdk'
 import ConnectComputerDialog from './connect-computer-dialog.vue'
 
-const api = vi.hoisted(() => ({ list: vi.fn(), remove: vi.fn(), grant: vi.fn() }))
+const api = vi.hoisted(() => ({ list: vi.fn(), remove: vi.fn(), grant: vi.fn(), copy: vi.fn() }))
 vi.mock('@memohai/sdk', () => ({
   getUsersMeRuntimes: api.list,
   deleteUsersMeRuntimesById: api.remove,
@@ -16,17 +16,18 @@ vi.mock('@memohai/sdk/colada', () => ({
   getBotsQuery: () => ({ key: ['bots'], query: async () => ({ items: [{ id: 'bot-1' }] }) }),
 }))
 vi.mock('vue-i18n', () => ({ useI18n: () => ({ t: (key: string) => key }) }))
-vi.mock('@/lib/api-client', () => ({ sdkApiBaseUrl: () => '/api' }))
-vi.mock('@/pages/runtimes/command', () => ({ buildRuntimeConnectCommand: () => 'runtime command' }))
+vi.mock('@/lib/api-client', () => ({ sdkApiBaseUrl: () => 'http://localhost:18083/api' }))
 vi.mock('./computer-access-list.vue', () => ({ default: () => h('div', 'access-list') }))
 vi.mock('@felinic/ui', () => {
   const Wrapper = (_props: unknown, { slots }: { slots: Slots }) => h('div', slots.default?.())
+  const Button = (_props: unknown, { slots, attrs }: { slots: Slots, attrs: Record<string, unknown> }) => h('button', attrs, slots.default?.())
   return {
-    Button: (_props: unknown, { slots }: { slots: Slots }) => h('button', slots.default?.()),
-    Dialog: Wrapper, DialogContent: Wrapper, DialogDescription: Wrapper,
+    Button, TextButton: Button, AutoHeight: Wrapper,
+    Dialog: Wrapper, DialogScrollContent: Wrapper, DialogDescription: Wrapper,
     DialogFooter: Wrapper, DialogHeader: Wrapper, DialogTitle: Wrapper,
+    FieldStack: (props: { help: string }, { slots }: { slots: Slots }) => h('div', [slots.default?.(), props.help]),
     toast: { success: vi.fn(), error: vi.fn() },
-    useClipboard: () => ({ copyText: vi.fn() }),
+    useClipboard: () => ({ copyText: api.copy }),
   }
 })
 
@@ -40,8 +41,8 @@ async function flush() {
   await nextTick()
 }
 
-async function mount(open = true) {
-  const props = reactive({ open, credential })
+async function mount(open = true, existing = false) {
+  const props = reactive({ open, credential, existing })
   root = document.createElement('div')
   app = createApp(() => h(ConnectComputerDialog, {
     ...props, 'onUpdate:open': (value: boolean) => { props.open = value },
@@ -59,6 +60,91 @@ beforeEach(() => {
   api.list.mockImplementation(async () => ({ data: items.value }))
   api.grant.mockResolvedValue({ data: {} })
   api.remove.mockResolvedValue({})
+  api.copy.mockResolvedValue(true)
+})
+
+function clickButton(text: string): void {
+  const button = [...root.querySelectorAll('button')].find(button => button.textContent?.trim() === text)
+  expect(button).toBeDefined()
+  button!.click()
+}
+
+describe('connection and recovery', () => {
+  it('only adds --replace after opting in and copies the selected command', async () => {
+    await mount()
+    expect(root.querySelector('code')?.textContent).not.toContain('--replace')
+    clickButton('computerConnect.replaceAction')
+    await flush()
+    const command = root.querySelector('code')?.textContent
+    expect(command).toContain('--replace && memoh-runtime service install && memoh-runtime service start')
+    expect(root.textContent).toContain('computerConnect.replaceDescription')
+    root.querySelector<HTMLButtonElement>('[aria-label="common.copy"]')!.click()
+    await flush()
+    expect(api.copy).toHaveBeenCalledWith(command)
+    clickButton('computerConnect.cancelReplace')
+    await flush()
+    expect(root.querySelector('code')?.textContent).not.toContain('--replace')
+  })
+
+  it('revokes an abandoned new credential even if replacement was selected', async () => {
+    const props = await mount()
+    clickButton('computerConnect.replaceAction')
+    await flush()
+    clickButton('common.cancel')
+    await flush()
+    expect(props.open).toBe(false)
+    expect(api.remove).toHaveBeenCalledWith({ path: { id: credential.id }, throwOnError: true })
+  })
+
+  it('reuses a historical credential and never revokes it on cancellation', async () => {
+    const props = await mount(true, true)
+    expect(root.querySelector('code')?.textContent).toContain(`--key ${credential.key} --insecure-localhost`)
+    expect(root.querySelector('code')?.textContent).not.toContain('--replace')
+    clickButton('computerConnect.replaceAction')
+    await flush()
+    expect(root.querySelector('code')?.textContent).toContain('--replace')
+    clickButton('common.cancel')
+    await flush()
+    expect(props.open).toBe(false)
+    expect(api.remove).not.toHaveBeenCalled()
+    expect(api.grant).not.toHaveBeenCalled()
+  })
+
+  it('preserves existing Bot permissions when a historical computer comes online', async () => {
+    const props = await mount(true, true)
+    items.value = [{ ...credential, online: true }]
+    await vi.advanceTimersByTimeAsync(1000)
+    await flush()
+    expect(props.open).toBe(false)
+    expect(root.textContent).not.toContain('access-list')
+    expect(api.grant).not.toHaveBeenCalled()
+    expect(api.remove).not.toHaveBeenCalled()
+  })
+
+  it('resets the mode when starting another new connection', async () => {
+    const props = await mount()
+    clickButton('computerConnect.replaceAction')
+    await flush()
+    props.open = false
+    await flush()
+    props.credential = { id: 'runtime-2', key: 'second-key' }
+    props.open = true
+    await flush()
+    expect(root.querySelector('code')?.textContent).toContain('--key second-key')
+    expect(root.querySelector('code')?.textContent).not.toContain('--replace')
+  })
+
+  it('requires opting in again when reopening the same historical computer', async () => {
+    const props = await mount(true, true)
+    clickButton('computerConnect.replaceAction')
+    await flush()
+    clickButton('common.cancel')
+    await flush()
+    props.open = true
+    await flush()
+    expect(root.querySelector('code')?.textContent).not.toContain('--replace')
+    expect(api.remove).not.toHaveBeenCalled()
+  })
 })
 afterEach(() => {
   app?.unmount()

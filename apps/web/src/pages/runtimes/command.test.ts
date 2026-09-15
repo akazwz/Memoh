@@ -28,4 +28,14 @@ describe('buildRuntimeConnectCommand', () => {
       `npm install -g "@memohai/runtime@>=0.20.0" && memoh-runtime enroll --server http://127.0.0.1:18080 --key ${key} --team-id ${teamId} --insecure-localhost && memoh-runtime service install && memoh-runtime service start`,
     )
   })
+
+  it('replaces saved enrollment only when rebinding is explicitly selected', () => {
+    const credential = { key, team_id: teamId }
+    const firstConnection = buildRuntimeConnectCommand('http://localhost:18083/api', credential)
+    const rebind = buildRuntimeConnectCommand('http://localhost:18083/api', credential, 'replace')
+    expect(firstConnection).not.toContain('--replace')
+    expect(rebind).toBe(firstConnection.replace(
+      '--insecure-localhost &&', '--insecure-localhost --replace &&',
+    ))
+  })
 })
