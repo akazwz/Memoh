@@ -33,8 +33,7 @@ export function buildRuntimeConnectCommand(
   }
   // Stop on failure so a rejected enrollment cannot start a different saved connection.
   return [
-    // Earlier published versions only support foreground connections.
-    'npm install -g "@memohai/runtime@>=0.20.0"',
+    'npm install -g @memohai/runtime@latest',
     args.join(' '),
     'memoh-runtime service install',
     'memoh-runtime service start',
