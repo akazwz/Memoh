@@ -77,6 +77,7 @@ export function isAgentRuntimeType(runtimeType: string): boolean {
   return runtimeType === 'acp_agent'
     || runtimeType === 'codex'
     || runtimeType === 'claude-code'
+    || runtimeType === 'grok'
 }
 
 // Default visible label for a channel-bound session that has no title: a group

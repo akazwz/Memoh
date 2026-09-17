@@ -2,6 +2,7 @@ package workspacedeps
 
 import (
 	"context"
+	"errors"
 	"strings"
 
 	"github.com/felinics/memoh/internal/agent/runtime/external"
@@ -17,7 +18,29 @@ var (
 // BuiltinLauncherCommands is the command binding of the built-in direct runtimes.
 // It contains no recipes and remains available when the remote catalog is empty.
 func BuiltinLauncherCommands() map[string]string {
-	return map[string]string{"codex": "codex", "claude-code": "claude"}
+	return map[string]string{"codex": "codex", "claude-code": "claude", "grok": "grok"}
+}
+
+// A preinstalled direct runtime can be enabled before its recipe is published.
+// Missing executables remain unknown: discovery does not authorize installation
+// or invent an installable definition for the UI.
+func (s *Service) preflightInstalledBuiltin(ctx context.Context, botID string, item PreflightItem) (PreflightItem, error) {
+	if _, builtin := BuiltinLauncherCommands()[item.DependencyID]; !builtin {
+		return item, nil
+	}
+	launcher, err := s.ResolveLauncher(ctx, botID, item.DependencyID)
+	var missing *external.DependencyMissingError
+	if errors.As(err, &missing) {
+		return item, nil
+	}
+	if err != nil {
+		return item, err
+	}
+	item.Name = item.DependencyID
+	item.InstalledVersion = launcher.Version
+	item.Satisfied = true
+	item.Reason = ""
+	return item, nil
 }
 
 // ResolveLauncher is read-only. Missing dependencies require an administrator

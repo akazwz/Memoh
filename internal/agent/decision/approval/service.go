@@ -793,7 +793,12 @@ func requestFromRow(row sqlc.ToolApprovalRequest) Request {
 	if row.ChannelIdentityID.Valid {
 		req.ChannelIdentityID = uuid.UUID(row.ChannelIdentityID.Bytes).String()
 	}
-	if row.DecidedByChannelIdentityID.Valid {
+	// Web decisions have an authenticated response identity but may have no
+	// channel identity. Reconstruct their provenance from the durable row so
+	// live waiters and polling recovery both recognize the user's decision.
+	hasResponseIdentity := row.ResponseControlID.Valid && strings.TrimSpace(row.ResponseControlID.String) != "" &&
+		row.ResponsePayloadHash.Valid && strings.TrimSpace(row.ResponsePayloadHash.String) != ""
+	if row.DecidedByChannelIdentityID.Valid || (hasResponseIdentity && (req.Status == StatusApproved || req.Status == StatusRejected)) {
 		req.DecidedByUser = true
 	}
 	if row.DecidedAt.Valid {

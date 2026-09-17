@@ -221,6 +221,8 @@ func (s *Service) UpdateSecretCAS(ctx context.Context, credentialID string, expe
 // Compatible reports whether an auth kind can drive the Agent runtime.
 func Compatible(agentRuntime, authKind string) bool {
 	switch strings.ToLower(strings.TrimSpace(agentRuntime)) {
+	case string(runtimekind.Grok):
+		return authKind == AuthKindXAIAPIKey || authKind == AuthKindGrokOAuth
 	case string(runtimekind.Codex):
 		return authKind == AuthKindOpenAIAPIKey || authKind == AuthKindOpenAICodexOAuth
 	case string(runtimekind.ClaudeCode):
@@ -298,17 +300,20 @@ func (s *Service) decrypt(ciphertext, nonce []byte, keyVersion int32) (map[strin
 // ProviderForAuthKind maps an auth kind to its provider so API callers only
 // submit the kind.
 func ProviderForAuthKind(kind string) string {
-	want := map[string]string{AuthKindOpenAIAPIKey: ProviderOpenAI, AuthKindOpenAICodexOAuth: ProviderOpenAI, AuthKindAnthropicAPIKey: ProviderAnthropic, AuthKindClaudeCodeOAuth: ProviderAnthropic}
+	want := map[string]string{AuthKindOpenAIAPIKey: ProviderOpenAI, AuthKindOpenAICodexOAuth: ProviderOpenAI, AuthKindAnthropicAPIKey: ProviderAnthropic, AuthKindClaudeCodeOAuth: ProviderAnthropic, AuthKindXAIAPIKey: ProviderXAI, AuthKindGrokOAuth: ProviderXAI}
 	return want[normalize(kind)]
 }
 
 func validProviderKind(provider, kind string) bool {
-	want := map[string]string{AuthKindOpenAIAPIKey: ProviderOpenAI, AuthKindOpenAICodexOAuth: ProviderOpenAI, AuthKindAnthropicAPIKey: ProviderAnthropic, AuthKindClaudeCodeOAuth: ProviderAnthropic}
+	want := map[string]string{AuthKindOpenAIAPIKey: ProviderOpenAI, AuthKindOpenAICodexOAuth: ProviderOpenAI, AuthKindAnthropicAPIKey: ProviderAnthropic, AuthKindClaudeCodeOAuth: ProviderAnthropic, AuthKindXAIAPIKey: ProviderXAI, AuthKindGrokOAuth: ProviderXAI}
 	return want[kind] == provider
 }
 
 func validSecret(kind string, secret map[string]string) bool {
 	required := []string{"api_key"}
+	if kind == AuthKindGrokOAuth {
+		required = []string{"access_token", "refresh_token"}
+	}
 	if kind == AuthKindOpenAICodexOAuth {
 		required = []string{"access_token", "id_token", "refresh_token", "account_id"}
 	}
@@ -332,6 +337,8 @@ func defaultLabel(kind string, meta map[string]any) string {
 		return "ChatGPT"
 	case AuthKindClaudeCodeOAuth:
 		return "Claude Code"
+	case AuthKindGrokOAuth:
+		return "Grok Build"
 	default:
 		return "API key"
 	}

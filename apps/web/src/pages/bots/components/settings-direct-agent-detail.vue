@@ -62,7 +62,7 @@
       </SettingsRow>
 
       <SettingsRow
-        v-if="config.auth === 'api_key' || config.auth === 'oauth_token'"
+        v-if="!isGrok && (config.auth === 'api_key' || config.auth === 'oauth_token')"
         :label="$t('common.baseUrl')"
         stack="sm"
       >
@@ -111,6 +111,46 @@
             </SelectItem>
           </SelectContent>
         </Select>
+      </SettingsRow>
+    </SettingsSection>
+
+    <SettingsSection
+      v-if="isGrok && config.auth === 'oauth'"
+      :title="$t('bots.agent.account')"
+    >
+      <AgentDeviceAccountPanel
+        provider="grok"
+        :authorized="credentialConnected"
+        :authorizing="grokAuthorization.loading.value || savingCredential"
+        :device-pending="grokAuthorization.pending.value"
+        :device-login="grokAuthorization.session.value?.user_code && grokAuthorization.session.value.verification_url ? { user_code: grokAuthorization.session.value.user_code, verification_url: grokAuthorization.session.value.verification_url } : null"
+        :expires-at="grokAuthorization.session.value?.expires_at"
+        :error="grokAuthorization.error.value"
+        @connect="grokAuthorization.start('grok_oauth')"
+        @cancel="grokAuthorization.cancel()"
+      />
+      <SettingsRow
+        v-if="credentialConnected"
+        :label="$t('bots.settings.agentCredentialSaved')"
+      >
+        <ConfirmPopover
+          :title="$t('bots.settings.agentCredentialDisconnectConfirm')"
+          :cancel-text="$t('common.cancel')"
+          :confirm-text="$t('bots.settings.agentCredentialDisconnect')"
+          variant="destructive"
+          @confirm="disconnectCredential"
+        >
+          <template #trigger>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              :disabled="savingCredential"
+            >
+              {{ $t('bots.settings.agentCredentialDisconnect') }}
+            </Button>
+          </template>
+        </ConfirmPopover>
       </SettingsRow>
     </SettingsSection>
 
@@ -218,13 +258,17 @@ import {
   postBotsByBotIdAgentsByIdCodexLoginDeviceCancel,
   postBotsByBotIdAgentsByIdCodexLoginDevicePoll,
   putBotsByBotIdAgentsByIdCredential,
+  postBotsByBotIdAgentsByIdCredentialClaim,
   type BotagentsBotAgent,
 } from '@memohai/sdk'
+import AgentDeviceAccountPanel from './agent-device-account-panel.vue'
+import { useAgentAuthorization } from '@/composables/useAgentAuthorization'
 import AgentCredentialInput from './agent-credential-input.vue'
 import { localizeRuntimeControls } from '@/utils/runtime-control-presentation'
 import { isApiErrorCode, resolveApiErrorMessage } from '@/utils/api-error'
 import {
   BOT_AGENT_RUNTIME_CODEX,
+  BOT_AGENT_RUNTIME_GROK,
   normalizeBotAgentRuntime,
 } from '@/utils/bot-agent'
 
@@ -252,6 +296,8 @@ const router = useRouter()
 const queryCache = useQueryCache()
 
 const runtime = computed(() => normalizeBotAgentRuntime(props.agent.runtime))
+const isGrok = computed(() => runtime.value === BOT_AGENT_RUNTIME_GROK)
+const grokAuthorization = useAgentAuthorization(() => `${runtime.value}`, `grok-agent-authorization:${props.botId}:${props.agent.id}`)
 const isCodex = computed(() => runtime.value === BOT_AGENT_RUNTIME_CODEX)
 const config = reactive<DirectAgentConfig>({ auth: '', base_url: '', model: '', reasoning_effort: '', permission_mode: '' })
 const defaultControls = useQuery({
@@ -296,13 +342,16 @@ const authOptions = computed(() => isCodex.value
       { value: 'chatgpt', label: t('bots.agent.authChatGPT') },
       { value: 'api_key', label: t('bots.agent.apiKey') },
     ]
-  : [
+  : isGrok.value
+    ? [{ value: 'oauth', label: t('bots.agent.grokAccount') }, { value: 'api_key', label: t('bots.agent.apiKey') }]
+    : [
       { value: 'workspace', label: t('bots.agent.authWorkspace') },
       { value: 'api_key', label: t('bots.agent.apiKey') },
       { value: 'oauth_token', label: t('bots.agent.authOAuthToken') },
     ])
 
 const authDescription = computed(() => {
+  if (isGrok.value && config.auth === 'oauth') return t('bots.agent.grokAccountDescription')
   if (config.auth === 'workspace') return t('bots.agent.authWorkspaceDescription')
   if (config.auth === 'chatgpt') return t('bots.agent.authChatGPTDescription')
   if (config.auth === 'oauth_token') return t('bots.agent.authOAuthTokenDescription')
@@ -347,6 +396,7 @@ async function commitConfig(): Promise<boolean> {
 
 async function setAuthMode(value: unknown) {
   if (credentialConnected.value || typeof value !== 'string' || !value || value === config.auth) return
+  grokAuthorization.cancel()
   const previous = config.auth
   config.auth = value
   credentialSecret.value = ''
@@ -360,7 +410,7 @@ async function saveCredential() {
   if (!secret) return
   const authKind = isCodex.value
     ? 'openai_api_key'
-    : config.auth === 'oauth_token' ? 'claude_code_oauth' : 'anthropic_api_key'
+    : isGrok.value ? 'xai_api_key' : config.auth === 'oauth_token' ? 'claude_code_oauth' : 'anthropic_api_key'
   const secretKey = config.auth === 'oauth_token' ? 'oauth_token' : 'api_key'
   savingCredential.value = true
   try {
@@ -378,6 +428,20 @@ async function saveCredential() {
     savingCredential.value = false
   }
 }
+
+watch(grokAuthorization.ready, async (ready) => {
+  const authorizationId = grokAuthorization.session.value?.id
+  if (!ready || !authorizationId || !isGrok.value || config.auth !== 'oauth') return
+  savingCredential.value = true
+  try {
+    await postBotsByBotIdAgentsByIdCredentialClaim({ path: { bot_id: props.botId, id: props.agent.id! }, body: { authorization_id: authorizationId }, throwOnError: true })
+    grokAuthorization.handoff()
+    await refreshAgent()
+    toast.success(t('bots.settings.agentCredentialSaved'))
+  } catch (error) {
+    toast.error(resolveApiErrorMessage(error, t('common.saveFailed')))
+  } finally { savingCredential.value = false }
+})
 
 async function disconnectCredential() {
   try {

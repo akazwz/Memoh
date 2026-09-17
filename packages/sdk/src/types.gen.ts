@@ -397,7 +397,7 @@ export type AgentcredentialAuthorization = {
 
 export type AgentcredentialAuthorizationRequest = {
     auth_kind: string;
-    runtime: 'codex' | 'claude-code';
+    runtime: 'codex' | 'claude-code' | 'grok';
     secret?: {
         [key: string]: string;
     };

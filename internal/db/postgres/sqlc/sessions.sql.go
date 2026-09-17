@@ -265,6 +265,15 @@ fork_anchor_message AS (
 prepared_metadata AS (
   SELECT COALESCE($4::jsonb, '{}'::jsonb) AS value
 ),
+fork_seed AS MATERIALIZED (
+  SELECT state.team_id, state.session_id, state.through_run_id, state.storage_revision, state.agent_id, state.agent_session_id, state.cwd, state.transcript_path, state.runtime_fencing_token, state.file_count, state.record_count, state.file_shapes, state.created_at, state.updated_at
+  FROM source_session s
+  JOIN agent_session_publications pub ON pub.team_id = s.team_id AND pub.session_id = s.id AND NOT pub.checkpoint_reset
+  JOIN agent_session_states state ON state.team_id = pub.team_id AND state.session_id = pub.session_id AND state.through_run_id = pub.run_id
+  WHERE s.runtime_type = 'grok'
+    AND state.storage_revision <> '00000000-0000-0000-0000-000000000000'::uuid
+    AND state.through_run_id::text = $5::jsonb->'grok_fork'->>'source_run_id'
+),
 fork_plan AS (
   SELECT
     s.id, s.bot_id, s.route_id, s.channel_type, s.type, s.session_mode, s.runtime_type, s.runtime_metadata, s.preferred_chat_model_id, s.preferred_reasoning_effort, s.preferred_external_model_id, s.model_preference_revision, s.visibility, s.title, s.metadata, s.next_turn_position, s.compaction_epoch, s.runtime_fencing_token, s.runtime_reset_token, s.runtime_reset_expires_at, s.runtime_config_epoch, s.parent_session_id, s.created_by_user_id, s.created_at, s.updated_at, s.deleted_at, s.team_id, s.workdir_id, s.bot_agent_id,
@@ -276,6 +285,7 @@ fork_plan AS (
   JOIN target_turn tt ON true
   CROSS JOIN next_turn_position ntp
   WHERE EXISTS (SELECT 1 FROM copy_turns)
+    AND (s.runtime_type <> 'grok' OR EXISTS (SELECT 1 FROM fork_seed))
 ),
 created_session AS (
   INSERT INTO bot_sessions (
@@ -333,6 +343,19 @@ created_session AS (
   FROM fork_plan fp
   CROSS JOIN prepared_metadata pm
   RETURNING id, bot_id, route_id, channel_type, type, session_mode, runtime_type, runtime_metadata, preferred_chat_model_id, preferred_reasoning_effort, preferred_external_model_id, model_preference_revision, visibility, title, metadata, next_turn_position, compaction_epoch, runtime_fencing_token, runtime_reset_token, runtime_reset_expires_at, runtime_config_epoch, parent_session_id, created_by_user_id, created_at, updated_at, deleted_at, team_id, workdir_id, bot_agent_id
+),
+inserted_fork_seed AS (
+ INSERT INTO agent_session_fork_states (team_id, session_id, through_run_id, storage_revision, agent_id, agent_session_id, cwd, transcript_path, runtime_fencing_token, file_count, record_count, file_shapes)
+ SELECT target.team_id, target.id, seed.through_run_id, seed.storage_revision, seed.agent_id, seed.agent_session_id, seed.cwd, seed.transcript_path, seed.runtime_fencing_token, seed.file_count, seed.record_count, seed.file_shapes
+ FROM created_session target CROSS JOIN fork_seed seed
+ RETURNING team_id, session_id, through_run_id, storage_revision, agent_id, agent_session_id, cwd, transcript_path, runtime_fencing_token, file_count, record_count, file_shapes, created_at, updated_at
+),
+inserted_fork_lines AS (
+ INSERT INTO agent_session_state_lines (team_id, session_id, storage_revision, file_path, line_number, content, content_bytes)
+ SELECT target.team_id, target.session_id, target.storage_revision, line.file_path, line.line_number, line.content, line.content_bytes
+ FROM inserted_fork_seed target
+ JOIN fork_seed source ON source.storage_revision = target.storage_revision
+ JOIN agent_session_state_lines line ON line.team_id = source.team_id AND line.session_id = source.session_id AND line.storage_revision = source.storage_revision
 ),
 inserted_messages AS (
   INSERT INTO bot_history_messages (

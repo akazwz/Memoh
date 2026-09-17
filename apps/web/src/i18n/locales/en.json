@@ -2431,6 +2431,9 @@
       "apps": "Apps"
     },
     "agent": {
+      "grokAccount": "Grok account",
+      "grokAccountDescription": "Sign in with your Grok account to use Grok Build.",
+      "grokDeviceHint": "Open the xAI authorization page and enter this code. Only use a code you requested here.",
       "add": "Add Agent",
       "added": "Agent added",
       "provider": "Provider",
@@ -3994,6 +3997,17 @@
     }
   },
   "runtime": {
+    "grok": {
+      "commands": { "compact": { "description": "Compact the Grok conversation context." } },
+      "modes": {
+        "ask": {"name": "Ask before running", "description": "Request approval for tools that require permission."},
+        "auto": {
+          "name": "Auto",
+          "description": "Grok checks tool calls and asks you when it cannot approve automatically."
+        },
+        "alwaysApprove": {"name": "Always approve", "description": "Allow Grok tools without approval prompts."}
+      }
+    },
     "claudeCode": {
       "modes": {
         "inherit": {

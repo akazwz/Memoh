@@ -258,7 +258,7 @@ func (s *Service) UpsertBot(ctx context.Context, botID string, req UpsertRequest
 			}
 			current.ChatRuntime = ChatRuntimeACPAgent
 			current.ChatACPAgentID = descriptor.Provider
-		case botagents.RuntimeCodex, botagents.RuntimeClaudeCode:
+		case botagents.RuntimeCodex, botagents.RuntimeClaudeCode, botagents.RuntimeGrok:
 			// The stored default names the real runtime; direct agents need
 			// no ACP agent id (their identity IS the runtime).
 			current.ChatRuntime = descriptor.Runtime

@@ -69,7 +69,7 @@ export function createExternalAgentDefaults(deps: {
         return null
       }
       const runtime = settings?.chat_runtime ?? ''
-      const isDirect = runtime === 'codex' || runtime === 'claude-code'
+      const isDirect = runtime === 'codex' || runtime === 'claude-code' || runtime === 'grok'
       if (runtime !== 'acp_agent' && !isDirect) {
         deps.rememberDefault(bid, null)
         return null
@@ -80,7 +80,7 @@ export function createExternalAgentDefaults(deps: {
         return null
       }
       const input: ExternalAgentSessionInput = {
-        runtime: runtime === 'codex' || runtime === 'claude-code' ? runtime : 'acp',
+        runtime: runtime === 'codex' || runtime === 'claude-code' || runtime === 'grok' ? runtime : 'acp',
         botAgentId: settings.default_bot_agent_id?.trim() || undefined,
         agentId,
         projectPath: settings.chat_acp_project_path?.trim()

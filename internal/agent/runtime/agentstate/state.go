@@ -1,6 +1,6 @@
 // Package agentstate defines the External Agent persistence contract for
 // native session checkpoints: JSONL trees owned by an out-of-process runtime
-// (an ACP agent, codex, claude-code) that Memoh snapshots to and restores
+// (an ACP agent, codex, claude-code, grok) that Memoh snapshots to and restores
 // from the database without making their opaque records part of the
 // canonical chat timeline.
 package agentstate
@@ -92,8 +92,13 @@ type PersistedSessionStateFile struct {
 // files stay out of the durable workspace profile; the store reconstructs
 // them from ordered JSONB rows only for the lifetime of the resumed runtime.
 type PersistedSessionState struct {
+	// StorageRevision isolates a complete immutable snapshot's records. Empty
+	// retains the shared append-only record layout. A revision must equal
+	// ThroughRunID; staging cannot rewrite the current published revision.
+	StorageRevision string
+
 	// AgentID names the runtime flavor that owns the snapshot (an ACP agent
-	// id, or a direct runtime type such as "codex" or "claude-code").
+	// id, or a direct runtime type such as "codex", "claude-code" or "grok").
 	AgentID string
 	// AgentSessionID is the runtime's own session identifier (the ACP
 	// session id, codex thread id, or claude session id).
@@ -139,7 +144,9 @@ type SessionStateRecordConsumer func(
 // transaction. Load may expose that version only after the same run is the
 // newest successful canonical watermark; this prevents a crash between
 // native completion and chat-history persistence from publishing a ghost
-// transcript.
+// transcript. Before a target session has any publication, Load may expose a
+// target-owned fork seed copied atomically with its visible history. Any later
+// publication, including an explicit reset, supersedes that seed.
 type SessionStateStore interface {
 	RuntimeConfigEpoch(ctx context.Context, botID, sessionID string) (RuntimeConfigEpoch, error)
 	GuardRuntimeSync(ctx context.Context, botID string, expectedBotEpoch int64, fn func(context.Context) error) error

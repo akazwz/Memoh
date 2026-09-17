@@ -1,9 +1,11 @@
 <script setup lang="ts">
+import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Button, DeviceCodePanel, Dialog, DialogBody, DialogFooter, DialogHeader, DialogPanel, DialogTitle, LabelSwap, SettingsRow, Spinner } from '@felinic/ui'
 import { KeyRound } from 'lucide-vue-next'
 
-defineProps<{
+const props = withDefaults(defineProps<{
+  provider?: 'codex' | 'grok'
   authorized: boolean
   authorizing: boolean
   disabled?: boolean
@@ -11,15 +13,18 @@ defineProps<{
   deviceLogin?: { user_code: string, verification_url: string } | null
   expiresAt?: string
   error?: string
-}>()
+}>(), { provider: 'codex' })
 const emit = defineEmits<{ connect: [], cancel: [] }>()
 const { t } = useI18n()
+const accountKey = computed(() => props.provider === 'grok' ? 'grokAccount' : 'chatgptAccount')
+const descriptionKey = computed(() => props.provider === 'grok' ? 'grokAccountDescription' : 'authChatGPTDescription')
+const hintKey = computed(() => props.provider === 'grok' ? 'grokDeviceHint' : 'codexDeviceHint')
 </script>
 
 <template>
   <SettingsRow
-    :label="t('bots.agent.chatgptAccount')"
-    :description="authorized ? t('bots.agent.chatgptAccountConnectedDescription') : t('bots.agent.authChatGPTDescription')"
+    :label="t(`bots.agent.${accountKey}`)"
+    :description="authorized ? t('bots.settings.agentCredentialSaved') : t(`bots.agent.${descriptionKey}`)"
   >
     <Button
       v-if="!authorized"
@@ -57,7 +62,7 @@ const { t } = useI18n()
       :aria-describedby="undefined"
     >
       <DialogHeader>
-        <DialogTitle>{{ t('bots.agent.chatgptAccount') }}</DialogTitle>
+        <DialogTitle>{{ t(`bots.agent.${accountKey}`) }}</DialogTitle>
       </DialogHeader>
       <DialogBody>
         <DeviceCodePanel
@@ -65,7 +70,7 @@ const { t } = useI18n()
           :code="deviceLogin.user_code"
           :verification-uri="deviceLogin.verification_url"
           :expires-at="expiresAt"
-          :hint="t('bots.agent.codexDeviceHint')"
+          :hint="t(`bots.agent.${hintKey}`)"
           :retry-loading="authorizing"
           :copy-and-open-label="t('deviceCode.copyAndOpen')"
           :retry-label="t('deviceCode.retry')"

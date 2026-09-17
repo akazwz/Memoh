@@ -15,6 +15,7 @@ const (
 	ChatRuntimeACPAgent      = string(runtimekind.ACPAgent)
 	ChatRuntimeCodex         = string(runtimekind.Codex)
 	ChatRuntimeClaudeCode    = string(runtimekind.ClaudeCode)
+	ChatRuntimeGrok          = string(runtimekind.Grok)
 	DefaultACPProjectPath    = "/data"
 	DefaultACPProjectMode    = "project"
 )

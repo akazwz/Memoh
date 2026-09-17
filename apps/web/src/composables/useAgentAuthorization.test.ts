@@ -102,3 +102,17 @@ it('ignores a late code exchange after cancellation and expires pending Claude s
   expect(state.session.value).toBeNull()
   expect(state.error.value).toBe('errors.agent_authorization.expired')
 })
+
+it('polls Grok device authorization and restores only its opaque reference', async () => {
+  runtime.value = 'grok'
+  const pending = { ...session(), runtime: 'grok', auth_kind: 'grok_oauth', verification_url: 'https://accounts.x.ai/device' }
+  api.create.mockResolvedValue({ data: pending })
+  api.poll.mockResolvedValue({ data: { ...pending, status: 'ready' } })
+  mount(); await state.start('grok_oauth')
+  expect(api.create).toHaveBeenCalledWith(expect.objectContaining({ body: { runtime: 'grok', auth_kind: 'grok_oauth' } }))
+  expect(JSON.parse(sessionStorage.getItem(key)!)).toEqual({ id: 'session', runtime: 'grok' })
+  await vi.advanceTimersByTimeAsync(5000)
+  expect(state.ready.value).toBe(true)
+  state.handoff(); app.unmount()
+  expect(api.cancel).not.toHaveBeenCalled()
+})

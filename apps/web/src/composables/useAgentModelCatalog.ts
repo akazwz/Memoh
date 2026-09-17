@@ -14,6 +14,7 @@ import {
 import {
   BOT_AGENT_RUNTIME_CLAUDE_CODE,
   BOT_AGENT_RUNTIME_CODEX,
+  BOT_AGENT_RUNTIME_GROK,
 } from '@/utils/bot-agent'
 
 const ACP_SESSION_RUNTIME = 'acp_agent'
@@ -94,11 +95,12 @@ export function useAgentModelCatalog(options: UseAgentModelCatalogOptions) {
   const runtime = computed(() => toValue(options.runtime)?.trim() || 'model')
   const botId = computed(() => toValue(options.botId)?.trim() ?? '')
   const botAgentId = computed(() => toValue(options.botAgentId)?.trim() ?? '')
-  const projectPath = computed(() => runtime.value === BOT_AGENT_RUNTIME_CLAUDE_CODE ? toValue(options.projectPath)?.trim() ?? '' : '')
+  const projectPath = computed(() => [BOT_AGENT_RUNTIME_CLAUDE_CODE, BOT_AGENT_RUNTIME_GROK].includes(runtime.value) ? toValue(options.projectPath)?.trim() ?? '' : '')
   const isNative = computed(() => ![
     ACP_SESSION_RUNTIME,
     BOT_AGENT_RUNTIME_CODEX,
     BOT_AGENT_RUNTIME_CLAUDE_CODE,
+    BOT_AGENT_RUNTIME_GROK,
   ].includes(runtime.value))
 
   const nativeModelsQuery = useQuery({
@@ -132,7 +134,7 @@ export function useAgentModelCatalog(options: UseAgentModelCatalogOptions) {
       })
       return { target, catalog: data }
     },
-    enabled: () => [BOT_AGENT_RUNTIME_CODEX, BOT_AGENT_RUNTIME_CLAUDE_CODE].includes(runtime.value) && !!botId.value && !!botAgentId.value,
+    enabled: () => [BOT_AGENT_RUNTIME_CODEX, BOT_AGENT_RUNTIME_CLAUDE_CODE, BOT_AGENT_RUNTIME_GROK].includes(runtime.value) && !!botId.value && !!botAgentId.value,
     refetchOnWindowFocus: false,
     // Keep the same Agent's capabilities visible while resolving another
     // model's defaults; never carry a catalog across workspaces or Agents.
@@ -154,6 +156,7 @@ export function useAgentModelCatalog(options: UseAgentModelCatalogOptions) {
         }
       case BOT_AGENT_RUNTIME_CODEX:
       case BOT_AGENT_RUNTIME_CLAUDE_CODE:
+      case BOT_AGENT_RUNTIME_GROK:
         return externalCatalog(directQuery.data.value?.target === directScope.value ? directQuery.data.value.catalog : undefined, selectedModelId.value)
       default:
         return {
@@ -173,6 +176,7 @@ export function useAgentModelCatalog(options: UseAgentModelCatalogOptions) {
         return toValue(options.acpLoading)
       case BOT_AGENT_RUNTIME_CODEX:
       case BOT_AGENT_RUNTIME_CLAUDE_CODE:
+      case BOT_AGENT_RUNTIME_GROK:
         return directQuery.isLoading.value
       default:
         return nativeModelsQuery.isLoading.value || nativeProvidersQuery.isLoading.value
@@ -182,6 +186,7 @@ export function useAgentModelCatalog(options: UseAgentModelCatalogOptions) {
     switch (runtime.value) {
       case BOT_AGENT_RUNTIME_CODEX:
       case BOT_AGENT_RUNTIME_CLAUDE_CODE:
+      case BOT_AGENT_RUNTIME_GROK:
         return directQuery.error.value
       case ACP_SESSION_RUNTIME:
         return null
@@ -197,6 +202,7 @@ export function useAgentModelCatalog(options: UseAgentModelCatalogOptions) {
         return
       case BOT_AGENT_RUNTIME_CODEX:
       case BOT_AGENT_RUNTIME_CLAUDE_CODE:
+      case BOT_AGENT_RUNTIME_GROK:
         await directQuery.refetch()
         return
       default:

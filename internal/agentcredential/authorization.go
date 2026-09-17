@@ -23,6 +23,11 @@ var (
 	ErrAuthorizationCodeInvalid = errors.New("authorization code is invalid")
 )
 
+type grokAuthorizer interface {
+	StartGrokDeviceAuthorization(context.Context) (providers.GrokDeviceAuthorization, error)
+	PollGrokDeviceAuthorization(context.Context, string) (providers.GrokDevicePollResult, error)
+}
+
 const authorizationTTL = 30 * time.Minute
 
 type agentAuthorizer interface {
@@ -45,7 +50,7 @@ func NewAuthorizationService(credentials *Service, oauth *providers.Service) *Au
 }
 
 type AuthorizationRequest struct {
-	Runtime  string            `json:"runtime" validate:"required" enums:"codex,claude-code"`
+	Runtime  string            `json:"runtime" validate:"required" enums:"codex,claude-code,grok"`
 	AuthKind string            `json:"auth_kind" validate:"required"`
 	Secret   map[string]string `json:"secret,omitempty"`
 }
@@ -71,8 +76,9 @@ func (s *AuthorizationService) Create(ctx context.Context, owner string, req Aut
 	if err != nil || !Compatible(req.Runtime, req.AuthKind) {
 		return Authorization{}, ErrInvalidRequest
 	}
+	grokDevice := req.AuthKind == AuthKindGrokOAuth && len(req.Secret) == 0
 	claudeBrowser := req.AuthKind == AuthKindClaudeCodeOAuth && len(req.Secret) == 0
-	if req.AuthKind != AuthKindOpenAICodexOAuth && !claudeBrowser && !validSecret(req.AuthKind, req.Secret) {
+	if req.AuthKind != AuthKindOpenAICodexOAuth && !claudeBrowser && !grokDevice && !validSecret(req.AuthKind, req.Secret) {
 		return Authorization{}, ErrInvalidRequest
 	}
 	var result Authorization
@@ -94,7 +100,8 @@ func (s *AuthorizationService) Create(ctx context.Context, owner string, req Aut
 		payload := req.Secret
 		status := "ready"
 		expires := time.Now().Add(authorizationTTL)
-		if req.AuthKind == AuthKindOpenAICodexOAuth {
+		switch {
+		case req.AuthKind == AuthKindOpenAICodexOAuth:
 			device, err := s.oauth.StartOpenAICodexACPDeviceAuthorization(ctx)
 			if err != nil {
 				return fmt.Errorf("%w: %w", ErrAuthorizationFailed, err)
@@ -105,7 +112,23 @@ func (s *AuthorizationService) Create(ctx context.Context, owner string, req Aut
 				"device_auth_id": device.DeviceAuthID, "user_code": device.UserCode,
 				"verification_url": device.VerificationURL, "interval": strconv.FormatInt(device.IntervalSeconds, 10),
 			}
-		} else if claudeBrowser {
+		case grokDevice:
+			authorizer, ok := s.oauth.(grokAuthorizer)
+			if !ok {
+				return ErrAuthorizationFailed
+			}
+			device, err := authorizer.StartGrokDeviceAuthorization(ctx)
+			if err != nil {
+				return fmt.Errorf("%w: %w", ErrAuthorizationFailed, err)
+			}
+			status = "pending"
+			expires = time.Now().Add(time.Duration(device.ExpiresIn) * time.Second)
+			verificationURL := device.VerificationURIComplete
+			if verificationURL == "" {
+				verificationURL = device.VerificationURI
+			}
+			payload = map[string]string{"device_code": device.DeviceCode, "user_code": device.UserCode, "verification_url": verificationURL, "interval": strconv.FormatInt(device.Interval, 10)}
+		case claudeBrowser:
 			auth, err := s.oauth.StartClaudeCodeAuthorization()
 			if err != nil {
 				return fmt.Errorf("%w: %w", ErrAuthorizationFailed, err)
@@ -166,6 +189,36 @@ func (s *AuthorizationService) Get(ctx context.Context, owner, id string, poll b
 				if err != nil {
 					return err
 				}
+			}
+			row, err = q.UpdateAgentAuthorization(ctx, authorizationUpdate(row))
+			if err != nil {
+				return err
+			}
+		}
+		if poll && row.Status == "pending" && row.AuthKind == AuthKindGrokOAuth && !time.Now().Before(row.PollAfter.Time) {
+			authorizer, ok := s.oauth.(grokAuthorizer)
+			if !ok {
+				return ErrAuthorizationFailed
+			}
+			response, err := authorizer.PollGrokDeviceAuthorization(ctx, payload["device_code"])
+			if err != nil {
+				return fmt.Errorf("%w: %w", ErrAuthorizationFailed, err)
+			}
+			if response.SlowDown {
+				payload["interval"] = strconv.FormatInt(int64(pollInterval(payload)/time.Second)+5, 10)
+			}
+			row.PollAfter = timestamptz(timePtr(time.Now().Add(pollInterval(payload))))
+			if !response.Pending {
+				payload = response.Secret
+				if !validSecret(row.AuthKind, payload) {
+					return ErrAuthorizationFailed
+				}
+				row.Status = "ready"
+				row.ExpiresAt = timestamptz(timePtr(time.Now().Add(authorizationTTL)))
+			}
+			row.EncryptedPayload, row.EncryptionNonce, err = s.credentials.encrypt(payload)
+			if err != nil {
+				return err
 			}
 			row, err = q.UpdateAgentAuthorization(ctx, authorizationUpdate(row))
 			if err != nil {
@@ -292,7 +345,7 @@ func (s *AuthorizationService) withSession(ctx context.Context, owner, id string
 func authorizationView(row dbsqlc.AgentAuthorization, payload map[string]string) Authorization {
 	result := Authorization{ID: row.ID.String(), Runtime: row.Runtime, AuthKind: row.AuthKind, Status: row.Status, ExpiresAt: row.ExpiresAt.Time}
 	if row.Status == "pending" {
-		if row.AuthKind == AuthKindOpenAICodexOAuth {
+		if row.AuthKind == AuthKindOpenAICodexOAuth || row.AuthKind == AuthKindGrokOAuth {
 			result.UserCode, result.VerificationURL = payload["user_code"], payload["verification_url"]
 			result.IntervalSeconds = int64(pollInterval(payload) / time.Second)
 		} else {

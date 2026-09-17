@@ -16,6 +16,7 @@ WITH target_session AS MATERIALIZED (
 SELECT
   publication.run_id AS through_run_id,
   state.through_run_id AS staged_through_run_id,
+  COALESCE(state.storage_revision, '00000000-0000-0000-0000-000000000000'::uuid) AS storage_revision,
   COALESCE(state.agent_id, '')::text AS agent_id,
   COALESCE(state.agent_session_id, '')::text AS agent_session_id,
   COALESCE(state.cwd, '')::text AS cwd,
@@ -34,7 +35,17 @@ LEFT JOIN agent_session_states state
  AND state.through_run_id = publication.run_id
 WHERE publication.team_id = public.memoh_current_team_id()
   AND publication.session_id = sqlc.arg(session_id)
-  AND publication.checkpoint_reset = false;
+  AND publication.checkpoint_reset = false
+UNION ALL
+SELECT seed.through_run_id, seed.through_run_id AS staged_through_run_id,
+  seed.storage_revision, seed.agent_id, seed.agent_session_id, seed.cwd,
+  seed.transcript_path, seed.runtime_fencing_token, seed.file_count,
+  seed.record_count, seed.file_shapes
+FROM agent_session_fork_states seed
+JOIN target_session session ON session.team_id = seed.team_id AND session.id = seed.session_id
+WHERE seed.team_id = public.memoh_current_team_id()
+  AND NOT EXISTS (SELECT 1 FROM agent_session_publications p
+    WHERE p.team_id = seed.team_id AND p.session_id = seed.session_id);
 
 -- name: GetRuntimeConfigEpoch :one
 -- A handle records this pair before its process starts. Bound resolution and
@@ -76,7 +87,7 @@ WHERE publication.team_id = public.memoh_current_team_id()
 -- The committed head version's per-file shapes: the authoritative read bound
 -- for Load and the append-only baseline for the next staging. Reset heads
 -- have no state row, so this returns no rows for them.
-SELECT state.through_run_id, state.file_shapes
+SELECT state.through_run_id, state.file_shapes, state.storage_revision
 FROM agent_session_publications publication
 JOIN bot_sessions session
   ON session.team_id = publication.team_id
@@ -154,6 +165,7 @@ candidate_lines AS MATERIALIZED (
    AND session.deleted_at IS NULL
   WHERE line.team_id = public.memoh_current_team_id()
     AND line.session_id = sqlc.arg(session_id)
+ AND line.storage_revision = COALESCE(sqlc.narg(storage_revision)::uuid, '00000000-0000-0000-0000-000000000000'::uuid)
     AND (
       line.file_path > sqlc.arg(after_file_path)::text
       OR (
@@ -191,6 +203,7 @@ FROM selected_lines selected
 JOIN agent_session_state_lines line
   ON line.team_id = public.memoh_current_team_id()
  AND line.session_id = sqlc.arg(session_id)
+ AND line.storage_revision = COALESCE(sqlc.narg(storage_revision)::uuid, '00000000-0000-0000-0000-000000000000'::uuid)
  AND line.file_path = selected.file_path
  AND line.line_number = selected.line_number
 ORDER BY line.file_path, line.line_number;
@@ -224,6 +237,7 @@ INSERT INTO agent_session_states (
   team_id,
   session_id,
   through_run_id,
+  storage_revision,
   agent_id,
   agent_session_id,
   cwd,
@@ -237,6 +251,7 @@ SELECT
   target.team_id,
   target.session_id,
   target.run_id,
+  COALESCE(sqlc.narg(storage_revision)::uuid, '00000000-0000-0000-0000-000000000000'::uuid),
   sqlc.arg(agent_id),
   sqlc.arg(agent_session_id),
   sqlc.arg(cwd),
@@ -247,6 +262,7 @@ SELECT
   sqlc.arg(file_shapes)
 FROM target_run target
 ON CONFLICT (team_id, session_id, through_run_id) DO UPDATE SET
+  storage_revision = EXCLUDED.storage_revision,
   agent_id = EXCLUDED.agent_id,
   agent_session_id = EXCLUDED.agent_session_id,
   cwd = EXCLUDED.cwd,
@@ -266,6 +282,7 @@ RETURNING agent_session_states.*;
 DELETE FROM agent_session_state_lines
 WHERE team_id = public.memoh_current_team_id()
   AND session_id = sqlc.arg(session_id)
+  AND storage_revision = COALESCE(sqlc.narg(storage_revision)::uuid, '00000000-0000-0000-0000-000000000000'::uuid)
   AND file_path = sqlc.arg(file_path)
   AND line_number > sqlc.arg(keep_records)::bigint;
 
@@ -276,6 +293,7 @@ WHERE team_id = public.memoh_current_team_id()
 DELETE FROM agent_session_state_lines line
 WHERE line.team_id = public.memoh_current_team_id()
   AND line.session_id = sqlc.arg(session_id)
+  AND line.storage_revision = COALESCE(sqlc.narg(storage_revision)::uuid, '00000000-0000-0000-0000-000000000000'::uuid)
   AND NOT EXISTS (
     SELECT 1
     FROM jsonb_array_elements_text(sqlc.arg(kept_paths)::jsonb) AS kept(path)
@@ -292,7 +310,7 @@ WHERE team_id = public.memoh_current_team_id()
 -- the TEXT column, so the stored bytes are exactly the capture's compacted
 -- bytes and every digest survives the database round trip.
 WITH target_state AS MATERIALIZED (
-  SELECT state.team_id, state.session_id, state.through_run_id
+  SELECT state.team_id, state.session_id, state.through_run_id, state.storage_revision
   FROM agent_session_states state
   WHERE state.team_id = public.memoh_current_team_id()
     AND state.session_id = sqlc.arg(session_id)
@@ -310,6 +328,7 @@ inserted_lines AS (
   INSERT INTO agent_session_state_lines (
     team_id,
     session_id,
+    storage_revision,
     file_path,
     line_number,
     content,
@@ -318,6 +337,7 @@ inserted_lines AS (
   SELECT
     state.team_id,
     state.session_id,
+    state.storage_revision,
     line.file_path,
     line.line_number,
     line.content,
@@ -335,6 +355,24 @@ FROM inserted_lines;
 -- Bound normal storage to the incoming staged candidate plus the current
 -- canonical head. A failed candidate can survive only until the next stage;
 -- a crash before this statement rolls the entire replacement back.
+WITH old_seed AS (
+ DELETE FROM agent_session_fork_states seed
+ WHERE seed.team_id = public.memoh_current_team_id() AND seed.session_id = sqlc.arg(session_id)
+ AND EXISTS (SELECT 1 FROM agent_session_publications p WHERE p.team_id = seed.team_id AND p.session_id = seed.session_id)
+ RETURNING seed.storage_revision
+), obsolete AS MATERIALIZED (
+ SELECT storage_revision FROM old_seed
+ UNION
+
+ SELECT state.storage_revision FROM agent_session_states state
+ WHERE state.team_id = public.memoh_current_team_id() AND state.session_id = sqlc.arg(session_id)
+ AND state.through_run_id <> sqlc.arg(through_run_id)
+ AND NOT EXISTS (SELECT 1 FROM agent_session_publications p WHERE p.team_id = state.team_id AND p.session_id = state.session_id AND NOT p.checkpoint_reset AND p.run_id = state.through_run_id)
+), pruned_lines AS (
+ DELETE FROM agent_session_state_lines line USING obsolete old
+ WHERE line.team_id = public.memoh_current_team_id() AND line.session_id = sqlc.arg(session_id)
+ AND line.storage_revision = old.storage_revision AND old.storage_revision <> '00000000-0000-0000-0000-000000000000'::uuid
+)
 DELETE FROM agent_session_states state
 WHERE state.team_id = public.memoh_current_team_id()
   AND state.session_id = sqlc.arg(session_id)
@@ -349,6 +387,10 @@ WHERE state.team_id = public.memoh_current_team_id()
   );
 
 -- name: DeleteAgentSessionStatesBySession :execrows
+WITH deleted_seed AS (
+ DELETE FROM agent_session_fork_states
+ WHERE team_id = public.memoh_current_team_id() AND session_id = sqlc.arg(session_id)
+)
 DELETE FROM agent_session_states state
 WHERE state.team_id = public.memoh_current_team_id()
   AND state.session_id = sqlc.arg(session_id);

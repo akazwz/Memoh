@@ -355,7 +355,7 @@ func (s *Service) list(ctx context.Context, botID string, force bool) (ListResul
 func (s *Service) snapshot(ctx context.Context, botID string, force bool) (Snapshot, error) {
 	fingerprint := s.catalogFor(ctx).Fingerprint()
 	if !force {
-		if snap, ok := s.cache.Get(botID); ok && (s.provider == nil || snap.CatalogDigest == fingerprint) {
+		if snap, ok := s.cache.Get(botID); ok && (snap.CatalogDigest == fingerprint || (s.provider == nil && snap.CatalogDigest == "")) {
 			return snap, nil
 		}
 	}
@@ -756,7 +756,14 @@ func (s *Service) Preflight(ctx context.Context, botID string, depIDs []string) 
 		return PreflightResult{}, err
 	}
 	for _, id := range depIDs {
-		result.Items = append(result.Items, preflightItem(s.catalogFor(ctx), snap, id))
+		item := preflightItem(s.catalogFor(ctx), snap, id)
+		if item.Reason == PreflightReasonUnknownDependency {
+			item, err = s.preflightInstalledBuiltin(ctx, botID, item)
+			if err != nil {
+				return PreflightResult{}, err
+			}
+		}
+		result.Items = append(result.Items, item)
 	}
 	return result, nil
 }

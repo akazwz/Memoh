@@ -250,6 +250,7 @@ func loadStateHeader(
 	}
 	state := agentstate.PersistedSessionState{
 		AgentID:             header.AgentID,
+		StorageRevision:     storageRevisionString(header.StorageRevision),
 		AgentSessionID:      header.AgentSessionID,
 		ThroughRunID:        throughRunID,
 		Cwd:                 header.Cwd,
@@ -273,19 +274,20 @@ func loadStateHeader(
 }
 
 type stateLineReader struct {
-	queries       dbstore.Queries
-	botID         pgtype.UUID
-	sessionID     pgtype.UUID
-	fileBounds    []byte
-	boundsErr     error
-	validator     stateStreamValidator
-	page          []sqlc.ListAgentSessionStateLinePageRow
-	pageIndex     int
-	afterFilePath string
-	afterLine     int64
-	terminalErr   error
-	exhausted     bool
-	closed        bool
+	storageRevision pgtype.UUID
+	queries         dbstore.Queries
+	botID           pgtype.UUID
+	sessionID       pgtype.UUID
+	fileBounds      []byte
+	boundsErr       error
+	validator       stateStreamValidator
+	page            []sqlc.ListAgentSessionStateLinePageRow
+	pageIndex       int
+	afterFilePath   string
+	afterLine       int64
+	terminalErr     error
+	exhausted       bool
+	closed          bool
 }
 
 func newStateLineReader(
@@ -303,7 +305,7 @@ func newStateLineReader(
 	}
 	encodedBounds, boundsErr := json.Marshal(bounds)
 	return &stateLineReader{
-		queries: queries, botID: botID, sessionID: sessionID,
+		queries: queries, botID: botID, sessionID: sessionID, storageRevision: storageRevisionUUID(state.StorageRevision),
 		fileBounds: encodedBounds, boundsErr: boundsErr,
 		validator: newStateStreamValidator(state),
 	}
@@ -322,7 +324,7 @@ func (r *stateLineReader) next(ctx context.Context) (agentstate.SessionStateReco
 			return agentstate.SessionStateRecord{}, r.terminalErr
 		}
 		rows, err := r.queries.ListAgentSessionStateLinePage(ctx, sqlc.ListAgentSessionStateLinePageParams{
-			FileBounds: r.fileBounds, SessionID: r.sessionID, BotID: r.botID,
+			FileBounds: r.fileBounds, SessionID: r.sessionID, BotID: r.botID, StorageRevision: r.storageRevision,
 			AfterFilePath: r.afterFilePath, AfterLineNumber: r.afterLine,
 			MaxResults: stateLinePageResults, MaxPageBytes: stateLinePageBytes,
 		})
@@ -424,12 +426,20 @@ func (s *StateStore) Replace(
 		if row, canonicalErr := queries.GetAgentSessionCanonicalStateShape(ctx, sqlc.GetAgentSessionCanonicalStateShapeParams{
 			SessionID: pgSessionID, BotID: pgBotID,
 		}); canonicalErr == nil {
+			if state.StorageRevision != "" && storageRevisionString(row.StorageRevision) == state.StorageRevision {
+				return fmt.Errorf("%w: cannot rewrite a published immutable revision", agentstate.ErrSessionStateDivergent)
+			}
+			if state.StorageRevision == "" && storageRevisionString(row.StorageRevision) != "" {
+				return fmt.Errorf("%w: cannot replace an immutable checkpoint with shared rows", agentstate.ErrSessionStateDivergent)
+			}
 			shapes, decodeErr := decodeStateFileShapes(row.FileShapes)
 			if decodeErr != nil {
 				return decodeErr
 			}
-			for _, shape := range shapes {
-				canonical[shape.Path] = shape
+			if state.StorageRevision == "" {
+				for _, shape := range shapes {
+					canonical[shape.Path] = shape
+				}
 			}
 		} else if !errors.Is(canonicalErr, pgx.ErrNoRows) {
 			return fmt.Errorf("load canonical agent session state shape: %w", canonicalErr)
@@ -462,16 +472,17 @@ func (s *StateStore) Replace(
 		}
 
 		stored, err := queries.UpsertAgentSessionState(ctx, sqlc.UpsertAgentSessionStateParams{
-			SessionID:      pgSessionID,
-			BotID:          pgBotID,
-			ThroughRunID:   pgThroughRunID,
-			AgentID:        strings.TrimSpace(state.AgentID),
-			AgentSessionID: strings.TrimSpace(state.AgentSessionID),
-			Cwd:            strings.TrimSpace(state.Cwd),
-			TranscriptPath: state.TranscriptPath,
-			FileCount:      state.FileCount,
-			RecordCount:    state.RecordCount,
-			FileShapes:     encodedShapes,
+			SessionID:       pgSessionID,
+			BotID:           pgBotID,
+			ThroughRunID:    pgThroughRunID,
+			AgentID:         strings.TrimSpace(state.AgentID),
+			StorageRevision: storageRevisionUUID(state.StorageRevision),
+			AgentSessionID:  strings.TrimSpace(state.AgentSessionID),
+			Cwd:             strings.TrimSpace(state.Cwd),
+			TranscriptPath:  state.TranscriptPath,
+			FileCount:       state.FileCount,
+			RecordCount:     state.RecordCount,
+			FileShapes:      encodedShapes,
 		})
 		if errors.Is(err, pgx.ErrNoRows) {
 			return runtimefence.ErrStale
@@ -488,13 +499,13 @@ func (s *StateStore) Replace(
 		// ever touch rows no canonical version references: files a crashed
 		// candidate introduced, and dangling tails past canonical counts.
 		if _, err := queries.DeleteAgentSessionStateLineFilesNotIn(ctx, sqlc.DeleteAgentSessionStateLineFilesNotInParams{
-			SessionID: pgSessionID, KeptPaths: encodedKeptPaths,
+			SessionID: pgSessionID, KeptPaths: encodedKeptPaths, StorageRevision: storageRevisionUUID(state.StorageRevision),
 		}); err != nil {
 			return fmt.Errorf("drop removed agent session state files: %w", err)
 		}
 		for _, file := range state.Files {
 			if _, err := queries.TrimAgentSessionStateLines(ctx, sqlc.TrimAgentSessionStateLinesParams{
-				SessionID: pgSessionID, FilePath: file.Path, KeepRecords: appendFrom[file.Path] - 1,
+				SessionID: pgSessionID, FilePath: file.Path, KeepRecords: appendFrom[file.Path] - 1, StorageRevision: storageRevisionUUID(state.StorageRevision),
 			}); err != nil {
 				return fmt.Errorf("trim agent session state file %q: %w", file.Path, err)
 			}
@@ -676,6 +687,9 @@ func validateStateFileShapes(state agentstate.PersistedSessionState) error {
 const runtimeStateMaxLinesPerFile = 2_000_000
 
 func validateStateHeader(state agentstate.PersistedSessionState) error {
+	if state.StorageRevision != "" && (state.StorageRevision != state.ThroughRunID || state.StorageRevision == "00000000-0000-0000-0000-000000000000") {
+		return errors.New("immutable checkpoint revision must be its staging run id")
+	}
 	if err := validateBoundedText("agent id", state.AgentID, maxStateAgentIDBytes); err != nil {
 		return err
 	}
@@ -1011,4 +1025,19 @@ func (w *stateLineBatchWriter) account(result sqlc.InsertAgentSessionStateLinesR
 	w.inserted += result.RowsWritten
 	w.jsonlBytes += result.JsonlBytes
 	return nil
+}
+
+func storageRevisionUUID(revision string) pgtype.UUID {
+	if revision == "" {
+		return pgtype.UUID{}
+	}
+	id, _ := dbpkg.ParseUUID(revision)
+	return id
+}
+
+func storageRevisionString(revision pgtype.UUID) string {
+	if !revision.Valid || revision.Bytes == [16]byte{} {
+		return ""
+	}
+	return revision.String()
 }

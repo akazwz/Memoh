@@ -9,7 +9,7 @@ const loading = ref(false)
 vi.mock('@/composables/useAgentAuthorization', () => ({ useAgentAuthorization: () => ({
   session, ready, pending, busy: loading, loading, error: ref(''), ...actions,
 }) }))
-vi.mock('./codex-account-panel.vue', () => ({ default: { template: '<div />' } }))
+vi.mock('./agent-device-account-panel.vue', () => ({ default: { template: '<div />' } }))
 vi.mock('./agent-credential-input.vue', () => ({ default: { template: '<input data-manual-token />' } }))
 vi.mock('@felinic/ui', () => {
   const slot = { template: '<div><slot /></div>' }

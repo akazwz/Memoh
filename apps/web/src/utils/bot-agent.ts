@@ -5,11 +5,13 @@ import type { AcpprofilePublicProfile, BotagentsBotAgent } from '@memohai/sdk'
 export const BOT_AGENT_RUNTIME_ACP = 'acp'
 export const BOT_AGENT_RUNTIME_CODEX = 'codex'
 export const BOT_AGENT_RUNTIME_CLAUDE_CODE = 'claude-code'
+export const BOT_AGENT_RUNTIME_GROK = 'grok'
 
 export type BotAgentRuntime =
   | typeof BOT_AGENT_RUNTIME_ACP
   | typeof BOT_AGENT_RUNTIME_CODEX
   | typeof BOT_AGENT_RUNTIME_CLAUDE_CODE
+  | typeof BOT_AGENT_RUNTIME_GROK
 
 export interface BotAgentRuntimeOption {
   value: string
@@ -22,7 +24,14 @@ export interface BotAgentRuntimeOption {
 const directRuntimeProviders = [
   BOT_AGENT_RUNTIME_CODEX,
   BOT_AGENT_RUNTIME_CLAUDE_CODE,
+  BOT_AGENT_RUNTIME_GROK,
 ] as const
+
+export type DirectBotAgentRuntime = typeof directRuntimeProviders[number]
+
+export function isDirectBotAgentRuntime(value: unknown): value is DirectBotAgentRuntime {
+  return directRuntimeProviders.includes(value as DirectBotAgentRuntime)
+}
 
 function objectValue(value: unknown): Record<string, unknown> | undefined {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
@@ -35,6 +44,7 @@ export function normalizeBotAgentRuntime(value: unknown): BotAgentRuntime | '' {
     case BOT_AGENT_RUNTIME_ACP:
     case BOT_AGENT_RUNTIME_CODEX:
     case BOT_AGENT_RUNTIME_CLAUDE_CODE:
+    case BOT_AGENT_RUNTIME_GROK:
       return runtime
     default:
       return ''
@@ -43,8 +53,7 @@ export function normalizeBotAgentRuntime(value: unknown): BotAgentRuntime | '' {
 
 export function botAgentRuntimeForProvider(provider: unknown): BotAgentRuntime {
   const normalized = normalizeAgentID(provider)
-  if (normalized === BOT_AGENT_RUNTIME_CODEX) return BOT_AGENT_RUNTIME_CODEX
-  if (normalized === BOT_AGENT_RUNTIME_CLAUDE_CODE) return BOT_AGENT_RUNTIME_CLAUDE_CODE
+  if (isDirectBotAgentRuntime(normalized)) return normalized
   return BOT_AGENT_RUNTIME_ACP
 }
 
@@ -71,10 +80,10 @@ export function botAgentRuntimeOptions(profiles: AcpprofilePublicProfile[]): Bot
 }
 
 export function directBotAgentMetadata(runtime: BotAgentRuntime): Record<string, unknown> | undefined {
-  if (runtime !== BOT_AGENT_RUNTIME_CODEX && runtime !== BOT_AGENT_RUNTIME_CLAUDE_CODE) return undefined
+  if (!isDirectBotAgentRuntime(runtime)) return undefined
   return {
     provider: runtime,
-    auth: runtime === BOT_AGENT_RUNTIME_CODEX ? 'chatgpt' : 'workspace',
+    auth: runtime === BOT_AGENT_RUNTIME_CODEX ? 'chatgpt' : runtime === BOT_AGENT_RUNTIME_GROK ? 'oauth' : 'workspace',
   }
 }
 
@@ -86,6 +95,9 @@ export function isDirectBotAgentConfigured(
   const auth = normalizeAgentID(config?.auth)
   if (runtime === BOT_AGENT_RUNTIME_CODEX) {
     return (auth === 'chatgpt' || auth === 'api_key') && !!agent?.agent_credential_id
+  }
+  if (runtime === BOT_AGENT_RUNTIME_GROK) {
+    return (auth === 'oauth' || auth === 'api_key') && !!agent?.agent_credential_id
   }
   if (runtime === BOT_AGENT_RUNTIME_CLAUDE_CODE) {
     if (auth === 'workspace') return true
@@ -99,7 +111,7 @@ export function botAgentProvider(agent: Pick<BotagentsBotAgent, 'runtime' | 'met
   const provider = normalizeAgentID(agent?.metadata?.provider)
   if (provider) return provider
   const runtime = normalizeBotAgentRuntime(agent?.runtime)
-  return runtime === BOT_AGENT_RUNTIME_CODEX || runtime === BOT_AGENT_RUNTIME_CLAUDE_CODE ? runtime : ''
+  return isDirectBotAgentRuntime(runtime) ? runtime : ''
 }
 
 export function botAgentIcon(agent: Pick<BotagentsBotAgent, 'runtime' | 'metadata'> | null | undefined, color = false): Component {
@@ -112,7 +124,7 @@ export function sessionAgentProvider(
   metadata: Record<string, unknown> | undefined,
 ): string {
   const runtime = normalizeBotAgentRuntime(runtimeType)
-  if (runtime === BOT_AGENT_RUNTIME_CODEX || runtime === BOT_AGENT_RUNTIME_CLAUDE_CODE) return runtime
+  if (isDirectBotAgentRuntime(runtime)) return runtime
   return normalizeAgentID(runtimeMetadata?.acp_agent_id ?? metadata?.acp_agent_id)
 }
 

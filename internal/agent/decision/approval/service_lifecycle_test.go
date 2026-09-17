@@ -76,6 +76,40 @@ func (q *lifecycleQueries) GetToolApprovalRequest(_ context.Context, _ pgtype.UU
 	return q.getRow, nil
 }
 
+func TestWebDecisionProvenanceSurvivesWaiterRecovery(t *testing.T) {
+	for _, tc := range []struct {
+		name, status string
+		identity     bool
+		wantUser     bool
+	}{
+		{"web approval", StatusApproved, true, true},
+		{"web rejection", StatusRejected, true, true},
+		{"system rejection", StatusRejected, false, false},
+		{"system cancellation", StatusCancelled, true, false},
+		{"expired", StatusExpired, true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			row := sqlc.ToolApprovalRequest{
+				ID:     mustTestUUID("33333333-3333-3333-3333-333333333333"),
+				Status: tc.status, SelectedOptionID: "allow-once",
+			}
+			if tc.identity {
+				row.ResponseControlID = pgtype.Text{String: "web-control", Valid: true}
+				row.ResponsePayloadHash = pgtype.Text{String: "payload-hash", Valid: true}
+			}
+			svc := NewService(slog.New(slog.DiscardHandler), &lifecycleQueries{getRow: row}, nil)
+			got, err := svc.WaitForDecision(context.Background(), "33333333-3333-3333-3333-333333333333")
+			if err != nil {
+				t.Fatal(err)
+			}
+			result := resultFromDecision(got, got, nil)
+			if result.DecidedByUser != tc.wantUser || result.SelectedOptionID != row.SelectedOptionID {
+				t.Fatalf("lost decision provenance: %#v", result)
+			}
+		})
+	}
+}
+
 func (*lifecycleQueries) ApproveToolApprovalRequest(context.Context, sqlc.ApproveToolApprovalRequestParams) (sqlc.ToolApprovalRequest, error) {
 	return sqlc.ToolApprovalRequest{}, pgx.ErrNoRows
 }

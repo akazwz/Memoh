@@ -74,6 +74,23 @@ type AgentCredential struct {
 	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
 }
 
+type AgentSessionForkState struct {
+	TeamID              pgtype.UUID        `json:"team_id"`
+	SessionID           pgtype.UUID        `json:"session_id"`
+	ThroughRunID        pgtype.UUID        `json:"through_run_id"`
+	StorageRevision     pgtype.UUID        `json:"storage_revision"`
+	AgentID             string             `json:"agent_id"`
+	AgentSessionID      string             `json:"agent_session_id"`
+	Cwd                 string             `json:"cwd"`
+	TranscriptPath      string             `json:"transcript_path"`
+	RuntimeFencingToken int64              `json:"runtime_fencing_token"`
+	FileCount           int32              `json:"file_count"`
+	RecordCount         int64              `json:"record_count"`
+	FileShapes          []byte             `json:"file_shapes"`
+	CreatedAt           pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt           pgtype.Timestamptz `json:"updated_at"`
+}
+
 type AgentSessionPublication struct {
 	TeamID          pgtype.UUID        `json:"team_id"`
 	SessionID       pgtype.UUID        `json:"session_id"`
@@ -86,6 +103,7 @@ type AgentSessionState struct {
 	TeamID              pgtype.UUID        `json:"team_id"`
 	SessionID           pgtype.UUID        `json:"session_id"`
 	ThroughRunID        pgtype.UUID        `json:"through_run_id"`
+	StorageRevision     pgtype.UUID        `json:"storage_revision"`
 	AgentID             string             `json:"agent_id"`
 	AgentSessionID      string             `json:"agent_session_id"`
 	Cwd                 string             `json:"cwd"`
@@ -99,12 +117,13 @@ type AgentSessionState struct {
 }
 
 type AgentSessionStateLine struct {
-	TeamID       pgtype.UUID `json:"team_id"`
-	SessionID    pgtype.UUID `json:"session_id"`
-	FilePath     string      `json:"file_path"`
-	LineNumber   int64       `json:"line_number"`
-	Content      string      `json:"content"`
-	ContentBytes int32       `json:"content_bytes"`
+	TeamID          pgtype.UUID `json:"team_id"`
+	SessionID       pgtype.UUID `json:"session_id"`
+	StorageRevision pgtype.UUID `json:"storage_revision"`
+	FilePath        string      `json:"file_path"`
+	LineNumber      int64       `json:"line_number"`
+	Content         string      `json:"content"`
+	ContentBytes    int32       `json:"content_bytes"`
 }
 
 type Bot struct {

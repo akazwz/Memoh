@@ -79,6 +79,7 @@ const (
 	RuntimeACPAgent       = string(runtimekind.ACPAgent)
 	RuntimeCodex          = string(runtimekind.Codex)
 	RuntimeClaudeCode     = string(runtimekind.ClaudeCode)
+	RuntimeGrok           = string(runtimekind.Grok)
 	DefaultACPProjectMode = "project"
 	DefaultACPProjectPath = "/data"
 )

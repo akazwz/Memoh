@@ -471,6 +471,7 @@ function hydrateExecution(schedule: ScheduleSchedule) {
   execution.runtimeType = schedule.runtime_type === 'acp_agent'
     || schedule.runtime_type === 'codex'
     || schedule.runtime_type === 'claude-code'
+    || schedule.runtime_type === 'grok'
     ? schedule.runtime_type
     : ''
   execution.botAgentId = schedule.bot_agent_id ?? ''

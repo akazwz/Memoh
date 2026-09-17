@@ -29,23 +29,25 @@ const deleteAgentSessionStateLineFilesNotIn = `-- name: DeleteAgentSessionStateL
 DELETE FROM agent_session_state_lines line
 WHERE line.team_id = public.memoh_current_team_id()
   AND line.session_id = $1
+  AND line.storage_revision = COALESCE($2::uuid, '00000000-0000-0000-0000-000000000000'::uuid)
   AND NOT EXISTS (
     SELECT 1
-    FROM jsonb_array_elements_text($2::jsonb) AS kept(path)
+    FROM jsonb_array_elements_text($3::jsonb) AS kept(path)
     WHERE kept.path = line.file_path
   )
 `
 
 type DeleteAgentSessionStateLineFilesNotInParams struct {
-	SessionID pgtype.UUID `json:"session_id"`
-	KeptPaths []byte      `json:"kept_paths"`
+	SessionID       pgtype.UUID `json:"session_id"`
+	StorageRevision pgtype.UUID `json:"storage_revision"`
+	KeptPaths       []byte      `json:"kept_paths"`
 }
 
 // Remove files the incoming version no longer contains, including files a
 // crashed candidate introduced that neither the canonical nor the incoming
 // version knows about. kept_paths is a JSONB array of file path strings.
 func (q *Queries) DeleteAgentSessionStateLineFilesNotIn(ctx context.Context, arg DeleteAgentSessionStateLineFilesNotInParams) (int64, error) {
-	result, err := q.db.Exec(ctx, deleteAgentSessionStateLineFilesNotIn, arg.SessionID, arg.KeptPaths)
+	result, err := q.db.Exec(ctx, deleteAgentSessionStateLineFilesNotIn, arg.SessionID, arg.StorageRevision, arg.KeptPaths)
 	if err != nil {
 		return 0, err
 	}
@@ -67,6 +69,10 @@ func (q *Queries) DeleteAgentSessionStateLinesBySession(ctx context.Context, ses
 }
 
 const deleteAgentSessionStatesBySession = `-- name: DeleteAgentSessionStatesBySession :execrows
+WITH deleted_seed AS (
+ DELETE FROM agent_session_fork_states
+ WHERE team_id = public.memoh_current_team_id() AND session_id = $1
+)
 DELETE FROM agent_session_states state
 WHERE state.team_id = public.memoh_current_team_id()
   AND state.session_id = $1
@@ -109,7 +115,7 @@ func (q *Queries) DeleteRuntimeDecisionProjectionsByRun(ctx context.Context, arg
 }
 
 const getAgentSessionCanonicalStateShape = `-- name: GetAgentSessionCanonicalStateShape :one
-SELECT state.through_run_id, state.file_shapes
+SELECT state.through_run_id, state.file_shapes, state.storage_revision
 FROM agent_session_publications publication
 JOIN bot_sessions session
   ON session.team_id = publication.team_id
@@ -130,8 +136,9 @@ type GetAgentSessionCanonicalStateShapeParams struct {
 }
 
 type GetAgentSessionCanonicalStateShapeRow struct {
-	ThroughRunID pgtype.UUID `json:"through_run_id"`
-	FileShapes   []byte      `json:"file_shapes"`
+	ThroughRunID    pgtype.UUID `json:"through_run_id"`
+	FileShapes      []byte      `json:"file_shapes"`
+	StorageRevision pgtype.UUID `json:"storage_revision"`
 }
 
 // The committed head version's per-file shapes: the authoritative read bound
@@ -140,7 +147,7 @@ type GetAgentSessionCanonicalStateShapeRow struct {
 func (q *Queries) GetAgentSessionCanonicalStateShape(ctx context.Context, arg GetAgentSessionCanonicalStateShapeParams) (GetAgentSessionCanonicalStateShapeRow, error) {
 	row := q.db.QueryRow(ctx, getAgentSessionCanonicalStateShape, arg.BotID, arg.SessionID)
 	var i GetAgentSessionCanonicalStateShapeRow
-	err := row.Scan(&i.ThroughRunID, &i.FileShapes)
+	err := row.Scan(&i.ThroughRunID, &i.FileShapes, &i.StorageRevision)
 	return i, err
 }
 
@@ -192,6 +199,7 @@ WITH target_session AS MATERIALIZED (
 SELECT
   publication.run_id AS through_run_id,
   state.through_run_id AS staged_through_run_id,
+  COALESCE(state.storage_revision, '00000000-0000-0000-0000-000000000000'::uuid) AS storage_revision,
   COALESCE(state.agent_id, '')::text AS agent_id,
   COALESCE(state.agent_session_id, '')::text AS agent_session_id,
   COALESCE(state.cwd, '')::text AS cwd,
@@ -211,6 +219,16 @@ LEFT JOIN agent_session_states state
 WHERE publication.team_id = public.memoh_current_team_id()
   AND publication.session_id = $1
   AND publication.checkpoint_reset = false
+UNION ALL
+SELECT seed.through_run_id, seed.through_run_id AS staged_through_run_id,
+  seed.storage_revision, seed.agent_id, seed.agent_session_id, seed.cwd,
+  seed.transcript_path, seed.runtime_fencing_token, seed.file_count,
+  seed.record_count, seed.file_shapes
+FROM agent_session_fork_states seed
+JOIN target_session session ON session.team_id = seed.team_id AND session.id = seed.session_id
+WHERE seed.team_id = public.memoh_current_team_id()
+  AND NOT EXISTS (SELECT 1 FROM agent_session_publications p
+    WHERE p.team_id = seed.team_id AND p.session_id = seed.session_id)
 `
 
 type GetAgentSessionStateParams struct {
@@ -221,6 +239,7 @@ type GetAgentSessionStateParams struct {
 type GetAgentSessionStateRow struct {
 	ThroughRunID        pgtype.UUID `json:"through_run_id"`
 	StagedThroughRunID  pgtype.UUID `json:"staged_through_run_id"`
+	StorageRevision     pgtype.UUID `json:"storage_revision"`
 	AgentID             string      `json:"agent_id"`
 	AgentSessionID      string      `json:"agent_session_id"`
 	Cwd                 string      `json:"cwd"`
@@ -241,6 +260,7 @@ func (q *Queries) GetAgentSessionState(ctx context.Context, arg GetAgentSessionS
 	err := row.Scan(
 		&i.ThroughRunID,
 		&i.StagedThroughRunID,
+		&i.StorageRevision,
 		&i.AgentID,
 		&i.AgentSessionID,
 		&i.Cwd,
@@ -374,7 +394,7 @@ func (q *Queries) GetRuntimeRoundOutcome(ctx context.Context, arg GetRuntimeRoun
 
 const insertAgentSessionStateLines = `-- name: InsertAgentSessionStateLines :one
 WITH target_state AS MATERIALIZED (
-  SELECT state.team_id, state.session_id, state.through_run_id
+  SELECT state.team_id, state.session_id, state.through_run_id, state.storage_revision
   FROM agent_session_states state
   WHERE state.team_id = public.memoh_current_team_id()
     AND state.session_id = $1
@@ -392,6 +412,7 @@ inserted_lines AS (
   INSERT INTO agent_session_state_lines (
     team_id,
     session_id,
+    storage_revision,
     file_path,
     line_number,
     content,
@@ -400,6 +421,7 @@ inserted_lines AS (
   SELECT
     state.team_id,
     state.session_id,
+    state.storage_revision,
     line.file_path,
     line.line_number,
     line.content,
@@ -438,7 +460,7 @@ func (q *Queries) InsertAgentSessionStateLines(ctx context.Context, arg InsertAg
 const listAgentSessionStateLinePage = `-- name: ListAgentSessionStateLinePage :many
 WITH file_bounds AS MATERIALIZED (
   SELECT bound.key AS file_path, bound.value::bigint AS max_line
-  FROM jsonb_each_text($2::jsonb) AS bound(key, value)
+  FROM jsonb_each_text($3::jsonb) AS bound(key, value)
 ),
 candidate_lines AS MATERIALIZED (
   SELECT line.file_path, line.line_number, line.content_bytes
@@ -449,20 +471,21 @@ candidate_lines AS MATERIALIZED (
   JOIN bot_sessions session
     ON session.team_id = line.team_id
    AND session.id = line.session_id
-   AND session.bot_id = $3
+   AND session.bot_id = $4
    AND session.runtime_type <> 'model'
    AND session.deleted_at IS NULL
   WHERE line.team_id = public.memoh_current_team_id()
     AND line.session_id = $1
+ AND line.storage_revision = COALESCE($2::uuid, '00000000-0000-0000-0000-000000000000'::uuid)
     AND (
-      line.file_path > $4::text
+      line.file_path > $5::text
       OR (
-        line.file_path = $4::text
-        AND line.line_number > $5::bigint
+        line.file_path = $5::text
+        AND line.line_number > $6::bigint
       )
     )
   ORDER BY line.file_path, line.line_number
-  LIMIT $6::int
+  LIMIT $7::int
 ),
 sized_lines AS MATERIALIZED (
   SELECT
@@ -484,13 +507,14 @@ selected_lines AS MATERIALIZED (
   SELECT file_path, line_number
   FROM sized_lines
   WHERE ordinal = 1
-     OR cumulative_bytes <= $7::bigint
+     OR cumulative_bytes <= $8::bigint
 )
 SELECT line.file_path, line.line_number, line.content
 FROM selected_lines selected
 JOIN agent_session_state_lines line
   ON line.team_id = public.memoh_current_team_id()
  AND line.session_id = $1
+ AND line.storage_revision = COALESCE($2::uuid, '00000000-0000-0000-0000-000000000000'::uuid)
  AND line.file_path = selected.file_path
  AND line.line_number = selected.line_number
 ORDER BY line.file_path, line.line_number
@@ -498,6 +522,7 @@ ORDER BY line.file_path, line.line_number
 
 type ListAgentSessionStateLinePageParams struct {
 	SessionID       pgtype.UUID `json:"session_id"`
+	StorageRevision pgtype.UUID `json:"storage_revision"`
 	FileBounds      []byte      `json:"file_bounds"`
 	BotID           pgtype.UUID `json:"bot_id"`
 	AfterFilePath   string      `json:"after_file_path"`
@@ -523,6 +548,7 @@ type ListAgentSessionStateLinePageRow struct {
 func (q *Queries) ListAgentSessionStateLinePage(ctx context.Context, arg ListAgentSessionStateLinePageParams) ([]ListAgentSessionStateLinePageRow, error) {
 	rows, err := q.db.Query(ctx, listAgentSessionStateLinePage,
 		arg.SessionID,
+		arg.StorageRevision,
 		arg.FileBounds,
 		arg.BotID,
 		arg.AfterFilePath,
@@ -549,6 +575,24 @@ func (q *Queries) ListAgentSessionStateLinePage(ctx context.Context, arg ListAge
 }
 
 const pruneAgentSessionStateVersions = `-- name: PruneAgentSessionStateVersions :execrows
+WITH old_seed AS (
+ DELETE FROM agent_session_fork_states seed
+ WHERE seed.team_id = public.memoh_current_team_id() AND seed.session_id = $1
+ AND EXISTS (SELECT 1 FROM agent_session_publications p WHERE p.team_id = seed.team_id AND p.session_id = seed.session_id)
+ RETURNING seed.storage_revision
+), obsolete AS MATERIALIZED (
+ SELECT storage_revision FROM old_seed
+ UNION
+
+ SELECT state.storage_revision FROM agent_session_states state
+ WHERE state.team_id = public.memoh_current_team_id() AND state.session_id = $1
+ AND state.through_run_id <> $2
+ AND NOT EXISTS (SELECT 1 FROM agent_session_publications p WHERE p.team_id = state.team_id AND p.session_id = state.session_id AND NOT p.checkpoint_reset AND p.run_id = state.through_run_id)
+), pruned_lines AS (
+ DELETE FROM agent_session_state_lines line USING obsolete old
+ WHERE line.team_id = public.memoh_current_team_id() AND line.session_id = $1
+ AND line.storage_revision = old.storage_revision AND old.storage_revision <> '00000000-0000-0000-0000-000000000000'::uuid
+)
 DELETE FROM agent_session_states state
 WHERE state.team_id = public.memoh_current_team_id()
   AND state.session_id = $1
@@ -583,21 +627,28 @@ const trimAgentSessionStateLines = `-- name: TrimAgentSessionStateLines :execrow
 DELETE FROM agent_session_state_lines
 WHERE team_id = public.memoh_current_team_id()
   AND session_id = $1
-  AND file_path = $2
-  AND line_number > $3::bigint
+  AND storage_revision = COALESCE($2::uuid, '00000000-0000-0000-0000-000000000000'::uuid)
+  AND file_path = $3
+  AND line_number > $4::bigint
 `
 
 type TrimAgentSessionStateLinesParams struct {
-	SessionID   pgtype.UUID `json:"session_id"`
-	FilePath    string      `json:"file_path"`
-	KeepRecords int64       `json:"keep_records"`
+	SessionID       pgtype.UUID `json:"session_id"`
+	StorageRevision pgtype.UUID `json:"storage_revision"`
+	FilePath        string      `json:"file_path"`
+	KeepRecords     int64       `json:"keep_records"`
 }
 
 // Delete one file's lines beyond keep_records. keep_records = 0 clears the
 // file for a full rewrite; a positive value clears a crashed candidate's
 // dangling tail before the next append.
 func (q *Queries) TrimAgentSessionStateLines(ctx context.Context, arg TrimAgentSessionStateLinesParams) (int64, error) {
-	result, err := q.db.Exec(ctx, trimAgentSessionStateLines, arg.SessionID, arg.FilePath, arg.KeepRecords)
+	result, err := q.db.Exec(ctx, trimAgentSessionStateLines,
+		arg.SessionID,
+		arg.StorageRevision,
+		arg.FilePath,
+		arg.KeepRecords,
+	)
 	if err != nil {
 		return 0, err
 	}
@@ -662,8 +713,8 @@ WITH target_session AS MATERIALIZED (
   SELECT session.team_id, session.id, session.runtime_fencing_token
   FROM bot_sessions session
   WHERE session.team_id = public.memoh_current_team_id()
-    AND session.id = $8
-    AND session.bot_id = $9
+    AND session.id = $9
+    AND session.bot_id = $10
     AND session.runtime_type <> 'model'
     AND session.deleted_at IS NULL
 ),
@@ -673,8 +724,8 @@ target_run AS MATERIALIZED (
   JOIN session_runs run
     ON run.team_id = target.team_id
    AND run.session_id = target.id
-   AND run.bot_id = $9
-   AND run.run_id = $10
+   AND run.bot_id = $10
+   AND run.run_id = $11
    AND run.fencing_token = target.runtime_fencing_token
    AND run.state IN ('running', 'waiting_decision')
 )
@@ -682,6 +733,7 @@ INSERT INTO agent_session_states (
   team_id,
   session_id,
   through_run_id,
+  storage_revision,
   agent_id,
   agent_session_id,
   cwd,
@@ -695,16 +747,18 @@ SELECT
   target.team_id,
   target.session_id,
   target.run_id,
-  $1,
+  COALESCE($1::uuid, '00000000-0000-0000-0000-000000000000'::uuid),
   $2,
   $3,
   $4,
-  target.runtime_fencing_token,
   $5,
+  target.runtime_fencing_token,
   $6,
-  $7
+  $7,
+  $8
 FROM target_run target
 ON CONFLICT (team_id, session_id, through_run_id) DO UPDATE SET
+  storage_revision = EXCLUDED.storage_revision,
   agent_id = EXCLUDED.agent_id,
   agent_session_id = EXCLUDED.agent_session_id,
   cwd = EXCLUDED.cwd,
@@ -715,20 +769,21 @@ ON CONFLICT (team_id, session_id, through_run_id) DO UPDATE SET
   file_shapes = EXCLUDED.file_shapes,
   updated_at = now()
 WHERE agent_session_states.runtime_fencing_token <= EXCLUDED.runtime_fencing_token
-RETURNING agent_session_states.team_id, agent_session_states.session_id, agent_session_states.through_run_id, agent_session_states.agent_id, agent_session_states.agent_session_id, agent_session_states.cwd, agent_session_states.transcript_path, agent_session_states.runtime_fencing_token, agent_session_states.file_count, agent_session_states.record_count, agent_session_states.file_shapes, agent_session_states.created_at, agent_session_states.updated_at
+RETURNING agent_session_states.team_id, agent_session_states.session_id, agent_session_states.through_run_id, agent_session_states.storage_revision, agent_session_states.agent_id, agent_session_states.agent_session_id, agent_session_states.cwd, agent_session_states.transcript_path, agent_session_states.runtime_fencing_token, agent_session_states.file_count, agent_session_states.record_count, agent_session_states.file_shapes, agent_session_states.created_at, agent_session_states.updated_at
 `
 
 type UpsertAgentSessionStateParams struct {
-	AgentID        string      `json:"agent_id"`
-	AgentSessionID string      `json:"agent_session_id"`
-	Cwd            string      `json:"cwd"`
-	TranscriptPath string      `json:"transcript_path"`
-	FileCount      int32       `json:"file_count"`
-	RecordCount    int64       `json:"record_count"`
-	FileShapes     []byte      `json:"file_shapes"`
-	SessionID      pgtype.UUID `json:"session_id"`
-	BotID          pgtype.UUID `json:"bot_id"`
-	ThroughRunID   pgtype.UUID `json:"through_run_id"`
+	StorageRevision pgtype.UUID `json:"storage_revision"`
+	AgentID         string      `json:"agent_id"`
+	AgentSessionID  string      `json:"agent_session_id"`
+	Cwd             string      `json:"cwd"`
+	TranscriptPath  string      `json:"transcript_path"`
+	FileCount       int32       `json:"file_count"`
+	RecordCount     int64       `json:"record_count"`
+	FileShapes      []byte      `json:"file_shapes"`
+	SessionID       pgtype.UUID `json:"session_id"`
+	BotID           pgtype.UUID `json:"bot_id"`
+	ThroughRunID    pgtype.UUID `json:"through_run_id"`
 }
 
 // This is deliberately a staging write. Canonical history is committed later
@@ -737,6 +792,7 @@ type UpsertAgentSessionStateParams struct {
 // that this process still owns the run's current fencing generation.
 func (q *Queries) UpsertAgentSessionState(ctx context.Context, arg UpsertAgentSessionStateParams) (AgentSessionState, error) {
 	row := q.db.QueryRow(ctx, upsertAgentSessionState,
+		arg.StorageRevision,
 		arg.AgentID,
 		arg.AgentSessionID,
 		arg.Cwd,
@@ -753,6 +809,7 @@ func (q *Queries) UpsertAgentSessionState(ctx context.Context, arg UpsertAgentSe
 		&i.TeamID,
 		&i.SessionID,
 		&i.ThroughRunID,
+		&i.StorageRevision,
 		&i.AgentID,
 		&i.AgentSessionID,
 		&i.Cwd,

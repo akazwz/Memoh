@@ -2429,6 +2429,9 @@
       "apps": "アプリ"
     },
     "agent": {
+      "grokAccount": "Grok アカウント",
+      "grokAccountDescription": "Grok アカウントでログインして Grok Build を利用します。",
+      "grokDeviceHint": "xAI の認証ページを開き、このコードを入力してください。ここで自分が発行したコードだけを使用してください。",
       "add": "Agent を追加",
       "added": "Agent を追加しました",
       "provider": "タイプ",
@@ -3987,6 +3990,17 @@
     }
   },
   "runtime": {
+    "grok": {
+      "commands": { "compact": { "description": "Grok の会話コンテキストを圧縮します。" } },
+      "modes": {
+        "ask": {"name": "実行前に確認", "description": "権限が必要なツールの承認を求めます。"},
+        "auto": {
+          "name": "自動",
+          "description": "Grok がツール呼び出しを確認し、自動承認できない場合は確認を求めます。"
+        },
+        "alwaysApprove": {"name": "常に承認", "description": "Grok のツールを承認確認なしで実行します。"}
+      }
+    },
     "claudeCode": {
       "modes": {
         "inherit": {

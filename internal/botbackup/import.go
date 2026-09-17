@@ -1386,6 +1386,19 @@ func (s *Service) restoreHistory(ctx context.Context, actorUserID, botID string,
 		}
 		metadata := defaultJSONMap(item.Metadata)
 		runtimeMetadata := defaultJSONMap(item.RuntimeMetadata)
+		if runtimeType == sessionpkg.RuntimeGrok {
+			// Backups exclude native checkpoints and fork seeds. Keep preferences,
+			// but never restore an identity whose native state is absent.
+			var meta map[string]any
+			if json.Unmarshal(runtimeMetadata, &meta) == nil {
+				for key := range meta {
+					if strings.HasPrefix(key, "grok_") {
+						delete(meta, key)
+					}
+				}
+				runtimeMetadata, _ = json.Marshal(meta)
+			}
+		}
 		if runtimeType == sessionpkg.RuntimeACPAgent {
 			metadata = rebindRestoredRuntimeOwner(metadata, actorUserID)
 			runtimeMetadata = rebindRestoredRuntimeOwner(runtimeMetadata, actorUserID)

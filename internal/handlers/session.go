@@ -267,10 +267,8 @@ func (h *SessionHandler) CreateSession(c echo.Context) error {
 		switch descriptor.Runtime {
 		case botagents.RuntimeACP:
 			req.RuntimeType = session.RuntimeACPAgent
-		case botagents.RuntimeCodex:
-			req.RuntimeType = session.RuntimeCodex
-		case botagents.RuntimeClaudeCode:
-			req.RuntimeType = session.RuntimeClaudeCode
+		case botagents.RuntimeCodex, botagents.RuntimeClaudeCode, botagents.RuntimeGrok:
+			req.RuntimeType = descriptor.Runtime
 		default:
 			return apperror.New(apperror.CodeBotAgentInvalidRuntime, nil)
 		}
@@ -914,10 +912,8 @@ func (h *SessionHandler) UpdateSession(c echo.Context) error {
 			switch descriptor.Runtime {
 			case botagents.RuntimeACP:
 				targetRuntime = session.RuntimeACPAgent
-			case botagents.RuntimeCodex:
-				targetRuntime = session.RuntimeCodex
-			case botagents.RuntimeClaudeCode:
-				targetRuntime = session.RuntimeClaudeCode
+			case botagents.RuntimeCodex, botagents.RuntimeClaudeCode, botagents.RuntimeGrok:
+				targetRuntime = descriptor.Runtime
 			default:
 				return apperror.New(apperror.CodeBotAgentInvalidRuntime, nil)
 			}

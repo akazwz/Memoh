@@ -99,6 +99,15 @@ fork_anchor_message AS (
 prepared_metadata AS (
   SELECT COALESCE(sqlc.arg(metadata)::jsonb, '{}'::jsonb) AS value
 ),
+fork_seed AS MATERIALIZED (
+  SELECT state.*
+  FROM source_session s
+  JOIN agent_session_publications pub ON pub.team_id = s.team_id AND pub.session_id = s.id AND NOT pub.checkpoint_reset
+  JOIN agent_session_states state ON state.team_id = pub.team_id AND state.session_id = pub.session_id AND state.through_run_id = pub.run_id
+  WHERE s.runtime_type = 'grok'
+    AND state.storage_revision <> '00000000-0000-0000-0000-000000000000'::uuid
+    AND state.through_run_id::text = sqlc.narg(runtime_metadata_override)::jsonb->'grok_fork'->>'source_run_id'
+),
 fork_plan AS (
   SELECT
     s.*,
@@ -110,6 +119,7 @@ fork_plan AS (
   JOIN target_turn tt ON true
   CROSS JOIN next_turn_position ntp
   WHERE EXISTS (SELECT 1 FROM copy_turns)
+    AND (s.runtime_type <> 'grok' OR EXISTS (SELECT 1 FROM fork_seed))
 ),
 created_session AS (
   INSERT INTO bot_sessions (
@@ -167,6 +177,19 @@ created_session AS (
   FROM fork_plan fp
   CROSS JOIN prepared_metadata pm
   RETURNING *
+),
+inserted_fork_seed AS (
+ INSERT INTO agent_session_fork_states (team_id, session_id, through_run_id, storage_revision, agent_id, agent_session_id, cwd, transcript_path, runtime_fencing_token, file_count, record_count, file_shapes)
+ SELECT target.team_id, target.id, seed.through_run_id, seed.storage_revision, seed.agent_id, seed.agent_session_id, seed.cwd, seed.transcript_path, seed.runtime_fencing_token, seed.file_count, seed.record_count, seed.file_shapes
+ FROM created_session target CROSS JOIN fork_seed seed
+ RETURNING *
+),
+inserted_fork_lines AS (
+ INSERT INTO agent_session_state_lines (team_id, session_id, storage_revision, file_path, line_number, content, content_bytes)
+ SELECT target.team_id, target.session_id, target.storage_revision, line.file_path, line.line_number, line.content, line.content_bytes
+ FROM inserted_fork_seed target
+ JOIN fork_seed source ON source.storage_revision = target.storage_revision
+ JOIN agent_session_state_lines line ON line.team_id = source.team_id AND line.session_id = source.session_id AND line.storage_revision = source.storage_revision
 ),
 inserted_messages AS (
   INSERT INTO bot_history_messages (

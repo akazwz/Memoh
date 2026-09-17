@@ -203,3 +203,63 @@ func TestAuthorizationPollSerializesAndRedacts(t *testing.T) {
 		t.Fatal("refresh token not retained encrypted")
 	}
 }
+
+type testGrokAuthorizer struct {
+	testCodexAuthorizer
+	result providers.GrokDevicePollResult
+	calls  int
+}
+
+func (*testGrokAuthorizer) StartGrokDeviceAuthorization(context.Context) (providers.GrokDeviceAuthorization, error) {
+	return providers.GrokDeviceAuthorization{DeviceCode: "PRIVATE-grok-device", UserCode: "GROK-CODE", VerificationURI: "https://accounts.x.ai/device", Interval: 5, ExpiresIn: 900}, nil
+}
+
+func (s *testGrokAuthorizer) PollGrokDeviceAuthorization(_ context.Context, device string) (providers.GrokDevicePollResult, error) {
+	if device != "PRIVATE-grok-device" {
+		return providers.GrokDevicePollResult{}, errors.New("wrong device")
+	}
+	s.calls++
+	return s.result, nil
+}
+
+func TestGrokDeviceAuthorizationEncryptsTokensAndHonorsSlowDown(t *testing.T) {
+	q := &authorizationQueries{}
+	credentials := NewService(q, config.Config{Auth: config.AuthConfig{AgentCredentialsEncryptionKey: base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{7}, 32))}})
+	oauth := &testGrokAuthorizer{result: providers.GrokDevicePollResult{Pending: true, SlowDown: true}}
+	service := &AuthorizationService{credentials: credentials, oauth: oauth}
+	ctx := context.Background()
+	owner := uuid.NewString()
+	started, err := service.Create(ctx, owner, AuthorizationRequest{Runtime: "grok", AuthKind: AuthKindGrokOAuth})
+	if err != nil || started.UserCode != "GROK-CODE" {
+		t.Fatalf("authorize: %#v %v", started, err)
+	}
+	encoded, _ := json.Marshal(started)
+	if bytes.Contains(encoded, []byte("PRIVATE")) || bytes.Contains(q.row.EncryptedPayload, []byte("PRIVATE")) {
+		t.Fatal("device code leaked")
+	}
+	if _, err = service.Get(ctx, uuid.NewString(), started.ID, true); !errors.Is(err, ErrAuthorizationExpired) {
+		t.Fatal("another owner could poll")
+	}
+	if _, err = service.Get(ctx, owner, started.ID, true); err != nil || oauth.calls != 0 {
+		t.Fatal("polled before interval")
+	}
+	q.row.PollAfter = timestamptz(timePtr(time.Now().Add(-time.Second)))
+	slowed, err := service.Get(ctx, owner, started.ID, true)
+	if err != nil || slowed.IntervalSeconds != 10 || oauth.calls != 1 {
+		t.Fatalf("slowdown: %#v %v", slowed, err)
+	}
+	oauth.result = providers.GrokDevicePollResult{Secret: map[string]string{"access_token": "PRIVATE-access", "refresh_token": "PRIVATE-refresh"}}
+	q.row.PollAfter = timestamptz(timePtr(time.Now().Add(-time.Second)))
+	ready, err := service.Get(ctx, owner, started.ID, true)
+	if err != nil || ready.Status != "ready" {
+		t.Fatalf("token exchange: %#v %v", ready, err)
+	}
+	encoded, _ = json.Marshal(ready)
+	if bytes.Contains(encoded, []byte("PRIVATE")) || bytes.Contains(q.row.EncryptedPayload, []byte("PRIVATE")) {
+		t.Fatal("token pair leaked")
+	}
+	secret, err := credentials.decrypt(q.row.EncryptedPayload, q.row.EncryptionNonce, 1)
+	if err != nil || secret["refresh_token"] != "PRIVATE-refresh" {
+		t.Fatal("token pair not recoverable")
+	}
+}

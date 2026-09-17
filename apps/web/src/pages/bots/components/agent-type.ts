@@ -4,6 +4,8 @@ import type { AcpprofilePublicProfile } from '@memohai/sdk'
 import {
   BOT_AGENT_RUNTIME_CLAUDE_CODE,
   BOT_AGENT_RUNTIME_CODEX,
+  BOT_AGENT_RUNTIME_GROK,
+  isDirectBotAgentRuntime,
 } from '@/utils/bot-agent'
 
 // MEMOH_AGENT_VALUE is the built-in-agent segment's value in agent-type-pill.
@@ -19,13 +21,14 @@ export function agentTypeItems(profiles: AcpprofilePublicProfile[]): SegmentedIt
   const direct = [
     { value: BOT_AGENT_RUNTIME_CODEX, label: externalAgentDisplayName(BOT_AGENT_RUNTIME_CODEX, 'Codex') },
     { value: BOT_AGENT_RUNTIME_CLAUDE_CODE, label: externalAgentDisplayName(BOT_AGENT_RUNTIME_CLAUDE_CODE, 'Claude Code') },
+    { value: BOT_AGENT_RUNTIME_GROK, label: externalAgentDisplayName(BOT_AGENT_RUNTIME_GROK, 'Grok Build') },
   ]
   const agents = profiles.flatMap((profile) => {
     const agentId = normalizeAgentID(profile.id)
     // Skip entries that fail normalization or would collide with the reserved
     // built-in segment value or a direct runtime name.
     if (!agentId || agentId === MEMOH_AGENT_VALUE) return []
-    if (agentId === BOT_AGENT_RUNTIME_CODEX || agentId === BOT_AGENT_RUNTIME_CLAUDE_CODE) return []
+    if (isDirectBotAgentRuntime(agentId)) return []
     return [{ value: agentId, label: profile.display_name || externalAgentDisplayName(agentId, agentId) }]
   })
   return [{ value: MEMOH_AGENT_VALUE, label: 'Memoh' }, ...direct, ...agents]

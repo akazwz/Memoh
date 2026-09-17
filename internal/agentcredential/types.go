@@ -5,11 +5,14 @@ import "time"
 const ( //nolint:gosec // Stable authentication-kind identifiers, not credential values.
 	ProviderOpenAI    = "openai"
 	ProviderAnthropic = "anthropic"
+	ProviderXAI       = "xai"
 
 	AuthKindOpenAIAPIKey     = "openai_api_key" //nolint:gosec // Stable authentication-kind identifier.
 	AuthKindOpenAICodexOAuth = "openai_codex_oauth"
 	AuthKindAnthropicAPIKey  = "anthropic_api_key" //nolint:gosec // Stable authentication-kind identifier.
 	AuthKindClaudeCodeOAuth  = "claude_code_oauth"
+	AuthKindXAIAPIKey        = "xai_api_key"
+	AuthKindGrokOAuth        = "grok_oauth"
 )
 
 // PublicCredential is the redacted view of a stored credential. The secret

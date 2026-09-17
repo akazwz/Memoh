@@ -3,22 +3,24 @@ import { computed, ref, watch } from 'vue'
 import { Button, Dialog, DialogBody, DialogFooter, DialogHeader, DialogPanel, DialogTitle, Input, Label, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, SettingsRow } from '@felinic/ui'
 import { ExternalLink, KeyRound } from 'lucide-vue-next'
 import { useAgentAuthorization } from '@/composables/useAgentAuthorization'
-import CodexAccountPanel from './codex-account-panel.vue'
+import AgentDeviceAccountPanel from './agent-device-account-panel.vue'
 import AgentCredentialInput from './agent-credential-input.vue'
 
 const props = defineProps<{ runtime: string, storageKey: string }>()
 const emit = defineEmits<{ status: [value: { ready: boolean, busy: boolean, id: string, auth: string }] }>()
-const mode = ref(props.runtime === 'codex' ? 'chatgpt' : 'claude_account')
+const mode = ref(props.runtime === 'codex' ? 'chatgpt' : props.runtime === 'grok' ? 'oauth' : 'claude_account')
 const secret = ref('')
 const authorizationCode = ref('')
 const { session, ready, pending, busy, loading, error, start, exchange, cancel, handoff, resume } = useAgentAuthorization(() => props.runtime, props.storageKey)
 const agentAuth = computed(() => mode.value === 'claude_account' ? 'oauth_token' : mode.value)
 const authKind = computed(() => mode.value === 'chatgpt' ? 'openai_codex_oauth'
   : agentAuth.value === 'oauth_token' ? 'claude_code_oauth'
-    : props.runtime === 'codex' ? 'openai_api_key' : 'anthropic_api_key')
+    : props.runtime === 'grok' ? mode.value === 'oauth' ? 'grok_oauth' : 'xai_api_key'
+      : props.runtime === 'codex' ? 'openai_api_key' : 'anthropic_api_key')
 watch(() => session.value?.auth_kind, (kind) => {
   if (kind) mode.value = kind === 'openai_codex_oauth' ? 'chatgpt'
-    : kind === 'claude_code_oauth' ? mode.value === 'oauth_token' ? 'oauth_token' : 'claude_account' : 'api_key'
+    : kind === 'grok_oauth' ? 'oauth'
+      : kind === 'claude_code_oauth' ? mode.value === 'oauth_token' ? 'oauth_token' : 'claude_account' : 'api_key'
 })
 watch([ready, busy, agentAuth, () => session.value?.id], () => {
   emit('status', { ready: ready.value, busy: busy.value, id: session.value?.id ?? '', auth: agentAuth.value })
@@ -59,6 +61,12 @@ defineExpose({ handoff, resume })
           {{ $t('bots.agent.authChatGPT') }}
         </SelectItem>
         <SelectItem
+          v-else-if="runtime === 'grok'"
+          value="oauth"
+        >
+          {{ $t('bots.agent.grokAccount') }}
+        </SelectItem>
+        <SelectItem
           v-else
           value="claude_account"
         >
@@ -76,8 +84,9 @@ defineExpose({ handoff, resume })
       </SelectContent>
     </Select>
   </SettingsRow>
-  <CodexAccountPanel
-    v-if="mode === 'chatgpt'"
+  <AgentDeviceAccountPanel
+    v-if="mode === 'chatgpt' || mode === 'oauth'"
+    :provider="runtime === 'grok' ? 'grok' : 'codex'"
     :authorized="ready"
     :authorizing="loading"
     :device-pending="pending"

@@ -314,3 +314,25 @@ func TestNewServiceWiresBackground(t *testing.T) {
 		t.Fatal("Options.Background was not stored")
 	}
 }
+
+func TestPreflightRecognizesInstalledBuiltinWithoutPublishedRecipe(t *testing.T) {
+	for id := range BuiltinLauncherCommands() {
+		t.Run(id, func(t *testing.T) {
+			f := newServiceFixture(t)
+			f.present(id, SourceToolkit, "1.0.30", nil)
+			result, err := f.svc.Preflight(f.ctx(), testBot, []string{id})
+			if err != nil || len(result.Items) != 1 || !result.Items[0].Satisfied || result.Items[0].InstalledVersion != "1.0.30" {
+				t.Fatalf("installed runtime preflight = %+v, %v", result, err)
+			}
+			f.absent(id)
+			f.svc.cache.Invalidate(testBot)
+			result, err = f.svc.Preflight(f.ctx(), testBot, []string{id})
+			if err != nil || len(result.Items) != 1 || result.Items[0].Satisfied || result.Items[0].Reason != PreflightReasonUnknownDependency {
+				t.Fatalf("unpublished missing runtime must not offer installation: %+v, %v", result, err)
+			}
+			if len(f.runSpecs()) != 0 {
+				t.Fatal("preflight ran an installation script")
+			}
+		})
+	}
+}

@@ -42,6 +42,7 @@ DROP TABLE IF EXISTS bot_session_events CASCADE;
 DROP TABLE IF EXISTS bot_session_discuss_cursors CASCADE;
 DROP TABLE IF EXISTS agent_session_state_lines CASCADE;
 DROP TABLE IF EXISTS agent_session_publications CASCADE;
+DROP TABLE IF EXISTS agent_session_fork_states CASCADE;
 DROP TABLE IF EXISTS agent_session_states CASCADE;
 DROP TABLE IF EXISTS session_runs CASCADE;
 DROP TABLE IF EXISTS bot_sessions CASCADE;

@@ -2431,6 +2431,9 @@
       "apps": "应用"
     },
     "agent": {
+      "grokAccount": "Grok 账号",
+      "grokAccountDescription": "登录你的 Grok 账号以使用 Grok Build。",
+      "grokDeviceHint": "打开 xAI 授权页面并输入此代码。仅使用你在此处主动申请的代码。",
       "add": "添加 Agent",
       "added": "Agent 已添加",
       "provider": "类型",
@@ -3994,6 +3997,17 @@
     }
   },
   "runtime": {
+    "grok": {
+      "commands": { "compact": { "description": "压缩 Grok 会话上下文。" } },
+      "modes": {
+        "ask": {"name": "操作前询问", "description": "需要权限的工具会请求批准。"},
+        "auto": {
+          "name": "自动",
+          "description": "由 Grok 检查工具调用，无法自动批准时再询问你。"
+        },
+        "alwaysApprove": {"name": "始终批准", "description": "允许 Grok 工具执行，不再请求批准。"}
+      }
+    },
     "claudeCode": {
       "modes": {
         "inherit": {

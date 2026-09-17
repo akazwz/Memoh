@@ -1305,7 +1305,7 @@ import { useACPRuntime } from '@/composables/useACPRuntime'
 import { useAgentModelCatalog } from '@/composables/useAgentModelCatalog'
 import { useVirtualKeyboard } from '@/composables/useVirtualKeyboard'
 import { findMissingRequiredManagedField, readACPAgentConfig } from '@/utils/acp'
-import { BOT_AGENT_RUNTIME_ACP, BOT_AGENT_RUNTIME_CLAUDE_CODE, BOT_AGENT_RUNTIME_CODEX, botAgentIcon, botAgentName, botAgentProvider, isDirectBotAgentConfigured, normalizeBotAgentRuntime } from '@/utils/bot-agent'
+import { BOT_AGENT_RUNTIME_ACP, BOT_AGENT_RUNTIME_CODEX, BOT_AGENT_RUNTIME_GROK, isDirectBotAgentRuntime, botAgentIcon, botAgentName, botAgentProvider, isDirectBotAgentConfigured, normalizeBotAgentRuntime } from '@/utils/bot-agent'
 import { isApiErrorCode, parseMemohError, resolveApiErrorMessage } from '@/utils/api-error'
 import { hasBotPermission } from '@/utils/bot-permissions'
 import { workspaceTargetAvailable } from '@/utils/workspace-target'
@@ -1534,7 +1534,8 @@ const canForkAssistant = computed(() =>
   && !activeChatReadOnly.value
   && activeChatCanFork.value
   && (activeChatTarget.value.runtimeType === 'model'
-    || activeChatTarget.value.runtimeType === BOT_AGENT_RUNTIME_CODEX),
+    || activeChatTarget.value.runtimeType === BOT_AGENT_RUNTIME_CODEX
+    || activeChatTarget.value.runtimeType === BOT_AGENT_RUNTIME_GROK),
 )
 
 function isForkableTurn(message: ChatMessage): boolean {
@@ -1901,7 +1902,7 @@ const activeUsesACPRuntime = computed(() => (
 const activeDirectRuntime = computed(() => {
   if (!activeUsesExternalAgentComposer.value) return ''
   const runtime = activeChatTarget.value.runtimeType
-  if (runtime === BOT_AGENT_RUNTIME_CODEX || runtime === BOT_AGENT_RUNTIME_CLAUDE_CODE) return runtime
+  if (isDirectBotAgentRuntime(runtime)) return runtime
   return ''
 })
 const activeUsesDirectRuntime = computed(() => activeDirectRuntime.value !== '')
@@ -2708,7 +2709,7 @@ const defaultExternalAgentAvailability = computed<DefaultExternalAgentAvailabili
   if (!settings) {
     return { input: null, messageKey: '', loading: !!currentBotId.value && botSettingsLoading.value }
   }
-  if (settings.chat_runtime !== 'acp_agent' && settings.chat_runtime !== 'codex' && settings.chat_runtime !== 'claude-code') return { input: null, messageKey: '', loading: false }
+  if (settings.chat_runtime !== 'acp_agent' && settings.chat_runtime !== 'codex' && settings.chat_runtime !== 'claude-code' && settings.chat_runtime !== 'grok') return { input: null, messageKey: '', loading: false }
   if (!hasBotPermission(currentBot.value?.current_user_permissions, 'workspace_exec')) {
     return { input: null, messageKey: 'chat.defaultAgentNoWorkspaceExec', loading: false }
   }

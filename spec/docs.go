@@ -18595,7 +18595,8 @@ const docTemplate = `{
                     "type": "string",
                     "enum": [
                         "codex",
-                        "claude-code"
+                        "claude-code",
+                        "grok"
                     ]
                 },
                 "secret": {

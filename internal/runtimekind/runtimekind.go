@@ -25,6 +25,8 @@ const (
 	Codex Kind = "codex"
 	// ClaudeCode is the direct Claude Code external agent runtime.
 	ClaudeCode Kind = "claude-code"
+	// Grok is the Grok Build runtime, using the official ACP stdio protocol.
+	Grok Kind = "grok"
 )
 
 // Session modes a runtime can host. The string values are the session_mode
@@ -93,6 +95,14 @@ var capabilityByKind = map[Kind]capabilities{
 		AgentModel:     true,
 		SessionModes:   []string{ModeChat, ModeDiscuss, ModeSchedule},
 	},
+	Grok: {
+		External:       true,
+		Direct:         true,
+		DecisionWaiter: true,
+		WorkspaceExec:  true,
+		AgentModel:     true,
+		SessionModes:   []string{ModeChat, ModeDiscuss, ModeSchedule},
+	},
 }
 
 func capabilitiesFor(raw string) (capabilities, bool) {
@@ -116,6 +126,8 @@ func Normalize(raw string) (Kind, bool) {
 		return Codex, true
 	case ClaudeCode:
 		return ClaudeCode, true
+	case Grok:
+		return Grok, true
 	default:
 		return "", false
 	}
@@ -127,7 +139,7 @@ func Valid(raw string) bool {
 	return ok
 }
 
-// IsDirect reports a direct external agent runtime (codex, claude-code).
+// IsDirect reports a direct external agent runtime (codex, claude-code, grok).
 func IsDirect(raw string) bool {
 	caps, ok := capabilitiesFor(raw)
 	return ok && caps.Direct

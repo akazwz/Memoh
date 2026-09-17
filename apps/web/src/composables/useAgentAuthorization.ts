@@ -10,7 +10,7 @@ import { safeSessionGet, safeSessionRemove, safeSessionSet } from '@/utils/safe-
 export function readAgentAuthorizationDraft(key: string): { id: string, runtime: string } | null {
   try {
     const value = JSON.parse(safeSessionGet(key) || 'null')
-    return typeof value?.id === 'string' && ['codex', 'claude-code'].includes(value.runtime) ? value : null
+    return typeof value?.id === 'string' && ['codex', 'claude-code', 'grok'].includes(value.runtime) ? value : null
   } catch { return null }
 }
 
@@ -49,7 +49,7 @@ export function useAgentAuthorization(getRuntime: () => string, storageKey: stri
     clearTimer()
     const current = generation
     const remaining = Date.parse(value.expires_at) - now.value
-    const devicePending = value.status === 'pending' && value.auth_kind === 'openai_codex_oauth'
+    const devicePending = value.status === 'pending' && ['openai_codex_oauth', 'grok_oauth'].includes(value.auth_kind)
     if (remaining <= 0) { cancel(); error.value = t('errors.agent_authorization.expired'); return }
     timer = setTimeout(() => {
       now.value = Date.now()
@@ -80,7 +80,7 @@ export function useAgentAuthorization(getRuntime: () => string, storageKey: stri
     loading.value = true
     try {
       const { data } = await postAgentAuthorizations({
-        body: { runtime: getRuntime() as 'codex' | 'claude-code', auth_kind: authKind,
+        body: { runtime: getRuntime() as 'codex' | 'claude-code' | 'grok', auth_kind: authKind,
           ...(secret && { secret: { [authKind === 'claude_code_oauth' ? 'oauth_token' : 'api_key']: secret } }) },
         throwOnError: true,
       })

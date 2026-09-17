@@ -96,6 +96,7 @@ func ServerModule() fx.Option {
 			provideACPSessionPool,
 			provideCodexDriver,
 			provideClaudeCodeDriver,
+			provideGrokDriver,
 			provideDirectAgentDrivers,
 			provideExternalAgentCodexHandler,
 			provideHooksService,

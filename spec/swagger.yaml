@@ -659,6 +659,7 @@ definitions:
         enum:
         - codex
         - claude-code
+        - grok
         type: string
       secret:
         additionalProperties:

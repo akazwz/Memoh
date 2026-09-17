@@ -87,7 +87,7 @@ export type ActiveChatTarget =
       kind: 'draft-external-agent'
       sessionId: null
       session: null
-      runtimeType: 'acp_agent' | 'codex' | 'claude-code'
+      runtimeType: 'acp_agent' | 'codex' | 'claude-code' | 'grok'
       isExternalAgent: true
       isPendingExternalAgent: true
       metadata: Record<string, unknown>
@@ -269,7 +269,7 @@ export interface ExternalAgentSessionInput {
   /** Persisted Agent instance selected for this session. */
   botAgentId?: string
   /** Runtime owned by the selected Agent. Omitted by legacy ACP callers. */
-  runtime?: 'acp' | 'codex' | 'claude-code'
+  runtime?: 'acp' | 'codex' | 'claude-code' | 'grok'
   /** Temporary ACP provider identity stored in BotAgent metadata. */
   agentId: string
   sessionMode?: 'chat' | 'discuss'

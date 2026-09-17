@@ -15,6 +15,7 @@ import (
 	acpprofile "github.com/felinics/memoh/internal/agent/runtime/acp/profile"
 	"github.com/felinics/memoh/internal/agent/runtime/claudecode/claudecfg"
 	"github.com/felinics/memoh/internal/agent/runtime/codex/codexcfg"
+	"github.com/felinics/memoh/internal/agent/runtime/grok/grokcfg"
 	"github.com/felinics/memoh/internal/agentcredential"
 	"github.com/felinics/memoh/internal/db"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
@@ -364,6 +365,15 @@ func DescriptorFor(agent BotAgent) (Descriptor, error) {
 
 func AcceptsCredential(agent BotAgent, authKind string) bool {
 	switch agent.Runtime {
+	case RuntimeGrok:
+		cfg, err := grokcfg.ParseAgentConfig(agent.Metadata)
+		if err != nil {
+			return false
+		}
+		if cfg.Auth == grokcfg.AuthAPIKey {
+			return authKind == agentcredential.AuthKindXAIAPIKey
+		}
+		return authKind == agentcredential.AuthKindGrokOAuth
 	case RuntimeCodex:
 		cfg, err := codexcfg.ParseAgentConfig(agent.Metadata)
 		if err != nil {
@@ -408,6 +418,14 @@ func ValidateConfigurationWithStore(agent BotAgent, botMetadata map[string]any, 
 		setup := acpprofile.ParseAgentSetup(botMetadata, descriptor.Provider)
 		if field, missing := acpprofile.MissingRequiredManagedFieldForPreflight(profile, setup); missing {
 			return &ConfigurationError{Field: field.ID}
+		}
+		return nil
+	case RuntimeGrok:
+		if _, err := grokcfg.ParseAgentConfig(agent.Metadata); err != nil {
+			return &ConfigurationError{Field: "auth"}
+		}
+		if !AcceptsCredential(agent, credentialAuthKind) {
+			return &ConfigurationError{Field: "agent_credential_id"}
 		}
 		return nil
 	case RuntimeCodex:
@@ -467,7 +485,15 @@ func normalizeDescriptor(runtime string, metadata map[string]any) (string, map[s
 		}
 		normalized[MetadataProviderKey] = provider
 		return runtime, normalized, nil
-	case RuntimeCodex, RuntimeClaudeCode:
+	case RuntimeCodex, RuntimeClaudeCode, RuntimeGrok:
+		if runtime == RuntimeGrok {
+			if value, exists := metadata["permission_mode"]; exists {
+				mode, ok := value.(string)
+				if !ok || !grokcfg.ValidPermissionMode(mode) {
+					return "", nil, ErrInvalidMetadata
+				}
+			}
+		}
 		if runtime == RuntimeClaudeCode {
 			if value, exists := metadata["permission_mode"]; exists {
 				mode, ok := value.(string)
@@ -504,7 +530,7 @@ func normalizeDescriptor(runtime string, metadata map[string]any) (string, map[s
 
 func isCredentialField(key string) bool {
 	switch strings.ToLower(strings.TrimSpace(key)) {
-	case "api_key", "oauth_token", "access_token", "refresh_token", "id_token", "password", "secret", "token":
+	case "api_key", "oauth_token", "access_token", "refresh_token", "id_token", "password", "secret", "token", "auth_json":
 		return true
 	default:
 		return false

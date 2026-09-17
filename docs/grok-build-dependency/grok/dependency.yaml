@@ -1,0 +1,23 @@
+schema_version: "1"
+id: grok
+name: Grok Build
+category: agent
+description: Official Grok Build CLI.
+source: managed
+requires: [node]
+provides: [grok]
+platforms:
+  - { os: linux, arch: [amd64, arm64], libc: glibc }
+version:
+  pin: "1.0.30"
+timeouts:
+  install: 1200
+  remove: 300
+  version: 30
+scripts:
+  install: install.sh
+  remove: remove.sh
+translations:
+  en: { description: "Official Grok Build CLI" }
+  zh: { description: "Grok Build 官方命令行" }
+  ja: { description: "Grok Build 公式 CLI" }
