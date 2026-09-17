@@ -155,7 +155,7 @@ export const useBotCreateProgressStore = defineStore('bot-create-progress', () =
 
   function saveSession() {
     const runtime = lastOptions.agent && botAgentRuntimeForProvider(lastOptions.agent.provider)
-    if (!bot.value?.id || (runtime !== 'codex' && runtime !== 'claude-code')) return
+    if (!bot.value?.id || (runtime !== 'codex' && runtime !== 'claude-code' && runtime !== 'opencode')) return
     writeCreatedAgentSession({
       botId: bot.value.id, botName: bot.value.name ?? '', displayName: display.value?.display_name ?? '',
       agentId: createdAgent.value?.id ?? '', runtime, authorizationId: authorizationId.value,

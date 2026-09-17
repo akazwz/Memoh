@@ -8,7 +8,7 @@ export interface CreatedAgentSession {
   displayName: string
   authorizationId?: string
   agentId: string
-  runtime: 'codex' | 'claude-code'
+  runtime: 'codex' | 'claude-code' | 'opencode'
   setupError: string | null
   settings?: BotCreateSettings
 }
@@ -20,7 +20,7 @@ export function readCreatedAgentSession(onboarding = false): CreatedAgentSession
     const value = JSON.parse(safeSessionGet(onboarding ? 'memoh:onboarding:creation' : KEY) || 'null') as Partial<CreatedAgentSession> | null
     if (!value || typeof value.botId !== 'string' || !value.botId.trim()
       || typeof value.agentId !== 'string'
-      || (value.runtime !== 'codex' && value.runtime !== 'claude-code')) return null
+      || (value.runtime !== 'codex' && value.runtime !== 'claude-code' && value.runtime !== 'opencode')) return null
     return {
       botId: value.botId,
       agentId: value.agentId,

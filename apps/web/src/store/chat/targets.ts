@@ -14,7 +14,7 @@ export function createChatTargets(deps: {
   knownSession: (sessionId: string) => SessionSummary | null | undefined
   pendingExternalAgentState: (target: ChatViewTarget) => {
     input: {
-      runtime?: 'acp' | 'codex' | 'claude-code'
+      runtime?: 'acp' | 'codex' | 'claude-code' | 'opencode'
     }
     metadata: Record<string, unknown>
   } | null | undefined
@@ -58,6 +58,7 @@ export function createChatTargets(deps: {
     if (pendingState) {
       const runtimeType = pendingState.input.runtime === 'codex'
         || pendingState.input.runtime === 'claude-code'
+        || pendingState.input.runtime === 'opencode'
         ? pendingState.input.runtime
         : 'acp_agent'
       return {

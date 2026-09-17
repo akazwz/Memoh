@@ -40,6 +40,7 @@ import (
 	codexruntime "github.com/felinics/memoh/internal/agent/runtime/codex"
 	"github.com/felinics/memoh/internal/agent/runtime/external"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
+	opencoderuntime "github.com/felinics/memoh/internal/agent/runtime/opencode"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/runtime/toolmount"
 	agenttools "github.com/felinics/memoh/internal/agent/tool"
@@ -621,6 +622,12 @@ func provideClaudeCodeDriver(log *slog.Logger, workspaceManager *workspace.Manag
 	return driver
 }
 
+func provideOpenCodeDriver(log *slog.Logger, workspaceManager *workspace.Manager, botAgents *botagents.Service, credentials *agentcredential.Service, toolApproval *toolapproval.Service, userInput *userinput.Service, toolGateway *mcp.ToolGatewayService, toolContexts *mcp.ToolSessionContextStore, workspaceDeps *workspacedeps.Service) *opencoderuntime.Driver {
+	driver := opencoderuntime.NewDriver(workspaceManager, botAgents, credentials, toolApproval, userInput, toolmount.Gateway{Tools: toolGateway, Contexts: toolContexts, Logger: log}, log)
+	driver.SetLauncherResolver(workspaceDeps)
+	return driver
+}
+
 // directRuntimeLaunchers names the CLI command each direct runtime executes,
 // keyed by runtime type. validateDriverDependencies requires it to be the
 // primary command (provides[0]) of the dependency the driver declares: the
@@ -630,14 +637,15 @@ func provideClaudeCodeDriver(log *slog.Logger, workspaceManager *workspace.Manag
 var directRuntimeLaunchers = map[string]string{
 	codexruntime.RuntimeType:      "codex",
 	claudecoderuntime.RuntimeType: "claude",
+	opencoderuntime.RuntimeType:   "opencode",
 }
 
 // Built-in runtimes bind official dependency IDs to their launcher command.
 // The recipe itself is downloaded and validated by RemoteCatalog.
 var directRuntimeDependencies = workspacedeps.BuiltinLauncherCommands()
 
-func provideDirectAgentDrivers(codex *codexruntime.Driver, claude *claudecoderuntime.Driver) (external.Drivers, error) {
-	drivers := external.Drivers{codex, claude}
+func provideDirectAgentDrivers(codex *codexruntime.Driver, claude *claudecoderuntime.Driver, opencode *opencoderuntime.Driver) (external.Drivers, error) {
+	drivers := external.Drivers{codex, claude, opencode}
 	discovery, err := depcatalog.Discovery(directRuntimeDependencies)
 	if err != nil {
 		return nil, err

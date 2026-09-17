@@ -2460,6 +2460,16 @@
       "authWorkspace": "Workspace credentials",
       "authOAuthToken": "OAuth token",
       "authChatGPTDescription": "Authorize Codex with a ChatGPT subscription account.",
+      "openCodeProvider": "Model service",
+      "openCodeBaseUrlDefault": "Leave blank to use the service default",
+      "openCodeModelsLoadFailed": "Could not load OpenCode models.",
+      "openCodeModelsAfterConnect": "Save your API key to choose a model from OpenCode.",
+      "openCodeCustomProvider": "Custom (advanced)",
+      "openCodeZenDescription": "Enter your OpenCode Zen API key.",
+      "openCodeGoDescription": "Enter the API key for your OpenCode Go subscription.",
+      "openCodeProviderID": "Provider ID",
+      "openCodeProviderDescription": "Enter a provider ID configured in OpenCode.",
+      "openCodeWorkspaceDescription": "Use OpenCode providers and sign-ins configured in this Workspace.",
       "authWorkspaceDescription": "Use the Claude Code login already stored in this Bot's workspace.",
       "authOAuthTokenDescription": "Use an OAuth token created with Claude Code setup-token.",
       "authApiKeyDescription": "Use an API key stored by Memoh and injected into the runtime.",
@@ -3999,6 +4009,36 @@
     }
   },
   "runtime": {
+    "opencode": {
+      "modes": {
+        "default": {
+          "name": "Ask before changes",
+          "description": "Ask before edits and commands."
+        },
+        "inherit": {
+          "name": "Workspace rules",
+          "description": "Use OpenCode permissions configured in the Workspace."
+        },
+        "allow": {
+          "name": "Allow all",
+          "description": "Allow native OpenCode tools without asking."
+        }
+      },
+      "commands": {
+        "compact": {
+          "description": "Compact the conversation"
+        },
+        "status": {
+          "description": "Show session status"
+        },
+        "skills": {
+          "description": "List native skills"
+        },
+        "mcp": {
+          "description": "Show MCP server status"
+        }
+      }
+    },
     "claudeCode": {
       "modes": {
         "inherit": {

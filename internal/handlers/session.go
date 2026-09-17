@@ -271,6 +271,8 @@ func (h *SessionHandler) CreateSession(c echo.Context) error {
 			req.RuntimeType = session.RuntimeCodex
 		case botagents.RuntimeClaudeCode:
 			req.RuntimeType = session.RuntimeClaudeCode
+		case botagents.RuntimeOpenCode:
+			req.RuntimeType = session.RuntimeOpenCode
 		default:
 			return apperror.New(apperror.CodeBotAgentInvalidRuntime, nil)
 		}
@@ -918,6 +920,8 @@ func (h *SessionHandler) UpdateSession(c echo.Context) error {
 				targetRuntime = session.RuntimeCodex
 			case botagents.RuntimeClaudeCode:
 				targetRuntime = session.RuntimeClaudeCode
+			case botagents.RuntimeOpenCode:
+				targetRuntime = session.RuntimeOpenCode
 			default:
 				return apperror.New(apperror.CodeBotAgentInvalidRuntime, nil)
 			}

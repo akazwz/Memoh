@@ -109,7 +109,7 @@ func (s *Service) normalizeExecution(ctx context.Context, botID string, exec Exe
 			if out.ModelID != "" {
 				return ExecutionConfig{}, invalidRequest("ACP schedules use acp_model_id; model_id is only valid for the native model runtime")
 			}
-		case botagents.RuntimeCodex, botagents.RuntimeClaudeCode:
+		case botagents.RuntimeCodex, botagents.RuntimeClaudeCode, botagents.RuntimeOpenCode:
 			if out.BotAgentID == "" {
 				return ExecutionConfig{}, invalidRequestf("runtime_type %q requires bot_agent_id", out.RuntimeType)
 			}
@@ -184,7 +184,7 @@ func (s *Service) resolveBotAgentExecution(ctx context.Context, botID string, ex
 	case botagents.RuntimeACP:
 		exec.RuntimeType = RuntimeACPAgent
 		exec.ACPAgentID = descriptor.Provider
-	case botagents.RuntimeCodex, botagents.RuntimeClaudeCode:
+	case botagents.RuntimeCodex, botagents.RuntimeClaudeCode, botagents.RuntimeOpenCode:
 		// Direct external agents carry the runtime type on the schedule row
 		// itself; the fire dispatches through the external driver with no
 		// acp_agent_id and no native model.

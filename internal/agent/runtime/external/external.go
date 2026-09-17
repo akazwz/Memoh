@@ -51,7 +51,8 @@ type ModelCatalogRequest struct {
 	BotAgentID  string
 	ProjectPath string
 	// ModelID selects the model whose defaults the picker is displaying.
-	ModelID string
+	ModelID           string
+	CollaborationMode string
 	// Preference validation needs only capabilities; resolved defaults are a
 	// separate, optional observation for display.
 	ResolveDefaults bool
@@ -149,7 +150,7 @@ type RoundRollbackHandler interface {
 // identifies the fork — only the driver-owned session keys — which the
 // caller overlays on the source session's runtime metadata.
 type ThreadForker interface {
-	ForkThread(ctx context.Context, botID, botAgentID string, runtimeMetadata map[string]any, lastTurnID string) (map[string]any, error)
+	ForkThread(ctx context.Context, botID, botAgentID, sourceThreadID string, runtimeMetadata map[string]any, lastTurnID string) (map[string]any, error)
 }
 
 // ModelCatalog is the runtime-owned model picker contract.
@@ -163,13 +164,16 @@ type ModelCatalog struct {
 type ModelOption struct {
 	// ResolvedModelID preserves a runtime-advertised full model name for
 	// validation without duplicating its alias in the model picker.
-	ResolvedModelID        string                  `json:"resolved_model_id,omitempty"`
-	ID                     string                  `json:"id"`
-	Name                   string                  `json:"name"`
-	Description            string                  `json:"description,omitempty"`
-	Default                bool                    `json:"default,omitempty"`
-	DefaultReasoningEffort string                  `json:"default_reasoning_effort,omitempty"`
-	ReasoningEfforts       []ReasoningEffortOption `json:"reasoning_efforts"`
+	ResolvedModelID        string `json:"resolved_model_id,omitempty"`
+	ID                     string `json:"id"`
+	Name                   string `json:"name"`
+	Description            string `json:"description,omitempty"`
+	Default                bool   `json:"default,omitempty"`
+	DefaultReasoningEffort string `json:"default_reasoning_effort,omitempty"`
+	// Display-only resolution of the inherited choice. Never persist this as
+	// the user's preference: "default" must keep following runtime settings.
+	ResolvedDefaultReasoningEffort string                  `json:"resolved_default_reasoning_effort,omitempty"`
+	ReasoningEfforts               []ReasoningEffortOption `json:"reasoning_efforts"`
 	// IDs belong to this runtime's permission menu, not a shared preset enum.
 	UnavailablePermissionModes []string `json:"unavailable_permission_modes,omitempty"`
 }

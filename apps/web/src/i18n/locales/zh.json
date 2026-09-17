@@ -2460,6 +2460,16 @@
       "authWorkspace": "工作区已有凭据",
       "authOAuthToken": "OAuth Token",
       "authChatGPTDescription": "使用 ChatGPT 订阅账号授权 Codex。",
+      "openCodeProvider": "模型服务",
+      "openCodeBaseUrlDefault": "留空使用所选服务的默认地址",
+      "openCodeModelsLoadFailed": "无法加载 OpenCode 模型列表。",
+      "openCodeModelsAfterConnect": "保存 API Key 后，即可从 OpenCode 的列表中选择模型。",
+      "openCodeCustomProvider": "自定义（高级）",
+      "openCodeZenDescription": "填写 OpenCode Zen 的 API Key。",
+      "openCodeGoDescription": "填写 OpenCode Go 订阅对应的 API Key。",
+      "openCodeProviderID": "供应商 ID",
+      "openCodeProviderDescription": "填写已在 OpenCode 中配置的供应商 ID。",
+      "openCodeWorkspaceDescription": "使用此 Workspace 中配置的 OpenCode 供应商和登录信息。",
       "authWorkspaceDescription": "使用这个 Bot 工作区中已经保存的 Claude Code 登录状态。",
       "authOAuthTokenDescription": "使用 Claude Code setup-token 生成的 OAuth Token。",
       "authApiKeyDescription": "使用由 Memoh 保存并注入运行时的 API Key。",
@@ -3999,6 +4009,36 @@
     }
   },
   "runtime": {
+    "opencode": {
+      "modes": {
+        "default": {
+          "name": "修改前询问",
+          "description": "编辑文件和执行命令前请求审批。"
+        },
+        "inherit": {
+          "name": "Workspace 规则",
+          "description": "使用 Workspace 中配置的 OpenCode 权限。"
+        },
+        "allow": {
+          "name": "全部允许",
+          "description": "OpenCode 原生工具无需审批。"
+        }
+      },
+      "commands": {
+        "compact": {
+          "description": "压缩对话上下文"
+        },
+        "status": {
+          "description": "查看会话状态"
+        },
+        "skills": {
+          "description": "列出原生技能"
+        },
+        "mcp": {
+          "description": "查看 MCP 服务状态"
+        }
+      }
+    },
     "claudeCode": {
       "modes": {
         "inherit": {

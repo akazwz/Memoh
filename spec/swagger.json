@@ -2203,6 +2203,12 @@
                         "description": "Workspace project path for runtime model settings",
                         "name": "project_path",
                         "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Runtime collaboration mode for effective defaults",
+                        "name": "collaboration_mode",
+                        "in": "query"
                     }
                 ],
                 "responses": {
@@ -8519,7 +8525,7 @@
         },
         "/bots/{bot_id}/sessions/events": {
             "get": {
-                "description": "Lightweight SSE for sidebar live-sort. Carries only session\nidentifiers and minimal metadata (touched timestamps, titles).\nNever includes message bodies. Filters out internal session\ntypes such as schedule and subagent.",
+                "description": "Lightweight SSE for sidebar live-sort. Carries only session\nidentifiers and minimal metadata (touched timestamps, titles).\nNever includes message bodies. Filters out sessions with\ninternal visibility, such as managed subagent work.",
                 "produces": [
                     "text/event-stream"
                 ],
@@ -18586,7 +18592,8 @@
                     "type": "string",
                     "enum": [
                         "codex",
-                        "claude-code"
+                        "claude-code",
+                        "opencode"
                     ]
                 },
                 "secret": {
@@ -21980,6 +21987,10 @@
                     "items": {
                         "$ref": "#/definitions/external.ReasoningEffortOption"
                     }
+                },
+                "resolved_default_reasoning_effort": {
+                    "description": "Display-only resolution of the inherited choice. Never persist this as\nthe user's preference: \"default\" must keep following runtime settings.",
+                    "type": "string"
                 },
                 "resolved_model_id": {
                     "description": "ResolvedModelID preserves a runtime-advertised full model name for\nvalidation without duplicating its alias in the model picker.",

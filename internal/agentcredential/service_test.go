@@ -48,6 +48,9 @@ func TestCompatibilityMatrix(t *testing.T) {
 		want        bool
 	}{
 		{"codex", AuthKindOpenAIAPIKey, true},
+		{"opencode", AuthKindOpenCodeAPIKey, true},
+		{"opencode", AuthKindOpenAIAPIKey, false},
+		{"codex", AuthKindOpenCodeAPIKey, false},
 		{"codex", AuthKindOpenAICodexOAuth, true},
 		{"claude-code", AuthKindClaudeCodeOAuth, true},
 		{"claude-code", AuthKindOpenAIAPIKey, false},
@@ -55,6 +58,19 @@ func TestCompatibilityMatrix(t *testing.T) {
 	} {
 		if got := Compatible(tc.agent, tc.kind); got != tc.want {
 			t.Fatalf("Compatible(%q,%q) = %v", tc.agent, tc.kind, got)
+		}
+	}
+}
+
+func TestOpenCodeCredentialsRequireProviderIdentity(t *testing.T) {
+	for _, provider := range []string{"", "../openai", "__proto__", "constructor", "openai\n"} {
+		if validSecret(AuthKindOpenCodeAPIKey, map[string]string{"api_key": "test", "provider_id": provider}) {
+			t.Fatalf("accepted invalid provider %q", provider)
+		}
+	}
+	for _, provider := range []string{"openai", "anthropic", "openrouter", "my-provider"} {
+		if !validSecret(AuthKindOpenCodeAPIKey, map[string]string{"api_key": "test", "provider_id": provider}) {
+			t.Fatalf("rejected provider %q", provider)
 		}
 	}
 }

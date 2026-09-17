@@ -5,17 +5,20 @@ import { ExternalLink, KeyRound } from 'lucide-vue-next'
 import { useAgentAuthorization } from '@/composables/useAgentAuthorization'
 import CodexAccountPanel from './codex-account-panel.vue'
 import AgentCredentialInput from './agent-credential-input.vue'
+import OpenCodeProviderSelect from './opencode-provider-select.vue'
+import { DEFAULT_OPENCODE_PROVIDER } from '@/utils/opencode-provider'
 
 const props = defineProps<{ runtime: string, storageKey: string }>()
 const emit = defineEmits<{ status: [value: { ready: boolean, busy: boolean, id: string, auth: string }] }>()
-const mode = ref(props.runtime === 'codex' ? 'chatgpt' : 'claude_account')
+const mode = ref(props.runtime === 'codex' ? 'chatgpt' : props.runtime === 'opencode' ? 'api_key' : 'claude_account')
 const secret = ref('')
+const providerID = ref(DEFAULT_OPENCODE_PROVIDER)
 const authorizationCode = ref('')
 const { session, ready, pending, busy, loading, error, start, exchange, cancel, handoff, resume } = useAgentAuthorization(() => props.runtime, props.storageKey)
 const agentAuth = computed(() => mode.value === 'claude_account' ? 'oauth_token' : mode.value)
 const authKind = computed(() => mode.value === 'chatgpt' ? 'openai_codex_oauth'
   : agentAuth.value === 'oauth_token' ? 'claude_code_oauth'
-    : props.runtime === 'codex' ? 'openai_api_key' : 'anthropic_api_key')
+    : props.runtime === 'codex' ? 'openai_api_key' : props.runtime === 'opencode' ? 'opencode_api_key' : 'anthropic_api_key')
 watch(() => session.value?.auth_kind, (kind) => {
   if (kind) mode.value = kind === 'openai_codex_oauth' ? 'chatgpt'
     : kind === 'claude_code_oauth' ? mode.value === 'oauth_token' ? 'oauth_token' : 'claude_account' : 'api_key'
@@ -31,7 +34,7 @@ function changeMode(value: unknown) {
   mode.value = value
 }
 async function save() {
-  await start(authKind.value, secret.value.trim())
+  await start(authKind.value, secret.value.trim(), props.runtime === 'opencode' ? providerID.value.trim() : undefined)
   secret.value = ''
 }
 function openAuthorizationPage() {
@@ -42,7 +45,10 @@ defineExpose({ handoff, resume })
 </script>
 
 <template>
-  <SettingsRow :label="$t('bots.agent.authMode')">
+  <SettingsRow
+    v-if="runtime !== 'opencode'"
+    :label="$t('bots.agent.authMode')"
+  >
     <Select
       :model-value="mode"
       :disabled="loading"
@@ -59,7 +65,7 @@ defineExpose({ handoff, resume })
           {{ $t('bots.agent.authChatGPT') }}
         </SelectItem>
         <SelectItem
-          v-else
+          v-else-if="runtime === 'claude-code'"
           value="claude_account"
         >
           {{ $t('bots.agent.claudeAccount') }}
@@ -76,6 +82,12 @@ defineExpose({ handoff, resume })
       </SelectContent>
     </Select>
   </SettingsRow>
+  <OpenCodeProviderSelect
+    v-if="runtime === 'opencode'"
+    v-model="providerID"
+    :disabled="loading || ready"
+    @update:model-value="secret = ''"
+  />
   <CodexAccountPanel
     v-if="mode === 'chatgpt'"
     :authorized="ready"
@@ -111,12 +123,21 @@ defineExpose({ handoff, resume })
     stack="always"
   >
     <AgentCredentialInput
+      v-if="!ready || runtime !== 'opencode'"
       v-model="secret"
       :loading="loading"
       :connected="ready"
       :placeholder="mode === 'oauth_token' ? $t('bots.agent.oauthToken') : undefined"
       @save="save"
     />
+    <Button
+      v-else
+      type="button"
+      variant="outline"
+      @click="cancel()"
+    >
+      {{ $t('bots.agent.reconnect') }}
+    </Button>
   </SettingsRow>
   <Dialog
     :open="pending && !!session?.authorization_url"

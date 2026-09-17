@@ -51,6 +51,7 @@ func (h *BotAgentsHandler) Register(e *echo.Echo) {
 // @Param id path string true "Agent ID"
 // @Param model_id query string false "Model whose effective defaults should be displayed"
 // @Param project_path query string false "Workspace project path for runtime model settings"
+// @Param collaboration_mode query string false "Runtime collaboration mode for effective defaults"
 // @Success 200 {object} external.ModelCatalog
 // @Failure 403 {object} ErrorResponse
 // @Failure 404 {object} apperror.Problem
@@ -68,6 +69,7 @@ func (h *BotAgentsHandler) ListModels(c echo.Context) error {
 	catalog, err := h.runtimes.ModelCatalog(c.Request().Context(), agent.Runtime, external.ModelCatalogRequest{
 		BotID: botID, BotAgentID: agent.ID, ProjectPath: strings.TrimSpace(c.QueryParam("project_path")),
 		ModelID: strings.TrimSpace(c.QueryParam("model_id")), ResolveDefaults: true,
+		CollaborationMode: strings.TrimSpace(c.QueryParam("collaboration_mode")),
 	})
 	if err != nil {
 		// Stable runtime feedback (agent_dependency_missing and friends) keeps

@@ -3,10 +3,12 @@ package agentcredential
 import "time"
 
 const ( //nolint:gosec // Stable authentication-kind identifiers, not credential values.
+	ProviderOpenCode  = "opencode"
 	ProviderOpenAI    = "openai"
 	ProviderAnthropic = "anthropic"
 
-	AuthKindOpenAIAPIKey     = "openai_api_key" //nolint:gosec // Stable authentication-kind identifier.
+	AuthKindOpenCodeAPIKey   = "opencode_api_key" //nolint:gosec // Stable authentication-kind identifier.
+	AuthKindOpenAIAPIKey     = "openai_api_key"   //nolint:gosec // Stable authentication-kind identifier.
 	AuthKindOpenAICodexOAuth = "openai_codex_oauth"
 	AuthKindAnthropicAPIKey  = "anthropic_api_key" //nolint:gosec // Stable authentication-kind identifier.
 	AuthKindClaudeCodeOAuth  = "claude_code_oauth"

@@ -2458,6 +2458,16 @@
       "authWorkspace": "Workspace の認証情報",
       "authOAuthToken": "OAuth Token",
       "authChatGPTDescription": "ChatGPT のサブスクリプションアカウントで Codex を認証します。",
+      "openCodeProvider": "モデルサービス",
+      "openCodeBaseUrlDefault": "空欄の場合はサービスの既定の URL を使用",
+      "openCodeModelsLoadFailed": "OpenCode のモデル一覧を読み込めませんでした。",
+      "openCodeModelsAfterConnect": "API キーを保存すると、OpenCode の一覧からモデルを選択できます。",
+      "openCodeCustomProvider": "カスタム（詳細）",
+      "openCodeZenDescription": "OpenCode Zen の API キーを入力します。",
+      "openCodeGoDescription": "OpenCode Go サブスクリプションの API キーを入力します。",
+      "openCodeProviderID": "プロバイダー ID",
+      "openCodeProviderDescription": "OpenCode に設定済みのプロバイダー ID を入力します。",
+      "openCodeWorkspaceDescription": "この Workspace に設定された OpenCode のプロバイダーとログイン情報を使用します。",
       "authWorkspaceDescription": "この Bot の Workspace に保存済みの Claude Code ログインを使用します。",
       "authOAuthTokenDescription": "Claude Code の setup-token で作成した OAuth Token を使用します。",
       "authApiKeyDescription": "Memoh に保存し、Runtime に渡す API Key を使用します。",
@@ -3992,6 +4002,36 @@
     }
   },
   "runtime": {
+    "opencode": {
+      "modes": {
+        "default": {
+          "name": "変更前に確認",
+          "description": "編集やコマンド実行前に承認を求めます。"
+        },
+        "inherit": {
+          "name": "Workspace のルール",
+          "description": "Workspace に設定された OpenCode の権限を使用します。"
+        },
+        "allow": {
+          "name": "すべて許可",
+          "description": "OpenCode のネイティブツールを承認なしで実行します。"
+        }
+      },
+      "commands": {
+        "compact": {
+          "description": "会話のコンテキストを圧縮"
+        },
+        "status": {
+          "description": "セッションの状態を表示"
+        },
+        "skills": {
+          "description": "ネイティブスキルを一覧表示"
+        },
+        "mcp": {
+          "description": "MCP サーバーの状態を表示"
+        }
+      }
+    },
     "claudeCode": {
       "modes": {
         "inherit": {

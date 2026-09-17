@@ -718,7 +718,7 @@ func (d *Driver) CloseBot(botID string) {
 // sharing history up to lastTurnID (inclusive; empty forks at the head) and
 // returns the runtime-metadata delta naming the forked thread. The session's
 // runtime metadata supplies the source thread id and working directory.
-func (d *Driver) ForkThread(ctx context.Context, botID, botAgentID string, runtimeMetadata map[string]any, lastTurnID string) (map[string]any, error) {
+func (d *Driver) ForkThread(ctx context.Context, botID, botAgentID, sourceThreadID string, runtimeMetadata map[string]any, lastTurnID string) (map[string]any, error) {
 	threadID := strings.TrimSpace(metadataString(runtimeMetadata, metadataThreadIDKey))
 	if threadID == "" {
 		return nil, apperror.Wrap(apperror.CodeExternalRuntimeUnavailable, errors.New("session has no codex thread to fork"), map[string]string{"runtime": RuntimeType})

@@ -339,7 +339,7 @@ import { useAvatarInitials } from '@/composables/useAvatarInitials'
 import { aclPresetOptions, defaultAclPreset } from '@/constants/acl-presets'
 import { emptyTimezoneValue } from '@/utils/timezones'
 import { externalAgentDisplayName } from '@/utils/external-agent'
-import { BOT_AGENT_RUNTIME_CLAUDE_CODE, BOT_AGENT_RUNTIME_CODEX, directBotAgentMetadata } from '@/utils/bot-agent'
+import { BOT_AGENT_RUNTIME_CLAUDE_CODE, BOT_AGENT_RUNTIME_OPENCODE, BOT_AGENT_RUNTIME_CODEX, directBotAgentMetadata } from '@/utils/bot-agent'
 import TimezoneSelect from '@/components/timezone-select/index.vue'
 import { useBotCreateProgressStore } from '@/store/bot-create-progress'
 import { useUserStore } from '@/store/user'
@@ -510,7 +510,7 @@ const accountPanel = ref<InstanceType<typeof AgentAuthorization> | null>(null)
 
 const selectedDirectRuntime = computed(() => {
   const value = agentType.value
-  return value === BOT_AGENT_RUNTIME_CODEX || value === BOT_AGENT_RUNTIME_CLAUDE_CODE ? value : ''
+  return value === BOT_AGENT_RUNTIME_CODEX || value === BOT_AGENT_RUNTIME_CLAUDE_CODE || value === BOT_AGENT_RUNTIME_OPENCODE ? value : ''
 })
 
 // ACL description

@@ -10,7 +10,7 @@ import { safeSessionGet, safeSessionRemove, safeSessionSet } from '@/utils/safe-
 export function readAgentAuthorizationDraft(key: string): { id: string, runtime: string } | null {
   try {
     const value = JSON.parse(safeSessionGet(key) || 'null')
-    return typeof value?.id === 'string' && ['codex', 'claude-code'].includes(value.runtime) ? value : null
+    return typeof value?.id === 'string' && ['codex', 'claude-code', 'opencode'].includes(value.runtime) ? value : null
   } catch { return null }
 }
 
@@ -72,7 +72,7 @@ export function useAgentAuthorization(getRuntime: () => string, storageKey: stri
       error.value = resolveApiErrorMessage(cause, t('errors.agent_authorization.failed'))
     }
   }
-  async function start(authKind: string, secret?: string) {
+  async function start(authKind: string, secret?: string, providerID?: string) {
     if (loading.value) return
     cancel()
     transferred = false
@@ -80,8 +80,8 @@ export function useAgentAuthorization(getRuntime: () => string, storageKey: stri
     loading.value = true
     try {
       const { data } = await postAgentAuthorizations({
-        body: { runtime: getRuntime() as 'codex' | 'claude-code', auth_kind: authKind,
-          ...(secret && { secret: { [authKind === 'claude_code_oauth' ? 'oauth_token' : 'api_key']: secret } }) },
+        body: { runtime: getRuntime() as 'codex' | 'claude-code' | 'opencode', auth_kind: authKind,
+          ...(secret && { secret: { [authKind === 'claude_code_oauth' ? 'oauth_token' : 'api_key']: secret, ...(providerID ? { provider_id: providerID } : {}) } }) },
         throwOnError: true,
       })
       if (current !== generation) { void discard(data.id); return }

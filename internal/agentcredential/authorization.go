@@ -45,7 +45,7 @@ func NewAuthorizationService(credentials *Service, oauth *providers.Service) *Au
 }
 
 type AuthorizationRequest struct {
-	Runtime  string            `json:"runtime" validate:"required" enums:"codex,claude-code"`
+	Runtime  string            `json:"runtime" validate:"required" enums:"codex,claude-code,opencode"`
 	AuthKind string            `json:"auth_kind" validate:"required"`
 	Secret   map[string]string `json:"secret,omitempty"`
 }

@@ -11,6 +11,7 @@ export const REASONING_EFFORT_ADAPTIVE = 'adaptive'
 export const REASONING_EFFORT_LEGACY_OFF = 'none'
 
 export const EFFORT_LABELS: Record<string, string> = {
+  default: 'chat.modelDefault',
   [REASONING_EFFORT_DISABLE]: 'chat.reasoningOff',
   [REASONING_EFFORT_ADAPTIVE]: 'chat.reasoningAdaptive',
   // Under the same label as off, not a second one.

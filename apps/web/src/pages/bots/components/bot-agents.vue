@@ -253,6 +253,7 @@ import {
 } from '@/utils/acp'
 import {
   BOT_AGENT_RUNTIME_CLAUDE_CODE,
+  BOT_AGENT_RUNTIME_OPENCODE,
   BOT_AGENT_RUNTIME_CODEX,
   botAgentIcon,
   botAgentName,
@@ -338,7 +339,7 @@ const selectedProfile = computed(() => {
 })
 const selectedDirectRuntime = computed(() => {
   const runtime = normalizeBotAgentRuntime(selectedAgent.value?.runtime)
-  return runtime === BOT_AGENT_RUNTIME_CODEX || runtime === BOT_AGENT_RUNTIME_CLAUDE_CODE ? runtime : ''
+  return runtime === BOT_AGENT_RUNTIME_CODEX || runtime === BOT_AGENT_RUNTIME_CLAUDE_CODE || runtime === BOT_AGENT_RUNTIME_OPENCODE ? runtime : ''
 })
 
 const { mutateAsync: updateAgent } = useMutation({

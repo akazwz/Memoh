@@ -14,7 +14,7 @@ describe('agentTypeItems', () => {
   // A profile that normalizes to the reserved built-in value would replace the
   // Memoh segment's identity — it must be skipped, never rendered.
   it('skips profiles that collide with the reserved Memoh segment', () => {
-    const items = agentTypeItems([profile('Memoh')])
-    expect(items.map(item => item.value)).toEqual([MEMOH_AGENT_VALUE, 'codex', 'claude-code'])
+    const items = agentTypeItems([profile('Memoh'), profile(' OPENCODE ')])
+    expect(items.map(item => item.value)).toEqual([MEMOH_AGENT_VALUE, 'codex', 'claude-code', 'opencode'])
   })
 })

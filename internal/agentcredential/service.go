@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"strings"
 	"time"
 
@@ -116,6 +117,10 @@ func (s *Service) AttachToBotAgent(ctx context.Context, ownerUserID, botID, botA
 	}
 	if !validProviderKind(req.Provider, req.AuthKind) || !validSecret(req.AuthKind, req.Secret) {
 		return PublicCredential{}, ErrInvalidRequest
+	}
+	if req.AuthKind == AuthKindOpenCodeAPIKey {
+		req.AccountMetadata = maps.Clone(nonNilMap(req.AccountMetadata))
+		req.AccountMetadata["provider_id"] = req.Secret["provider_id"]
 	}
 	ciphertext, nonce, err := s.encrypt(req.Secret)
 	if err != nil {
@@ -221,6 +226,8 @@ func (s *Service) UpdateSecretCAS(ctx context.Context, credentialID string, expe
 // Compatible reports whether an auth kind can drive the Agent runtime.
 func Compatible(agentRuntime, authKind string) bool {
 	switch strings.ToLower(strings.TrimSpace(agentRuntime)) {
+	case string(runtimekind.OpenCode):
+		return authKind == AuthKindOpenCodeAPIKey
 	case string(runtimekind.Codex):
 		return authKind == AuthKindOpenAIAPIKey || authKind == AuthKindOpenAICodexOAuth
 	case string(runtimekind.ClaudeCode):
@@ -298,17 +305,33 @@ func (s *Service) decrypt(ciphertext, nonce []byte, keyVersion int32) (map[strin
 // ProviderForAuthKind maps an auth kind to its provider so API callers only
 // submit the kind.
 func ProviderForAuthKind(kind string) string {
-	want := map[string]string{AuthKindOpenAIAPIKey: ProviderOpenAI, AuthKindOpenAICodexOAuth: ProviderOpenAI, AuthKindAnthropicAPIKey: ProviderAnthropic, AuthKindClaudeCodeOAuth: ProviderAnthropic}
+	want := map[string]string{AuthKindOpenCodeAPIKey: ProviderOpenCode, AuthKindOpenAIAPIKey: ProviderOpenAI, AuthKindOpenAICodexOAuth: ProviderOpenAI, AuthKindAnthropicAPIKey: ProviderAnthropic, AuthKindClaudeCodeOAuth: ProviderAnthropic}
 	return want[normalize(kind)]
 }
 
 func validProviderKind(provider, kind string) bool {
-	want := map[string]string{AuthKindOpenAIAPIKey: ProviderOpenAI, AuthKindOpenAICodexOAuth: ProviderOpenAI, AuthKindAnthropicAPIKey: ProviderAnthropic, AuthKindClaudeCodeOAuth: ProviderAnthropic}
+	want := map[string]string{AuthKindOpenCodeAPIKey: ProviderOpenCode, AuthKindOpenAIAPIKey: ProviderOpenAI, AuthKindOpenAICodexOAuth: ProviderOpenAI, AuthKindAnthropicAPIKey: ProviderAnthropic, AuthKindClaudeCodeOAuth: ProviderAnthropic}
 	return want[kind] == provider
 }
 
 func validSecret(kind string, secret map[string]string) bool {
 	required := []string{"api_key"}
+	if kind == AuthKindOpenCodeAPIKey {
+		required = []string{"api_key", "provider_id"}
+		id := secret["provider_id"]
+		if len(id) > 128 {
+			return false
+		}
+		for _, char := range id {
+			valid := char >= 'a' && char <= 'z' || char >= '0' && char <= '9' || char == '-' || char == '_' || char == '.'
+			if !valid {
+				return false
+			}
+		}
+		if id == "__proto__" || id == "constructor" || id == "prototype" {
+			return false
+		}
+	}
 	if kind == AuthKindOpenAICodexOAuth {
 		required = []string{"access_token", "id_token", "refresh_token", "account_id"}
 	}

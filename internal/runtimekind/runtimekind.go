@@ -25,6 +25,8 @@ const (
 	Codex Kind = "codex"
 	// ClaudeCode is the direct Claude Code external agent runtime.
 	ClaudeCode Kind = "claude-code"
+	// OpenCode is the native HTTP/SSE external runtime.
+	OpenCode Kind = "opencode"
 )
 
 // Session modes a runtime can host. The string values are the session_mode
@@ -67,6 +69,11 @@ type capabilities struct {
 
 // capabilityByKind is the one table.
 var capabilityByKind = map[Kind]capabilities{
+	OpenCode: {
+		External: true, Direct: true, DecisionWaiter: true, WorkspaceExec: true, AgentModel: true,
+		SessionModes: []string{ModeChat, ModeDiscuss, ModeSchedule},
+	},
+
 	Model: {
 		SessionModes: []string{ModeChat, ModeDiscuss, ModeSchedule, ModeSubagent},
 	},
@@ -116,6 +123,8 @@ func Normalize(raw string) (Kind, bool) {
 		return Codex, true
 	case ClaudeCode:
 		return ClaudeCode, true
+	case OpenCode:
+		return OpenCode, true
 	default:
 		return "", false
 	}
@@ -127,7 +136,7 @@ func Valid(raw string) bool {
 	return ok
 }
 
-// IsDirect reports a direct external agent runtime (codex, claude-code).
+// IsDirect reports a direct external agent runtime (codex, claude-code, opencode).
 func IsDirect(raw string) bool {
 	caps, ok := capabilitiesFor(raw)
 	return ok && caps.Direct

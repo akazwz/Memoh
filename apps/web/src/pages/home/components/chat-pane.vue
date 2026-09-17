@@ -1305,7 +1305,7 @@ import { useACPRuntime } from '@/composables/useACPRuntime'
 import { useAgentModelCatalog } from '@/composables/useAgentModelCatalog'
 import { useVirtualKeyboard } from '@/composables/useVirtualKeyboard'
 import { findMissingRequiredManagedField, readACPAgentConfig } from '@/utils/acp'
-import { BOT_AGENT_RUNTIME_ACP, BOT_AGENT_RUNTIME_CLAUDE_CODE, BOT_AGENT_RUNTIME_CODEX, botAgentIcon, botAgentName, botAgentProvider, isDirectBotAgentConfigured, normalizeBotAgentRuntime } from '@/utils/bot-agent'
+import { BOT_AGENT_RUNTIME_ACP, BOT_AGENT_RUNTIME_CLAUDE_CODE, BOT_AGENT_RUNTIME_OPENCODE, BOT_AGENT_RUNTIME_CODEX, botAgentIcon, botAgentName, botAgentProvider, isDirectBotAgentConfigured, normalizeBotAgentRuntime } from '@/utils/bot-agent'
 import { isApiErrorCode, parseMemohError, resolveApiErrorMessage } from '@/utils/api-error'
 import { hasBotPermission } from '@/utils/bot-permissions'
 import { workspaceTargetAvailable } from '@/utils/workspace-target'
@@ -1534,7 +1534,8 @@ const canForkAssistant = computed(() =>
   && !activeChatReadOnly.value
   && activeChatCanFork.value
   && (activeChatTarget.value.runtimeType === 'model'
-    || activeChatTarget.value.runtimeType === BOT_AGENT_RUNTIME_CODEX),
+    || activeChatTarget.value.runtimeType === BOT_AGENT_RUNTIME_CODEX
+    || activeChatTarget.value.runtimeType === BOT_AGENT_RUNTIME_OPENCODE),
 )
 
 function isForkableTurn(message: ChatMessage): boolean {
@@ -1901,7 +1902,7 @@ const activeUsesACPRuntime = computed(() => (
 const activeDirectRuntime = computed(() => {
   if (!activeUsesExternalAgentComposer.value) return ''
   const runtime = activeChatTarget.value.runtimeType
-  if (runtime === BOT_AGENT_RUNTIME_CODEX || runtime === BOT_AGENT_RUNTIME_CLAUDE_CODE) return runtime
+  if (runtime === BOT_AGENT_RUNTIME_CODEX || runtime === BOT_AGENT_RUNTIME_CLAUDE_CODE || runtime === BOT_AGENT_RUNTIME_OPENCODE) return runtime
   return ''
 })
 const activeUsesDirectRuntime = computed(() => activeDirectRuntime.value !== '')
@@ -2496,6 +2497,7 @@ const {
   botAgentId: activeBotAgentID,
   runtime: computed(() => activeChatTarget.value.runtimeType),
   selectedModelId: overrideModelId,
+  collaborationMode: computed(() => runtimeControlSnapshot.value?.plan_mode?.current_mode_id),
   projectPath: computed(() => runtimeProject.value?.path || activeACPProjectPath.value),
   acpModels,
   acpCurrentModelId: currentACPModelId,
@@ -2708,7 +2710,7 @@ const defaultExternalAgentAvailability = computed<DefaultExternalAgentAvailabili
   if (!settings) {
     return { input: null, messageKey: '', loading: !!currentBotId.value && botSettingsLoading.value }
   }
-  if (settings.chat_runtime !== 'acp_agent' && settings.chat_runtime !== 'codex' && settings.chat_runtime !== 'claude-code') return { input: null, messageKey: '', loading: false }
+  if (settings.chat_runtime !== 'acp_agent' && settings.chat_runtime !== 'codex' && settings.chat_runtime !== 'claude-code' && settings.chat_runtime !== 'opencode') return { input: null, messageKey: '', loading: false }
   if (!hasBotPermission(currentBot.value?.current_user_permissions, 'workspace_exec')) {
     return { input: null, messageKey: 'chat.defaultAgentNoWorkspaceExec', loading: false }
   }
@@ -2797,8 +2799,12 @@ const selectedModelLabel = computed(() => {
 
 const selectedReasoningLabel = computed(() => {
   if (activeUsesExternalAgentComposer.value) {
-    const current = composerReasoningEffort.value
-    return composerReasoningOptions.value?.find(option => option.value === current)?.label || current
+    const selected = composerReasoningEffort.value
+    const current = selected === 'default'
+      ? composerModelCatalog.value.resolvedDefaultReasoningEffort || selected
+      : selected
+    return composerReasoningOptions.value?.find(option => option.value === current)?.label
+      || (EFFORT_LABELS[current] ? t(EFFORT_LABELS[current]) : current)
   }
   const v = overrideReasoningEffort.value
   return t(EFFORT_LABELS[v] ?? 'chat.modelDefault')

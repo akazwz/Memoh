@@ -2,6 +2,7 @@
   <div class="space-y-8">
     <SettingsSection :title="$t('bots.agent.runtimeSetup')">
       <SettingsRow
+        v-if="!isOpenCode"
         :label="$t('bots.agent.authMode')"
         :description="authDescription"
       >
@@ -23,6 +24,20 @@
             </SelectItem>
           </SelectContent>
         </Select>
+      </SettingsRow>
+
+      <OpenCodeProviderSelect
+        v-if="isOpenCode && config.auth === 'api_key'"
+        :model-value="providerID"
+        :disabled="savingCredential || credentialConnected"
+        @update:model-value="setOpenCodeProvider"
+      />
+      <SettingsRow
+        v-else-if="isOpenCode"
+        :label="$t('bots.agent.authMode')"
+        :description="authDescription"
+      >
+        {{ $t('bots.agent.authWorkspace') }}
       </SettingsRow>
 
       <SettingsRow
@@ -62,14 +77,14 @@
       </SettingsRow>
 
       <SettingsRow
-        v-if="config.auth === 'api_key' || config.auth === 'oauth_token'"
+        v-if="!isOpenCode && (config.auth === 'api_key' || config.auth === 'oauth_token')"
         :label="$t('common.baseUrl')"
         stack="sm"
       >
         <Input
           v-model="config.base_url"
           class="w-full sm:w-80"
-          :placeholder="baseUrlPlaceholder"
+          :placeholder="isOpenCode ? $t('bots.agent.openCodeBaseUrlDefault') : baseUrlPlaceholder"
           @blur="commitConfig"
           @keydown.enter.prevent="commitConfig"
         />
@@ -80,7 +95,22 @@
         :description="$t('bots.agent.defaultModelDescription')"
         stack="sm"
       >
+        <OpenCodeModelSelect
+          v-if="isOpenCode && (credentialConnected || config.auth === 'workspace')"
+          :key="agent.agent_credential_id || 'workspace'"
+          :bot-id="botId"
+          :agent-id="agent.id!"
+          :model-value="config.model"
+          @update:model-value="setDefaultModel"
+        />
+        <p
+          v-else-if="isOpenCode"
+          class="text-caption text-muted-foreground"
+        >
+          {{ $t('bots.agent.openCodeModelsAfterConnect') }}
+        </p>
         <Input
+          v-else
           v-model="config.model"
           class="w-full sm:w-80"
           :placeholder="$t('bots.agent.defaultModelPlaceholder')"
@@ -113,6 +143,62 @@
         </Select>
       </SettingsRow>
     </SettingsSection>
+
+    <Collapsible
+      v-if="isOpenCode"
+      v-model:open="openCodeAdvancedOpen"
+    >
+      <CollapsibleTrigger as-child>
+        <TextButton>
+          <ChevronRight
+            class="transition-transform"
+            :class="{ 'rotate-90': openCodeAdvancedOpen }"
+          />
+          {{ $t('common.advanced') }}
+        </TextButton>
+      </CollapsibleTrigger>
+      <CollapsibleContent>
+        <SettingsSection class="mt-4">
+          <SettingsRow
+            :label="$t('bots.agent.authMode')"
+            :description="authDescription"
+          >
+            <Select
+              :model-value="config.auth"
+              :disabled="credentialConnected"
+              @update:model-value="setAuthMode"
+            >
+              <SelectTrigger class="w-full sm:w-56">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem
+                  v-for="option in authOptions"
+                  :key="option.value"
+                  :value="option.value"
+                >
+                  {{ option.label }}
+                </SelectItem>
+              </SelectContent>
+            </Select>
+          </SettingsRow>
+
+          <SettingsRow
+            v-if="config.auth === 'api_key' || config.auth === 'oauth_token'"
+            :label="$t('common.baseUrl')"
+            stack="sm"
+          >
+            <Input
+              v-model="config.base_url"
+              class="w-full sm:w-80"
+              :placeholder="isOpenCode ? $t('bots.agent.openCodeBaseUrlDefault') : baseUrlPlaceholder"
+              @blur="commitConfig"
+              @keydown.enter.prevent="commitConfig"
+            />
+          </SettingsRow>
+        </SettingsSection>
+      </CollapsibleContent>
+    </Collapsible>
 
     <SettingsSection
       v-if="isCodex && config.auth === 'chatgpt'"
@@ -196,6 +282,10 @@ import { useQuery, useQueryCache } from '@pinia/colada'
 import {
   Button,
   ConfirmPopover,
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+  TextButton,
   DeviceCodePanel,
   Input,
   LabelSwap,
@@ -209,10 +299,11 @@ import {
   Spinner,
   toast,
 } from '@felinic/ui'
-import { KeyRound } from 'lucide-vue-next'
+import { ChevronRight, KeyRound } from 'lucide-vue-next'
 import {
   deleteBotsByBotIdAgentsByIdCredential,
   getBotsByBotIdAgentsByIdRuntimeControls,
+  getBotsByBotIdAgentsByIdCredential,
   patchBotsByBotIdAgentsById,
   postBotsByBotIdAgentsByIdCodexLoginDeviceAuthorize,
   postBotsByBotIdAgentsByIdCodexLoginDeviceCancel,
@@ -221,10 +312,14 @@ import {
   type BotagentsBotAgent,
 } from '@memohai/sdk'
 import AgentCredentialInput from './agent-credential-input.vue'
+import OpenCodeProviderSelect from './opencode-provider-select.vue'
+import OpenCodeModelSelect from './opencode-model-select.vue'
+import { DEFAULT_OPENCODE_PROVIDER } from '@/utils/opencode-provider'
 import { localizeRuntimeControls } from '@/utils/runtime-control-presentation'
 import { isApiErrorCode, resolveApiErrorMessage } from '@/utils/api-error'
 import {
   BOT_AGENT_RUNTIME_CODEX,
+  BOT_AGENT_RUNTIME_OPENCODE,
   normalizeBotAgentRuntime,
 } from '@/utils/bot-agent'
 
@@ -252,6 +347,10 @@ const router = useRouter()
 const queryCache = useQueryCache()
 
 const runtime = computed(() => normalizeBotAgentRuntime(props.agent.runtime))
+const isOpenCode = computed(() => runtime.value === BOT_AGENT_RUNTIME_OPENCODE)
+const providerID = ref(DEFAULT_OPENCODE_PROVIDER)
+const providerChanged = ref(false)
+const openCodeAdvancedOpen = ref(false)
 const isCodex = computed(() => runtime.value === BOT_AGENT_RUNTIME_CODEX)
 const config = reactive<DirectAgentConfig>({ auth: '', base_url: '', model: '', reasoning_effort: '', permission_mode: '' })
 const defaultControls = useQuery({
@@ -279,6 +378,21 @@ async function setDefaultPermission(value: unknown) {
 const credentialSecret = ref('')
 const savingCredential = ref(false)
 const credentialConnected = computed(() => !!props.agent.agent_credential_id)
+const credentialInfo = useQuery({
+  key: () => ['bot-agent-credential', props.botId, props.agent.id ?? '', props.agent.agent_credential_id ?? ''],
+  enabled: () => isOpenCode.value && credentialConnected.value,
+  query: async ({ signal }) => {
+    const { data } = await getBotsByBotIdAgentsByIdCredential({
+      path: { bot_id: props.botId, id: props.agent.id! }, signal, throwOnError: true,
+    })
+    return data
+  },
+})
+watch([() => credentialInfo.data.value, credentialConnected], ([info, connected]) => {
+  if (isOpenCode.value && connected && info?.account_metadata?.provider_id) {
+    providerID.value = String(info.account_metadata.provider_id)
+  }
+}, { immediate: true })
 
 function readConfig() {
   const source = props.agent.metadata ?? {}
@@ -287,9 +401,12 @@ function readConfig() {
   config.model = String(source.model ?? '')
   config.reasoning_effort = String(source.reasoning_effort ?? '')
   config.permission_mode = String(source.permission_mode ?? '')
+  if (isOpenCode.value && (config.base_url || config.auth === 'workspace')) openCodeAdvancedOpen.value = true
 }
 
-watch([() => props.agent.metadata, runtime], readConfig, { immediate: true })
+// Refetching an unchanged Agent must not overwrite a provider change or other
+// unsaved fields when the user returns to this form.
+watch(() => JSON.stringify([props.agent.id, runtime.value, props.agent.metadata]), readConfig, { immediate: true })
 
 const authOptions = computed(() => isCodex.value
   ? [
@@ -299,11 +416,11 @@ const authOptions = computed(() => isCodex.value
   : [
       { value: 'workspace', label: t('bots.agent.authWorkspace') },
       { value: 'api_key', label: t('bots.agent.apiKey') },
-      { value: 'oauth_token', label: t('bots.agent.authOAuthToken') },
+      ...(!isOpenCode.value ? [{ value: 'oauth_token', label: t('bots.agent.authOAuthToken') }] : []),
     ])
 
 const authDescription = computed(() => {
-  if (config.auth === 'workspace') return t('bots.agent.authWorkspaceDescription')
+  if (config.auth === 'workspace') return t(isOpenCode.value ? 'bots.agent.openCodeWorkspaceDescription' : 'bots.agent.authWorkspaceDescription')
   if (config.auth === 'chatgpt') return t('bots.agent.authChatGPTDescription')
   if (config.auth === 'oauth_token') return t('bots.agent.authOAuthTokenDescription')
   return t('bots.agent.authApiKeyDescription')
@@ -355,21 +472,41 @@ async function setAuthMode(value: unknown) {
   }
 }
 
+function setOpenCodeProvider(value: string) {
+  if (credentialConnected.value || value === providerID.value) return
+  providerID.value = value
+  providerChanged.value = true
+  credentialSecret.value = ''
+  config.base_url = ''
+  config.model = ''
+}
+
+async function setDefaultModel(value: string) {
+  const previous = config.model
+  config.model = value
+  if (!await commitConfig()) config.model = previous
+}
+
 async function saveCredential() {
   const secret = credentialSecret.value.trim()
-  if (!secret) return
+  if (!secret || savingCredential.value) return
   const authKind = isCodex.value
     ? 'openai_api_key'
+    : isOpenCode.value ? 'opencode_api_key'
     : config.auth === 'oauth_token' ? 'claude_code_oauth' : 'anthropic_api_key'
   const secretKey = config.auth === 'oauth_token' ? 'oauth_token' : 'api_key'
   savingCredential.value = true
   try {
+    // Clear the previous provider's endpoint/model before storing a key for a
+    // different service, so a failed config save cannot route it to that host.
+    if (isOpenCode.value && providerChanged.value && !await commitConfig()) return
     await putBotsByBotIdAgentsByIdCredential({
       path: { bot_id: props.botId, id: props.agent.id! },
-      body: { auth_kind: authKind, secret: { [secretKey]: secret } },
+      body: { auth_kind: authKind, secret: { [secretKey]: secret, ...(isOpenCode.value ? { provider_id: providerID.value.trim() } : {}) } },
       throwOnError: true,
     })
     credentialSecret.value = ''
+    providerChanged.value = false
     await refreshAgent()
     toast.success(t('bots.settings.agentCredentialSaved'))
   } catch (error) {

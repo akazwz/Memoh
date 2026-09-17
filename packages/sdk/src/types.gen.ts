@@ -397,7 +397,7 @@ export type AgentcredentialAuthorization = {
 
 export type AgentcredentialAuthorizationRequest = {
     auth_kind: string;
-    runtime: 'codex' | 'claude-code';
+    runtime: 'codex' | 'claude-code' | 'opencode';
     secret?: {
         [key: string]: string;
     };
@@ -1692,6 +1692,11 @@ export type ExternalModelOption = {
     id?: string;
     name?: string;
     reasoning_efforts?: Array<ExternalReasoningEffortOption>;
+    /**
+     * Display-only resolution of the inherited choice. Never persist this as
+     * the user's preference: "default" must keep following runtime settings.
+     */
+    resolved_default_reasoning_effort?: string;
     /**
      * ResolvedModelID preserves a runtime-advertised full model name for
      * validation without duplicating its alias in the model picker.
@@ -6135,6 +6140,10 @@ export type GetBotsByBotIdAgentsByIdModelsData = {
          * Workspace project path for runtime model settings
          */
         project_path?: string;
+        /**
+         * Runtime collaboration mode for effective defaults
+         */
+        collaboration_mode?: string;
     };
     url: '/bots/{bot_id}/agents/{id}/models';
 };

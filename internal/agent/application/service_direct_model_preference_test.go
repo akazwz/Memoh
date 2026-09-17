@@ -32,7 +32,7 @@ func (d preferenceCatalogDriver) ModelCatalog(_ context.Context, request externa
 }
 
 func TestDirectModelPreferenceSurvivesServiceRestart(t *testing.T) {
-	for _, runtimeType := range []string{session.RuntimeCodex, session.RuntimeClaudeCode} {
+	for _, runtimeType := range []string{session.RuntimeCodex, session.RuntimeClaudeCode, session.RuntimeOpenCode} {
 		t.Run(runtimeType, func(t *testing.T) {
 			const sid = "00000000-0000-0000-0000-000000000610"
 			catalog := external.ModelCatalog{ConfiguredModelID: "default", ConfiguredReasoningEffort: "medium", Models: []external.ModelOption{{ID: "chosen", DefaultReasoningEffort: "medium", ReasoningEfforts: []external.ReasoningEffortOption{{ID: "medium"}, {ID: "high"}}}}}
@@ -72,6 +72,7 @@ func TestDirectDefaultSelectionReplacesSavedModel(t *testing.T) {
 	}{
 		{"Claude configured default", session.RuntimeClaudeCode, "B", "B"},
 		{"Codex configured default", session.RuntimeCodex, "B", "B"},
+		{"OpenCode configured default", session.RuntimeOpenCode, "provider/B", "provider/B"},
 		{"Codex advertised default", session.RuntimeCodex, "", "B"},
 		{"Claude opaque default", session.RuntimeClaudeCode, "", "default"},
 	} {

@@ -15,6 +15,7 @@ import (
 	acpprofile "github.com/felinics/memoh/internal/agent/runtime/acp/profile"
 	"github.com/felinics/memoh/internal/agent/runtime/claudecode/claudecfg"
 	"github.com/felinics/memoh/internal/agent/runtime/codex/codexcfg"
+	"github.com/felinics/memoh/internal/agent/runtime/opencode/opencodecfg"
 	"github.com/felinics/memoh/internal/agentcredential"
 	"github.com/felinics/memoh/internal/db"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
@@ -364,6 +365,9 @@ func DescriptorFor(agent BotAgent) (Descriptor, error) {
 
 func AcceptsCredential(agent BotAgent, authKind string) bool {
 	switch agent.Runtime {
+	case RuntimeOpenCode:
+		cfg, err := opencodecfg.ParseAgentConfig(agent.Metadata)
+		return err == nil && cfg.Auth == opencodecfg.AuthAPIKey && authKind == agentcredential.AuthKindOpenCodeAPIKey
 	case RuntimeCodex:
 		cfg, err := codexcfg.ParseAgentConfig(agent.Metadata)
 		if err != nil {
@@ -400,6 +404,18 @@ func ValidateConfigurationWithStore(agent BotAgent, botMetadata map[string]any, 
 		return err
 	}
 	switch descriptor.Runtime {
+	case RuntimeOpenCode:
+		cfg, err := opencodecfg.ParseAgentConfig(agent.Metadata)
+		if err != nil {
+			return &ConfigurationError{Field: "auth"}
+		}
+		if cfg.Auth == opencodecfg.AuthAPIKey && credentialAuthKind != agentcredential.AuthKindOpenCodeAPIKey {
+			return &ConfigurationError{Field: "agent_credential_id"}
+		}
+		if cfg.Auth == opencodecfg.AuthWorkspace && credentialAuthKind != "" {
+			return &ConfigurationError{Field: "agent_credential_id"}
+		}
+		return nil
 	case RuntimeACP:
 		profile, ok := acpprofile.Lookup(descriptor.Provider)
 		if !ok {
@@ -467,7 +483,12 @@ func normalizeDescriptor(runtime string, metadata map[string]any) (string, map[s
 		}
 		normalized[MetadataProviderKey] = provider
 		return runtime, normalized, nil
-	case RuntimeCodex, RuntimeClaudeCode:
+	case RuntimeCodex, RuntimeClaudeCode, RuntimeOpenCode:
+		if runtime == RuntimeOpenCode {
+			if _, err := opencodecfg.ParseAgentConfig(metadata); err != nil {
+				return "", nil, ErrInvalidMetadata
+			}
+		}
 		if runtime == RuntimeClaudeCode {
 			if value, exists := metadata["permission_mode"]; exists {
 				mode, ok := value.(string)

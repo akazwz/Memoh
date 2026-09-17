@@ -14,6 +14,7 @@ const (
 	RuntimeACP          = "acp"
 	RuntimeCodex        = string(runtimekind.Codex)
 	RuntimeClaudeCode   = string(runtimekind.ClaudeCode)
+	RuntimeOpenCode     = string(runtimekind.OpenCode)
 	MetadataProviderKey = "provider"
 )
 
