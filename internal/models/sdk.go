@@ -61,6 +61,9 @@ func NewSDKChatModel(cfg SDKModelConfig) *sdk.Model {
 	chatCompletionsCompat := ResolveChatCompletionsCompat(cfg.BaseURL, cfg.ChatCompletionsCompat)
 
 	switch ClientType(cfg.ClientType) {
+	case ClientTypeOpenCodeGo:
+		return newOpenCodeGoModel(cfg)
+
 	case ClientTypeOpenAICompletions:
 		opts := []openaicompletions.Option{
 			openaicompletions.WithAPIKey(cfg.APIKey),
@@ -207,7 +210,7 @@ func ReasoningEffortParam(cfg SDKModelConfig) (string, bool) {
 	if rc == nil {
 		return "", false
 	}
-	ct := ClientType(cfg.ClientType)
+	ct := ClientType(ResolveModelClientType(cfg.ClientType, cfg.ModelID))
 
 	// DeepSeek and MiniMax keep the generic Chat Completions transport but gate
 	// thinking via a toggle rather than reasoning_effort. Their SDK compat layer
