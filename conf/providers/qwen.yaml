@@ -65,6 +65,8 @@ models:
     config:
       compatibilities: [tool-call, reasoning]
       context_window: 131072
+      thinking_mode: toggle
+      reasoning_efforts: [low, medium, high]
 
   - model_id: kimi-k2-thinking
     name: Kimi K2 Thinking
@@ -177,6 +179,8 @@ models:
     config:
       compatibilities: [vision, tool-call, reasoning]
       context_window: 262144
+      thinking_mode: toggle
+      reasoning_efforts: [low, medium, high]
 
   - model_id: qwen3.5-27b
     name: Qwen3.5-27B
@@ -191,6 +195,8 @@ models:
     config:
       compatibilities: [vision, tool-call, reasoning]
       context_window: 262144
+      thinking_mode: toggle
+      reasoning_efforts: [low, medium, high]
 
   - model_id: qwen3-235b-a22b-thinking-2507
     name: Qwen3 235B A22B Thinking 2507
@@ -198,6 +204,8 @@ models:
     config:
       compatibilities: [tool-call, reasoning]
       context_window: 131072
+      thinking_mode: toggle
+      reasoning_efforts: [low, medium, high]
 
   - model_id: qwen3-235b-a22b-instruct-2507
     name: Qwen3 235B A22B Instruct 2507
@@ -635,6 +643,8 @@ models:
     config:
       compatibilities: [tool-call, reasoning]
       context_window: 131072
+      thinking_mode: toggle
+      reasoning_efforts: [low, medium, high]
 
   - model_id: deepseek-v3
     name: DeepSeek V3

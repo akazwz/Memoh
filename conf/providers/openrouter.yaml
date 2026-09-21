@@ -375,6 +375,8 @@ models:
     config:
       compatibilities: [tool-call, reasoning]
       context_window: 163840
+      thinking_mode: toggle
+      reasoning_efforts: [low, medium, high]
   - model_id: "deepseek/deepseek-r1-distill-llama-70b"
     name: "DeepSeek: R1 Distill Llama 70B"
     type: chat
@@ -599,6 +601,8 @@ models:
     config:
       compatibilities: [vision, tool-call, reasoning]
       context_window: 262144
+      thinking_mode: toggle
+      reasoning_efforts: [low, medium, high]
   - model_id: "google/gemma-4-31b-it:free"
     name: "Google: Gemma 4 31B (free)"
     type: chat
@@ -840,7 +844,8 @@ models:
     config:
       compatibilities: [tool-call]
       context_window: 196608
-      thinking_mode: none
+      thinking_mode: toggle
+      reasoning_efforts: [low, medium, high]
   - model_id: "mistralai/codestral-2508"
     name: "Mistral: Codestral 2508"
     type: chat
@@ -918,6 +923,8 @@ models:
     config:
       compatibilities: [vision, tool-call]
       context_window: 131072
+      thinking_mode: toggle
+      reasoning_efforts: [low, medium, high]
   - model_id: "mistralai/mistral-medium-3-5"
     name: "Mistral: Mistral Medium 3.5"
     type: chat
@@ -1315,7 +1322,7 @@ models:
       compatibilities: [vision, file-input, tool-call, reasoning]
       context_window: 400000
       thinking_mode: toggle
-      reasoning_efforts: [disable, minimal, low, medium, high]
+      reasoning_efforts: [minimal, disable, low, medium, high]
   - model_id: "openai/gpt-5.1-chat"
     name: "OpenAI: GPT-5.1 Chat"
     type: chat
@@ -1353,7 +1360,7 @@ models:
       compatibilities: [vision, file-input, tool-call, reasoning]
       context_window: 400000
       thinking_mode: toggle
-      reasoning_efforts: [disable, minimal, low, medium, high, xhigh]
+      reasoning_efforts: [minimal, disable, low, medium, high, xhigh]
   - model_id: "openai/gpt-5.2-chat"
     name: "OpenAI: GPT-5.2 Chat"
     type: chat
@@ -1397,7 +1404,7 @@ models:
       compatibilities: [vision, file-input, tool-call, reasoning]
       context_window: 1050000
       thinking_mode: toggle
-      reasoning_efforts: [disable, minimal, low, medium, high, xhigh]
+      reasoning_efforts: [minimal, disable, low, medium, high, xhigh]
   - model_id: "openai/gpt-5.4-image-2"
     name: "OpenAI: GPT-5.4 Image 2"
     type: chat
@@ -1462,6 +1469,8 @@ models:
     config:
       compatibilities: [vision, tool-call]
       context_window: 400000
+      thinking_mode: toggle
+      reasoning_efforts: [low, medium, high]
   - model_id: "openai/gpt-oss-120b"
     name: "OpenAI: gpt-oss-120b"
     type: chat
@@ -1524,6 +1533,8 @@ models:
     config:
       compatibilities: [vision, file-input, tool-call, reasoning]
       context_window: 200000
+      thinking_mode: toggle
+      reasoning_efforts: [low, medium, high]
   - model_id: "openai/o3-mini"
     name: "OpenAI: o3 Mini"
     type: chat
@@ -1560,6 +1571,8 @@ models:
     config:
       compatibilities: [vision, file-input, tool-call, reasoning]
       context_window: 200000
+      thinking_mode: toggle
+      reasoning_efforts: [low, medium, high]
   - model_id: "openai/o4-mini-high"
     name: "OpenAI: o4 Mini High"
     type: chat
@@ -1739,6 +1752,8 @@ models:
     config:
       compatibilities: [tool-call, reasoning]
       context_window: 131072
+      thinking_mode: toggle
+      reasoning_efforts: [low, medium, high]
   - model_id: "qwen/qwen3-30b-a3b"
     name: "Qwen: Qwen3 30B A3B"
     type: chat
@@ -1895,6 +1910,8 @@ models:
     config:
       compatibilities: [vision, tool-call, reasoning]
       context_window: 262144
+      thinking_mode: toggle
+      reasoning_efforts: [low, medium, high]
   - model_id: "qwen/qwen3.5-27b"
     name: "Qwen: Qwen3.5-27B"
     type: chat
@@ -1907,6 +1924,8 @@ models:
     config:
       compatibilities: [vision, tool-call, reasoning]
       context_window: 262144
+      thinking_mode: toggle
+      reasoning_efforts: [low, medium, high]
   - model_id: "qwen/qwen3.5-397b-a17b"
     name: "Qwen: Qwen3.5 397B A17B"
     type: chat
@@ -1947,12 +1966,16 @@ models:
     config:
       compatibilities: [vision, tool-call, reasoning]
       context_window: 262144
+      thinking_mode: toggle
+      reasoning_efforts: [low, medium, high]
   - model_id: "qwen/qwen3.6-35b-a3b"
     name: "Qwen: Qwen3.6 35B A3B"
     type: chat
     config:
       compatibilities: [vision, tool-call, reasoning]
       context_window: 262144
+      thinking_mode: toggle
+      reasoning_efforts: [low, medium, high]
   - model_id: "qwen/qwen3.6-flash"
     name: "Qwen: Qwen3.6 Flash"
     type: chat
@@ -1965,6 +1988,8 @@ models:
     config:
       compatibilities: [tool-call, reasoning]
       context_window: 262144
+      thinking_mode: toggle
+      reasoning_efforts: [low, medium, high]
   - model_id: "qwen/qwen3.6-plus"
     name: "Qwen: Qwen3.6 Plus"
     type: chat
@@ -2135,12 +2160,16 @@ models:
     config:
       compatibilities: [vision, tool-call, reasoning]
       context_window: 2000000
+      thinking_mode: toggle
+      reasoning_efforts: [low, medium, high]
   - model_id: "x-ai/grok-4.20-multi-agent"
     name: "xAI: Grok 4.20 Multi-Agent"
     type: chat
     config:
       compatibilities: [vision, reasoning]
       context_window: 2000000
+      thinking_mode: toggle
+      reasoning_efforts: [low, medium, high]
   - model_id: "x-ai/grok-4.3"
     name: "xAI: Grok 4.3"
     type: chat
@@ -2275,6 +2304,8 @@ models:
     config:
       compatibilities: [vision, tool-call, reasoning]
       context_window: 202752
+      thinking_mode: toggle
+      reasoning_efforts: [low, medium, high]
   - model_id: "~anthropic/claude-haiku-latest"
     name: "Anthropic Claude Haiku Latest"
     type: chat
