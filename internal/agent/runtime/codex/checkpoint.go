@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"path"
 	"sort"
 	"strings"
@@ -79,9 +80,16 @@ func (s *appServer) unloadThread(ctx context.Context, id string) error {
 	case <-done:
 		return nil
 	case <-ctx.Done():
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return fmt.Errorf("%w: %w", errThreadStillLoaded, ctx.Err())
+		}
 		return ctx.Err()
 	}
 }
+
+// An app-server that never reports thread/closed keeps the stale handle loaded
+// for as long as it likes, so waiting again on the next turn cannot help.
+var errThreadStillLoaded = errors.New("codex thread did not unload")
 
 func (s *appServer) forgetThread(id string) {
 	s.mu.Lock()
@@ -103,6 +111,13 @@ func (d *Driver) prepareCheckpoint(ctx context.Context, srv *appServer, fs check
 
 // A nil server restores an independent read-only source for thread/fork. It
 // never unloads or replaces a source thread that may concurrently be running.
+//
+// Restoring the published snapshot is what rolls unpublished native writes
+// back, and it is best effort: codex's memory is never given up for it. With
+// no snapshot to restore — the head is a reset, its rows are missing or do not
+// match, the stale thread will not unload — the thread continues from codex's
+// own files, exactly as threads without a publication do. Those conditions are
+// the same on every later turn, so failing the turn would never clear.
 func (d *Driver) prepareCheckpointAt(ctx context.Context, srv *appServer, fs checkpointFS, input external.PromptInput, root string) (checkpointHandle, error) {
 	hint := checkpointHandle{NativeID: metadataString(input.RuntimeMetadata, metadataThreadIDKey)}
 	if d.stateStore == nil || input.ForceFreshRuntime {
@@ -118,11 +133,8 @@ func (d *Driver) prepareCheckpointAt(ctx context.Context, srv *appServer, fs che
 		}
 		return hint, nil
 	}
-	if head.Kind == agentstate.SessionPublicationReset {
-		return checkpointHandle{}, nil
-	}
 	if head.Kind != agentstate.SessionPublicationCheckpoint {
-		return checkpointHandle{}, agentstate.ErrSessionStateOutOfSync
+		return hint, nil
 	}
 	if srv != nil {
 		warm := srv.checkpointHandle(input.ThreadID)
@@ -160,11 +172,17 @@ func (d *Driver) prepareCheckpointAt(ctx context.Context, srv *appServer, fs che
 		restored = checkpointHandle{RunID: state.ThroughRunID, NativeID: state.AgentSessionID, Path: path.Join(root, state.TranscriptPath)}
 		return nil
 	})
+	if err == nil && !found {
+		err = agentstate.ErrSessionStateOutOfSync
+	}
+	if errors.Is(err, agentstate.ErrSessionStateOutOfSync) || errors.Is(err, errThreadStillLoaded) {
+		d.logger.WarnContext(ctx, "codex checkpoint cannot be restored; continuing from codex's own files",
+			slog.String("bot_id", input.BotID), slog.String("session_id", input.ThreadID),
+			slog.String("head_run_id", head.RunID), slog.Any("error", err))
+		return hint, nil
+	}
 	if err != nil {
 		return checkpointHandle{}, err
-	}
-	if !found {
-		return checkpointHandle{}, agentstate.ErrSessionStateOutOfSync
 	}
 	return restored, nil
 }
@@ -190,6 +208,31 @@ func (d *Driver) stageCheckpoint(ctx context.Context, srv *appServer, input exte
 	}
 	srv.rememberCheckpoint(input.ThreadID, checkpointHandle{RunID: input.RunID, NativeID: nativeID, Path: *response.Thread.Path})
 	return nil
+}
+
+// checkpointTurn stages the native state a settled turn left behind. A turn the
+// user interrupted still owns native history, including its input, and
+// restoring an older snapshot over it would make codex forget a round the user
+// can see.
+//
+// A capture problem says nothing about the round, so it never fails the turn:
+// failing here used to drop a finished reply together with the user's message.
+// A completed turn declines instead — its round publishes a reset and the
+// thread carries on from codex's own files. An unfinished turn reports none:
+// the previous head stays canonical and the next turn restores it, discarding
+// only the unfinished round.
+func (d *Driver) checkpointTurn(ctx context.Context, srv *appServer, input external.PromptInput, nativeID string, terminal protocol.Turn) external.CheckpointOutcome {
+	err := d.stageCheckpoint(ctx, srv, input, nativeID, terminal.ID)
+	if err == nil {
+		return external.CheckpointStaged
+	}
+	d.logger.WarnContext(ctx, "codex checkpoint staging failed",
+		slog.String("bot_id", input.BotID), slog.String("session_id", input.ThreadID),
+		slog.String("turn_status", string(terminal.Status)), slog.Any("error", err))
+	if terminal.Status == protocol.TurnStatusCompleted {
+		return external.CheckpointDeclined
+	}
+	return external.CheckpointNone
 }
 
 func (d *Driver) stageRollout(ctx context.Context, fs checkpointFS, input external.PromptInput, nativeID, fullPath, turnID string) error {
@@ -342,7 +385,9 @@ func scanRollout(ctx context.Context, fs checkpointFS, root, rel string, canonic
 			break
 		}
 		if err != nil {
-			if !complete {
+			// A torn tail completes on the next flush; an oversized record never
+			// shrinks, so polling for it only burns the whole staging budget.
+			if !complete && !errors.Is(err, bufio.ErrTooLong) {
 				return shape, errRolloutPending
 			}
 			return shape, err
@@ -369,7 +414,7 @@ func scanRollout(ctx context.Context, fs checkpointFS, root, rel string, canonic
 				return shape, err
 			}
 			if record.Type == "event_msg" && record.Payload.TurnID == terminalID &&
-				(record.Payload.Type == "task_complete" || record.Payload.Type == "turn_complete") {
+				(record.Payload.Type == "task_complete" || record.Payload.Type == "turn_complete" || record.Payload.Type == "turn_aborted") {
 				complete = true
 				break
 			}

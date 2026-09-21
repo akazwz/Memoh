@@ -201,11 +201,14 @@ func TestCheckpointRestoreUsesPublishedVersionAndRepairsCache(t *testing.T) {
 	}
 }
 
-func TestCheckpointRejectsMissingCommittedStateAndUnsafePaths(t *testing.T) {
+func TestCheckpointSurvivesMissingCommittedStateAndRejectsUnsafePaths(t *testing.T) {
 	d, fs, store, input, ctx := checkpointFixture(t)
 	store.head = agentstate.SessionPublicationHead{RunID: "committed", Kind: agentstate.SessionPublicationCheckpoint}
-	if _, err := d.prepareCheckpoint(ctx, &appServer{}, fs, input); !errors.Is(err, agentstate.ErrSessionStateOutOfSync) {
-		t.Fatalf("missing checkpoint: %v", err)
+	input.RuntimeMetadata = map[string]any{metadataThreadIDKey: "native"}
+	// The missing rows are just as missing on every later turn, so failing
+	// would never clear; codex's own files still hold the conversation.
+	if h, err := d.prepareCheckpoint(ctx, &appServer{}, fs, input); err != nil || h != (checkpointHandle{NativeID: "native"}) {
+		t.Fatalf("missing checkpoint: %+v, %v", h, err)
 	}
 	for _, rel := range []string{"../auth.jsonl", "sessions/../../auth.jsonl", "/sessions/rollout.jsonl", "sessions/./rollout.jsonl", "sessions/rollout.json", "sessions/rollout\\bad.jsonl"} {
 		if validateRolloutPath(rel) == nil {
@@ -247,11 +250,13 @@ func TestCheckpointDistinguishesLegacyAndUncommittedNewThreads(t *testing.T) {
 	if err != nil || h.NativeID != "" {
 		t.Fatalf("uncommitted new thread must not be resumed: %+v, %v", h, err)
 	}
+	// A reset only says its run left no snapshot; the turn behind it
+	// completed, so codex's own files are its native side.
 	store.head = agentstate.SessionPublicationHead{RunID: "reset", Kind: agentstate.SessionPublicationReset}
 	input.RuntimeMetadata[metadataCheckpointRequiredKey] = false
 	h, err = d.prepareCheckpoint(ctx, &appServer{}, fs, input)
-	if err != nil || h.NativeID != "" {
-		t.Fatalf("reset must discard the native hint: %+v, %v", h, err)
+	if err != nil || h.NativeID != "local-only" {
+		t.Fatalf("reset must keep resuming from codex's files: %+v, %v", h, err)
 	}
 	if err := validateRolloutPath("state/sessions/2025/01/01/rollout-native.jsonl"); err != nil {
 		t.Fatalf("original ACP checkpoint root: %v", err)

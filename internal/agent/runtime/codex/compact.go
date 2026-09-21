@@ -47,11 +47,8 @@ func (d *Driver) Compact(ctx context.Context, input external.PromptInput) (exter
 	defer srv.unregisterTurn(threadID, turn)
 	metadata, err := awaitCompaction(ctx, srv.conn, turn, srv.proc.Done(), func() { d.cancelOperation(srv, input, turn) })
 	result := external.CompactionResult{RuntimeMetadata: metadata}
-	if err == nil && d.stateStore != nil {
-		if err := d.stageCheckpoint(ctx, srv, input, threadID, turn.currentTurnID()); err != nil {
-			return result, checkpointError(err)
-		}
-		result.Checkpoint = external.CheckpointStaged
+	if terminal, ok := turn.capturableTurn(); err == nil && ok && d.stateStore != nil {
+		result.Checkpoint = d.checkpointTurn(ctx, srv, input, threadID, terminal)
 	}
 	return result, err
 }

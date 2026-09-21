@@ -434,16 +434,12 @@ func (s *Service) streamRuntimeWS(ctx context.Context, driver external.Driver, r
 			slog.Any("error", err),
 		)
 		cancelPending()
-		if isRuntimeConfigurationError(err) {
-			// Configuration-class failure: nothing ran, so persist nothing.
-			// Repeated attempts must not pile failure rounds into history.
-			cleanupProjections()
-			cleanupLeadingUser()
-			return err
-		}
 		if streamCtx.Err() != nil {
 			// A user stop or client disconnect: keep the partial output
-			// unannotated; the turn simply did not complete.
+			// unannotated; the turn simply did not complete. This comes before
+			// the configuration check because a driver still setting up reports
+			// the cancellation under whatever code that stage wraps its errors
+			// in, and the user's message must survive their own stop.
 			abortedReq := req
 			abortedReq.SkipMemoryExtraction = true
 			if persistErr := s.persistRuntimeRound(context.WithoutCancel(ctx), abortedReq, runtimeType, projectPath, result, nil, false, contextLifecycle, takeTerminalReasoningTiming(reasoningTiming, native.EventAgentAbort)); persistErr != nil {
@@ -458,6 +454,13 @@ func (s *Service) streamRuntimeWS(ctx context.Context, driver external.Driver, r
 			emitWithContext(ctx, native.StreamEvent{Type: native.EventTextEnd})
 			emitWithContext(ctx, runtimeTerminalStreamEvent(native.EventAbort, result))
 			return nil
+		}
+		if isRuntimeConfigurationError(err) && !runtimeTurnRan(result) {
+			// Configuration-class failure: nothing ran, so persist nothing.
+			// Repeated attempts must not pile failure rounds into history.
+			cleanupProjections()
+			cleanupLeadingUser()
+			return err
 		}
 		failedResult, failureDelta := runtimeFailureResult(result, err)
 		if failureDelta != "" {
@@ -704,7 +707,7 @@ func (s *Service) triggerScheduleRuntime(ctx context.Context, botID string, payl
 	}
 	if promptErr != nil {
 		s.cancelPendingRuntimeApprovals(context.WithoutCancel(ctx), req, "tool approval cancelled: the scheduled run ended before a decision arrived")
-		if isRuntimeConfigurationError(promptErr) {
+		if isRuntimeConfigurationError(promptErr) && !runtimeTurnRan(result) {
 			// Configuration-class failure: nothing ran; the schedule log keeps
 			// the failure record without polluting the session history.
 			if leadingUser != nil {
@@ -936,11 +939,17 @@ func (s *Service) persistRuntimeRound(
 		metadataByIndex[lastAssistantIndex+metadataOffset]["agent_turn_id"] = agentTurnID
 		agentTurnID = "" // Do not bulk-assign this anchor to earlier assistant rows.
 	}
+	// A staged snapshot is the native side of exactly this round, so the head
+	// follows it however the turn ended; otherwise the next turn would restore
+	// an older snapshot over a round the user can see. A declined capture only
+	// resets after a completed turn: ACP declines on every result, and an
+	// unfinished round of it must keep the head its warm session is fenced on.
 	var publication *messagepkg.AgentPublication
-	if promptErr == nil && turnCompleted && lastAssistantIndex >= 0 && result.Checkpoint != external.CheckpointNone {
+	completed := promptErr == nil && turnCompleted
+	if lastAssistantIndex >= 0 && (result.Checkpoint == external.CheckpointStaged || (completed && result.Checkpoint == external.CheckpointDeclined)) {
 		publication = &messagepkg.AgentPublication{
 			RunID:           req.RunID,
-			CheckpointReset: result.Checkpoint != external.CheckpointStaged,
+			CheckpointReset: result.Checkpoint == external.CheckpointDeclined,
 		}
 	}
 	skipMemory := promptErr != nil || req.UserMessagePersisted || req.ReusePersistedUserMessage || req.SkipMemoryExtraction
@@ -998,6 +1007,14 @@ func runtimeUserFacingFailureMessage(err error) string {
 		return "The external agent could not complete this turn (" + code + ")."
 	}
 	return "The external agent could not complete this turn."
+}
+
+// runtimeTurnRan reports evidence that the runtime accepted the turn. "Nothing
+// ran" is otherwise only a driver's promise about its error codes, and a wrong
+// code must cost a stored failure round, never the user's message. A declined
+// checkpoint is no evidence: ACP reports it on every result.
+func runtimeTurnRan(result external.PromptResult) bool {
+	return strings.TrimSpace(result.AgentTurnID) != "" || len(result.Output) > 0 || result.Checkpoint == external.CheckpointStaged
 }
 
 // isRuntimeConfigurationError reports failures where nothing ran:

@@ -15,6 +15,7 @@ import (
 
 	"github.com/felinics/memoh/internal/agent/decision/approval"
 	agentfeedback "github.com/felinics/memoh/internal/agent/decision/feedback"
+	"github.com/felinics/memoh/internal/agent/event"
 	"github.com/felinics/memoh/internal/agent/runtime/agentstate"
 	"github.com/felinics/memoh/internal/agent/runtime/codex/protocol"
 	"github.com/felinics/memoh/internal/agent/runtime/external"
@@ -383,12 +384,10 @@ func (d *Driver) Prompt(ctx context.Context, input external.PromptInput) (extern
 	if cfg.Auth == AuthChatGPT {
 		d.persistChatGPTCredential(ctx, srv.client, input, credential)
 	}
-	if resultErr == nil && result.TurnCompleted && d.stateStore != nil && !input.ForceFreshRuntime {
+	if terminal, ok := turn.capturableTurn(); ok && d.stateStore != nil && !input.ForceFreshRuntime {
+		// A goal continuation must not append to the rollout being captured.
 		d.pauseGoalOnExit(ctx, srv, turn)
-		if err := d.stageCheckpoint(ctx, srv, input, threadID, turn.currentTurnID()); err != nil {
-			return result, checkpointError(err)
-		}
-		result.Checkpoint = external.CheckpointStaged
+		result.Checkpoint = d.checkpointTurn(ctx, srv, input, threadID, terminal)
 	}
 	if ctx.Err() != nil && resultErr == nil {
 		// The application layer distinguishes stop from failure by context
@@ -443,37 +442,7 @@ func (d *Driver) ensureThread(ctx context.Context, srv *appServer, cfg Config, i
 	}
 
 	if threadID == "" {
-		toolsConfig, bindTools, err := d.prepareThreadTools(srv, input)
-		if err != nil {
-			return "", false, apperror.Wrap(apperror.CodeExternalRuntimeUnavailable, err, map[string]string{"runtime": RuntimeType})
-		}
-		historyMode := protocol.ThreadHistoryModeLegacy
-		params := protocol.ThreadStartParams{
-			HistoryMode:       &historyMode,
-			Cwd:               &cwd,
-			ApprovalPolicy:    &preset.approval,
-			ApprovalsReviewer: &preset.reviewer,
-			Sandbox:           &preset.sandbox,
-			Config:            toolsConfig,
-		}
-		if cfg.Model != "" {
-			params.Model = &cfg.Model
-		}
-		var resp protocol.ThreadStartResponse
-		if err := srv.conn.Call(ctx, protocol.MethodThreadStart, params, &resp); err != nil {
-			bindTools("")
-			return "", false, fmt.Errorf("codex thread/start: %w", err)
-		}
-		threadID = resp.Thread.ID
-		if threadID == "" {
-			bindTools("")
-			return "", false, errors.New("codex thread/start returned no thread id")
-		}
-		bindTools(threadID)
-		srv.markThreadLoaded(threadID)
-		srv.rememberThreadSettings(threadID, resp.Model, resp.ReasoningEffort)
-		srv.setThreadToolless(threadID, toolsConfig == nil)
-		return threadID, true, nil
+		return d.startThread(ctx, srv, cfg, input, cwd, preset)
 	}
 
 	if srv.threadLoaded(threadID) {
@@ -496,11 +465,7 @@ func (d *Driver) ensureThread(ctx context.Context, srv *appServer, cfg Config, i
 	}
 	var resp protocol.ThreadResumeResponse
 	err = srv.conn.Call(ctx, protocol.MethodThreadResume, params, &resp)
-	if err == nil {
-		if resp.Thread.ID != threadID {
-			bindTools("")
-			return "", false, checkpointError(errors.New("codex resumed a different native thread"))
-		}
+	if err == nil && resp.Thread.ID == threadID {
 		bindTools(threadID)
 		srv.markThreadLoaded(threadID)
 		srv.rememberThreadSettings(threadID, resp.Model, resp.ReasoningEffort)
@@ -508,7 +473,62 @@ func (d *Driver) ensureThread(ctx context.Context, srv *appServer, cfg Config, i
 		return threadID, threadID != metadataString(input.RuntimeMetadata, metadataThreadIDKey), nil
 	}
 	bindTools("")
-	return "", false, checkpointError(fmt.Errorf("codex thread/resume: %w", err))
+	var refused *protocol.RPCError
+	if err != nil && !errors.As(err, &refused) {
+		// A transport failure says nothing about the thread; a retry may resume it.
+		return "", false, checkpointError(fmt.Errorf("codex thread/resume: %w", err))
+	}
+	if input.Command == "compact" {
+		return "", false, external.ErrThreadUnavailable
+	}
+	// Codex itself refused the thread, or resumed a different one, and will do
+	// so again on every later turn: its memory of this conversation is already
+	// gone. A session that can never run again is worse than one that lost its
+	// runtime-side context, so start over and say so.
+	d.logger.WarnContext(ctx, "codex thread cannot be resumed; starting a fresh thread",
+		slog.String("session_id", input.ThreadID), slog.String("thread_id", threadID),
+		slog.String("resumed_thread_id", resp.Thread.ID), slog.Any("error", err))
+	if input.Sink != nil {
+		input.Sink.EmitStreamEvent(event.StreamEvent{
+			Type:  event.RuntimeNotice,
+			Code:  "native_history_lost",
+			Delta: "Codex could not resume this conversation's session and started a new one. It does not remember the earlier messages shown here.",
+		})
+	}
+	return d.startThread(ctx, srv, cfg, input, cwd, preset)
+}
+
+func (d *Driver) startThread(ctx context.Context, srv *appServer, cfg Config, input external.PromptInput, cwd string, preset permissionPreset) (string, bool, error) {
+	toolsConfig, bindTools, err := d.prepareThreadTools(srv, input)
+	if err != nil {
+		return "", false, apperror.Wrap(apperror.CodeExternalRuntimeUnavailable, err, map[string]string{"runtime": RuntimeType})
+	}
+	historyMode := protocol.ThreadHistoryModeLegacy
+	params := protocol.ThreadStartParams{
+		HistoryMode:       &historyMode,
+		Cwd:               &cwd,
+		ApprovalPolicy:    &preset.approval,
+		ApprovalsReviewer: &preset.reviewer,
+		Sandbox:           &preset.sandbox,
+		Config:            toolsConfig,
+	}
+	if cfg.Model != "" {
+		params.Model = &cfg.Model
+	}
+	var resp protocol.ThreadStartResponse
+	if err := srv.conn.Call(ctx, protocol.MethodThreadStart, params, &resp); err != nil {
+		bindTools("")
+		return "", false, fmt.Errorf("codex thread/start: %w", err)
+	}
+	if resp.Thread.ID == "" {
+		bindTools("")
+		return "", false, errors.New("codex thread/start returned no thread id")
+	}
+	bindTools(resp.Thread.ID)
+	srv.markThreadLoaded(resp.Thread.ID)
+	srv.rememberThreadSettings(resp.Thread.ID, resp.Model, resp.ReasoningEffort)
+	srv.setThreadToolless(resp.Thread.ID, toolsConfig == nil)
+	return resp.Thread.ID, true, nil
 }
 
 // interruptTurn asks the app-server to stop the running turn; it runs on a
