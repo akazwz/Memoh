@@ -5,8 +5,3 @@
 DROP TABLE IF EXISTS public.agent_session_state_lines;
 DROP TABLE IF EXISTS public.agent_session_states;
 ALTER TABLE public.agent_session_publications DROP COLUMN IF EXISTS checkpoint_reset;
-
--- Pre-0145 names are absent on upgraded installations; remove any legacy remnants.
-DROP TABLE IF EXISTS public.acp_session_state_lines;
-DROP TABLE IF EXISTS public.acp_session_states;
-DROP TABLE IF EXISTS public.acp_session_publications;
