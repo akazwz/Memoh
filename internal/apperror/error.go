@@ -509,10 +509,10 @@ var catalog = map[Code]Definition{
 		HTTPStatus: http.StatusServiceUnavailable,
 		Detail:     "The external agent runtime for this session is not available on this server.",
 	},
-	// The driver could not carry the external agent's own session (Codex
-	// rollout, Claude Code transcript) across turns: restoring it, resuming
-	// its thread, or checkpointing it failed. The turn is treated as not run;
-	// the user retries or starts a fresh conversation.
+	// The request to resume the external agent's own session (a Codex thread)
+	// failed before the agent could accept or refuse it, so a retry may still
+	// resume it. The turn is treated as not run; the user retries or starts a
+	// fresh conversation.
 	CodeExternalRuntimeSessionResumeFailed: {
 		HTTPStatus: http.StatusBadGateway,
 		Detail:     "The session could not be resumed. Try again or start a new conversation.",

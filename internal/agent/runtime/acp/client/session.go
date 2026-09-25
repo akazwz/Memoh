@@ -97,7 +97,6 @@ type PromptOptions struct {
 }
 
 type Session struct {
-	logger                    *slog.Logger
 	proc                      *bridgeProcess
 	callbacks                 *clientCallbacks
 	conn                      *clientConnection
@@ -234,7 +233,6 @@ func (r *Runner) StartSession(ctx context.Context, req StartRequest, sink EventS
 	}
 
 	proc, err := startBridgeProcess(lifecycleCtx, client, command, args, projectPath, timeout, processOptions{
-		Backend:          backend,
 		BotID:            req.BotID,
 		AgentID:          req.AgentID,
 		SetupMode:        req.SetupMode,
@@ -359,7 +357,6 @@ func (r *Runner) StartSession(ctx context.Context, req StartRequest, sink EventS
 		return nil, err
 	}
 	clientSession := &Session{
-		logger:                    r.logger,
 		proc:                      proc,
 		callbacks:                 callbacks,
 		conn:                      conn,
@@ -399,7 +396,6 @@ func (r *Runner) StartSession(ctx context.Context, req StartRequest, sink EventS
 		}
 	}
 
-	proc.Activate()
 	finishStartup()
 	return clientSession, nil
 }
