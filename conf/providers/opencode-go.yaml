@@ -2,16 +2,33 @@ name: OpenCode Go
 client_type: opencode-go
 base_url: https://opencode.ai/zen/go/v1
 
-# Models: https://opencode.ai/docs/go/#endpoints; capabilities: models.dev (2026-09-18).
+# Models: https://opencode.ai/docs/go/#endpoints, less time-limited free models;
+# capabilities: models.dev (2026-09-29).
 # Twilight routes these to their protocols; unlisted models use Completions.
 # Use provider-managed reasoning except for explicitly supported Go controls.
 models:
+  - model_id: grok-4.7
+    name: Grok 4.7
+    type: chat
+    config:
+      compatibilities: [vision, file-input, tool-call, reasoning]
+      context_window: 500000
+      thinking_mode: always
+
   - model_id: grok-4.6
     name: Grok 4.6
     type: chat
     config:
       compatibilities: [vision, tool-call, reasoning]
       context_window: 500000
+      thinking_mode: always
+
+  - model_id: gpt-6-luna
+    name: GPT-6 Luna
+    type: chat
+    config:
+      compatibilities: [vision, file-input, tool-call, reasoning]
+      context_window: 1050000
       thinking_mode: always
 
   - model_id: gpt-5.6-luna
@@ -117,6 +134,22 @@ models:
     config:
       compatibilities: [vision, tool-call, reasoning]
       context_window: 1000000
+      thinking_mode: always
+
+  - model_id: mimo-v2.6-flash
+    name: MiMo V2.6 Flash
+    type: chat
+    config:
+      compatibilities: [vision, tool-call, reasoning]
+      context_window: 1048576
+      thinking_mode: always
+
+  - model_id: mimo-v2.6-pro
+    name: MiMo V2.6 Pro
+    type: chat
+    config:
+      compatibilities: [vision, tool-call, reasoning]
+      context_window: 1048576
       thinking_mode: always
 
   - model_id: mimo-v2.5
