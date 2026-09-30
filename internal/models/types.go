@@ -267,7 +267,6 @@ func (m *Model) ResolveThinkingMode() string {
 // It is the single source every surface reads — the web picker, /reasoning, and
 // the API all render this rather than deriving their own answer.
 func (m *Model) ReasoningOptions(clientType string) reasoning.Options {
-	clientType = ResolveModelClientType(clientType, m.ModelID)
 	mode := m.ResolveThinkingMode()
 	if clientType == string(ClientTypeGoogleGenerativeAI) &&
 		mode != reasoning.ModeAlways &&

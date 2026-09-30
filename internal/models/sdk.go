@@ -188,14 +188,14 @@ func appendChatCompletionsCompat(
 	}
 }
 
-// ApplyReasoningToRequest sets Request.ReasoningEffort from cfg when
-// ReasoningEffortParam reports a value. It only ever sets an effort string
-// (output_config.effort for Anthropic, reasoning.effort for OpenAI); the
-// adaptive thinking flag is set at provider construction time in
-// NewSDKChatModel, and no token budgets are sent.
+// ApplyReasoningToRequest translates the resolved decision into the provider
+// effort and, for OpenCode Go, the catalog-declared thinking control.
 func ApplyReasoningToRequest(req *sdk.Request, cfg SDKModelConfig) {
 	if req == nil {
 		return
+	}
+	if cfg.ClientType == string(ClientTypeOpenCodeGo) {
+		applyOpenCodeGoThinking(req, cfg)
 	}
 	if effort, ok := ReasoningEffortParam(cfg); ok {
 		req.ReasoningEffort = &effort
@@ -210,7 +210,10 @@ func ReasoningEffortParam(cfg SDKModelConfig) (string, bool) {
 	if rc == nil {
 		return "", false
 	}
-	ct := ClientType(ResolveModelClientType(cfg.ClientType, cfg.ModelID))
+	if cfg.ClientType == string(ClientTypeOpenCodeGo) {
+		return openCodeGoEffortParam(cfg)
+	}
+	ct := ClientType(cfg.ClientType)
 
 	// DeepSeek and MiniMax keep the generic Chat Completions transport but gate
 	// thinking via a toggle rather than reasoning_effort. Their SDK compat layer

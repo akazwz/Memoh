@@ -4,9 +4,10 @@ icon: opencode-go
 base_url: https://opencode.ai/zen/go/v1
 
 # Models: https://opencode.ai/docs/go/#endpoints, less time-limited free models;
-# capabilities: models.dev (2026-09-29).
+# capabilities: models.dev (2026-09-30, 1a54bed6f00935e2d15ef08952bd911fcb98c262).
 # Twilight routes these to their protocols; unlisted models use Completions.
-# Use provider-managed reasoning except for explicitly supported Go controls.
+# Keep provider-managed reasoning where the catalog exposes no controls.
+# Budget-based models use Memoh's low/medium/high token allowances.
 models:
   - model_id: grok-4.7
     name: Grok 4.7
@@ -14,7 +15,9 @@ models:
     config:
       compatibilities: [vision, file-input, tool-call, reasoning]
       context_window: 500000
-      thinking_mode: always
+      thinking_mode: toggle
+      reasoning_efforts: [low, medium, high, xhigh]
+      reasoning_dialect: tier
 
   - model_id: grok-4.6
     name: Grok 4.6
@@ -22,7 +25,9 @@ models:
     config:
       compatibilities: [vision, tool-call, reasoning]
       context_window: 500000
-      thinking_mode: always
+      thinking_mode: toggle
+      reasoning_efforts: [low, medium, high, xhigh]
+      reasoning_dialect: tier
 
   - model_id: gpt-6-luna
     name: GPT-6 Luna
@@ -30,7 +35,9 @@ models:
     config:
       compatibilities: [vision, file-input, tool-call, reasoning]
       context_window: 1050000
-      thinking_mode: always
+      thinking_mode: toggle
+      reasoning_efforts: [disable, low, medium, high, xhigh, max]
+      reasoning_dialect: tier
 
   - model_id: gpt-5.6-luna
     name: GPT-5.6 Luna
@@ -39,7 +46,8 @@ models:
       compatibilities: [vision, file-input, tool-call, reasoning]
       context_window: 1050000
       thinking_mode: toggle
-      reasoning_efforts: [disable, low, medium, high, xhigh]
+      reasoning_efforts: [disable, low, medium, high, xhigh, max]
+      reasoning_dialect: tier
 
   - model_id: glm-5.3-flash
     name: GLM-5.3-Flash
@@ -47,7 +55,9 @@ models:
     config:
       compatibilities: [vision, tool-call, reasoning]
       context_window: 1000000
-      thinking_mode: always
+      thinking_mode: toggle
+      reasoning_efforts: [low, high, max]
+      reasoning_dialect: tier
 
   - model_id: glm-5.3
     name: GLM-5.3
@@ -55,7 +65,9 @@ models:
     config:
       compatibilities: [tool-call, reasoning]
       context_window: 1000000
-      thinking_mode: always
+      thinking_mode: toggle
+      reasoning_efforts: [low, high, max]
+      reasoning_dialect: tier
 
   - model_id: glm-5.2
     name: GLM-5.2
@@ -63,7 +75,9 @@ models:
     config:
       compatibilities: [tool-call, reasoning]
       context_window: 1000000
-      thinking_mode: always
+      thinking_mode: toggle
+      reasoning_efforts: [high, max]
+      reasoning_dialect: tier
 
   - model_id: glm-5.1
     name: GLM-5.1
@@ -79,7 +93,9 @@ models:
     config:
       compatibilities: [vision, tool-call, reasoning]
       context_window: 1048576
-      thinking_mode: always
+      thinking_mode: toggle
+      reasoning_efforts: [max]
+      reasoning_dialect: tier
 
   - model_id: kimi-k2.7-code
     name: Kimi K2.7 Code
@@ -103,7 +119,10 @@ models:
     config:
       compatibilities: [tool-call, reasoning]
       context_window: 1000000
-      thinking_mode: always
+      thinking_mode: toggle
+      reasoning_efforts: [disable, enabled]
+      reasoning_dialect: toggle
+      reasoning_off_support: accepted
 
   - model_id: deepseek-v4.1-flash
     name: DeepSeek V4.1 Flash
@@ -111,7 +130,9 @@ models:
     config:
       compatibilities: [vision, tool-call, reasoning]
       context_window: 1000000
-      thinking_mode: always
+      thinking_mode: toggle
+      reasoning_efforts: [low, high, max]
+      reasoning_dialect: tier
 
   - model_id: deepseek-v4-pro
     name: DeepSeek V4 Pro (New)
@@ -119,7 +140,9 @@ models:
     config:
       compatibilities: [tool-call, reasoning]
       context_window: 1000000
-      thinking_mode: always
+      thinking_mode: toggle
+      reasoning_efforts: [high, max]
+      reasoning_dialect: tier
 
   - model_id: deepseek-v4-flash
     name: DeepSeek V4 Flash
@@ -127,7 +150,9 @@ models:
     config:
       compatibilities: [tool-call, reasoning]
       context_window: 1000000
-      thinking_mode: always
+      thinking_mode: toggle
+      reasoning_efforts: [low, high, max]
+      reasoning_dialect: tier
 
   - model_id: deepseek-v4-flash-vision-exp
     name: DeepSeek V4 Flash Vision Exp
@@ -135,7 +160,10 @@ models:
     config:
       compatibilities: [vision, tool-call, reasoning]
       context_window: 1000000
-      thinking_mode: always
+      thinking_mode: toggle
+      reasoning_efforts: [disable, low, high, max]
+      reasoning_dialect: tier
+      reasoning_off_support: accepted
 
   - model_id: mimo-v2.6-flash
     name: MiMo V2.6 Flash
@@ -175,7 +203,10 @@ models:
     config:
       compatibilities: [vision, tool-call, reasoning]
       context_window: 1000000
-      thinking_mode: always
+      thinking_mode: toggle
+      reasoning_efforts: [disable, enabled]
+      reasoning_dialect: toggle
+      reasoning_off_support: accepted
 
   - model_id: minimax-m2.7
     name: MiniMax-M2.7
@@ -191,7 +222,9 @@ models:
     config:
       compatibilities: [vision, file-input, tool-call, reasoning]
       context_window: 1048576
-      thinking_mode: always
+      thinking_mode: toggle
+      reasoning_efforts: [minimal, low, medium, high, xhigh]
+      reasoning_dialect: tier
 
   - model_id: muse-spark-1.2-contributor
     name: Muse Spark 1.2 Contributor
@@ -199,7 +232,9 @@ models:
     config:
       compatibilities: [vision, file-input, tool-call, reasoning]
       context_window: 1048576
-      thinking_mode: always
+      thinking_mode: toggle
+      reasoning_efforts: [minimal, low, medium, high, xhigh]
+      reasoning_dialect: tier
 
   - model_id: qwen3.8-max
     name: Qwen3.8 Max
@@ -207,7 +242,10 @@ models:
     config:
       compatibilities: [vision, tool-call, reasoning]
       context_window: 1000000
-      thinking_mode: always
+      thinking_mode: toggle
+      reasoning_efforts: [disable, low, medium, xhigh]
+      reasoning_dialect: tier
+      reasoning_off_support: accepted
 
   - model_id: qwen3.8-flash
     name: Qwen3.8 Flash
@@ -215,7 +253,10 @@ models:
     config:
       compatibilities: [vision, tool-call, reasoning]
       context_window: 1000000
-      thinking_mode: always
+      thinking_mode: toggle
+      reasoning_efforts: [disable, low, medium, xhigh]
+      reasoning_dialect: tier
+      reasoning_off_support: accepted
 
   - model_id: qwen3.7-plus
     name: Qwen3.7 Plus
@@ -223,7 +264,11 @@ models:
     config:
       compatibilities: [vision, tool-call, reasoning]
       context_window: 1000000
-      thinking_mode: always
+      thinking_mode: toggle
+      reasoning_efforts: [disable, low, medium, high]
+      reasoning_dialect: budget
+      reasoning_off_support: accepted
+      thinking_budget_max: 262144
 
   - model_id: hy4-preview
     name: Hy4 preview
@@ -231,7 +276,9 @@ models:
     config:
       compatibilities: [tool-call, reasoning]
       context_window: 1024000
-      thinking_mode: always
+      thinking_mode: toggle
+      reasoning_efforts: [disable, high]
+      reasoning_dialect: tier
 
   - model_id: hy3
     name: Hy3
@@ -239,4 +286,6 @@ models:
     config:
       compatibilities: [tool-call, reasoning]
       context_window: 256000
-      thinking_mode: always
+      thinking_mode: toggle
+      reasoning_efforts: [disable, low, high]
+      reasoning_dialect: tier
