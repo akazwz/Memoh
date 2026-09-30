@@ -17,6 +17,7 @@ export const providerPresets: ProviderPreset[] = [
     name: 'OpenCode Go',
     clientType: 'opencode-go',
     baseUrl: 'https://opencode.ai/zen/go/v1',
+    icon: 'opencode-go',
     source: 'opencode-go.yaml',
   },
   {

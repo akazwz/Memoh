@@ -630,6 +630,10 @@ func (s *Service) toGetResponse(provider sqlc.Provider) GetResponse {
 	if provider.Icon.Valid {
 		icon = provider.Icon.String
 	}
+	// Instances created before the Go preset had an icon retain an empty value.
+	if icon == "" && provider.ClientType == string(models.ClientTypeOpenCodeGo) {
+		icon = "opencode-go"
+	}
 	var templateID string
 	if provider.ProviderTemplateID.Valid {
 		templateID = provider.ProviderTemplateID.String()

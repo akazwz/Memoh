@@ -1,5 +1,6 @@
 name: OpenCode Go
 client_type: opencode-go
+icon: opencode-go
 base_url: https://opencode.ai/zen/go/v1
 
 # Models: https://opencode.ai/docs/go/#endpoints, less time-limited free models;
