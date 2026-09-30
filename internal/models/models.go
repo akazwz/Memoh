@@ -48,8 +48,11 @@ func (s *Service) SetChatGPTSessions(sessions *chatgptplan.SessionService) { s.p
 func (s *Service) Create(ctx context.Context, req AddRequest) (AddResponse, error) {
 	model := req.toModel(ResolveEnable(req.Enable, true))
 	model.Config = normalizeModelConfig(model.Config)
+	if err := s.fillEmbeddingDimensions(ctx, &model); err != nil {
+		return AddResponse{}, err
+	}
 	if err := model.Validate(); err != nil {
-		return AddResponse{}, fmt.Errorf("validation failed: %w", err)
+		return AddResponse{}, fmt.Errorf("%w: %w", ErrValidation, err)
 	}
 
 	providerID, err := db.ParseUUID(model.ProviderID)
@@ -312,8 +315,11 @@ func (s *Service) UpdateByID(ctx context.Context, id string, req UpdateRequest) 
 
 	model := req.toModel(ResolveEnable(req.Enable, current.Enable))
 	model.Config = normalizeModelConfig(model.Config)
+	if err := s.fillEmbeddingDimensions(ctx, &model); err != nil {
+		return GetResponse{}, err
+	}
 	if err := model.Validate(); err != nil {
-		return GetResponse{}, fmt.Errorf("validation failed: %w", err)
+		return GetResponse{}, fmt.Errorf("%w: %w", ErrValidation, err)
 	}
 
 	providerID, err := db.ParseUUID(model.ProviderID)
@@ -371,8 +377,11 @@ func (s *Service) UpdateByModelID(ctx context.Context, modelID string, req Updat
 
 	model := req.toModel(ResolveEnable(req.Enable, current.Enable))
 	model.Config = normalizeModelConfig(model.Config)
+	if err := s.fillEmbeddingDimensions(ctx, &model); err != nil {
+		return GetResponse{}, err
+	}
 	if err := model.Validate(); err != nil {
-		return GetResponse{}, fmt.Errorf("validation failed: %w", err)
+		return GetResponse{}, fmt.Errorf("%w: %w", ErrValidation, err)
 	}
 
 	providerID, err := db.ParseUUID(model.ProviderID)
