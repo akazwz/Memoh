@@ -2,12 +2,10 @@
 -- Restore the previous provider types without deleting configured providers.
 -- OpenCode Go cannot be converted to a single legacy protocol safely.
 
-DO $$
-BEGIN
-  IF EXISTS (SELECT 1 FROM public.providers WHERE client_type = 'opencode-go') THEN
-    RAISE EXCEPTION 'Remove OpenCode Go providers before rolling back migration 0160';
-  END IF;
-END $$;
+BEGIN;
+
+-- CHECK validation covers every team without request-scoped RLS queries.
+-- If Go providers remain, validation fails and the original constraint is kept.
 
 ALTER TABLE public.providers DROP CONSTRAINT IF EXISTS providers_client_type_check;
 ALTER TABLE public.providers ADD CONSTRAINT providers_client_type_check CHECK (client_type IN (
@@ -37,3 +35,5 @@ ALTER TABLE public.providers ADD CONSTRAINT providers_client_type_check CHECK (c
     'modelark-video',
     'volcengine-video'
   ));
+
+COMMIT;
