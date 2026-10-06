@@ -98,7 +98,7 @@ func (h *BotAgentsHandler) ListModels(c echo.Context) error {
 // @Failure 409 {object} apperror.Problem
 // @Router /bots/{bot_id}/agents [post].
 func (h *BotAgentsHandler) Create(c echo.Context) error {
-	botID, err := h.authorize(c, bots.PermissionManage)
+	bot, err := h.authorizeBot(c, bots.PermissionManage)
 	if err != nil {
 		return err
 	}
@@ -106,11 +106,11 @@ func (h *BotAgentsHandler) Create(c echo.Context) error {
 	if err := c.Bind(&req); err != nil {
 		return apperror.New(apperror.CodeBotAgentInvalidMetadata, nil)
 	}
-	agent, err := h.service.Create(c.Request().Context(), botID, req)
+	agent, err := h.service.Create(c.Request().Context(), bot.ID, req)
 	if err != nil {
 		return h.publicError("create", err)
 	}
-	return c.JSON(http.StatusCreated, h.withDependency(agent))
+	return c.JSON(http.StatusCreated, h.present(agent, bot))
 }
 
 // List godoc
@@ -123,15 +123,18 @@ func (h *BotAgentsHandler) Create(c echo.Context) error {
 // @Failure 403 {object} apperror.Problem
 // @Router /bots/{bot_id}/agents [get].
 func (h *BotAgentsHandler) List(c echo.Context) error {
-	botID, err := h.authorize(c, bots.PermissionChat)
+	bot, err := h.authorizeBot(c, bots.PermissionChat)
 	if err != nil {
 		return err
 	}
-	items, err := h.service.List(c.Request().Context(), botID)
+	items, err := h.service.List(c.Request().Context(), bot.ID)
 	if err != nil {
 		return h.publicError("list", err)
 	}
-	return c.JSON(http.StatusOK, botagents.ListResponse{Items: h.withDependencies(items)})
+	for i := range items {
+		items[i] = h.present(items[i], bot)
+	}
+	return c.JSON(http.StatusOK, botagents.ListResponse{Items: items})
 }
 
 // Get godoc
@@ -146,15 +149,15 @@ func (h *BotAgentsHandler) List(c echo.Context) error {
 // @Failure 404 {object} apperror.Problem
 // @Router /bots/{bot_id}/agents/{id} [get].
 func (h *BotAgentsHandler) Get(c echo.Context) error {
-	botID, err := h.authorize(c, bots.PermissionChat)
+	bot, err := h.authorizeBot(c, bots.PermissionChat)
 	if err != nil {
 		return err
 	}
-	agent, err := h.service.Get(c.Request().Context(), botID, strings.TrimSpace(c.Param("id")))
+	agent, err := h.service.Get(c.Request().Context(), bot.ID, strings.TrimSpace(c.Param("id")))
 	if err != nil {
 		return h.publicError("get", err)
 	}
-	return c.JSON(http.StatusOK, h.withDependency(agent))
+	return c.JSON(http.StatusOK, h.present(agent, bot))
 }
 
 // Update godoc
@@ -173,7 +176,7 @@ func (h *BotAgentsHandler) Get(c echo.Context) error {
 // @Failure 409 {object} apperror.Problem
 // @Router /bots/{bot_id}/agents/{id} [patch].
 func (h *BotAgentsHandler) Update(c echo.Context) error {
-	botID, err := h.authorize(c, bots.PermissionManage)
+	bot, err := h.authorizeBot(c, bots.PermissionManage)
 	if err != nil {
 		return err
 	}
@@ -181,14 +184,14 @@ func (h *BotAgentsHandler) Update(c echo.Context) error {
 	if err := c.Bind(&req); err != nil {
 		return apperror.New(apperror.CodeBotAgentInvalidMetadata, nil)
 	}
-	agent, err := h.service.Update(c.Request().Context(), botID, strings.TrimSpace(c.Param("id")), req)
+	agent, err := h.service.Update(c.Request().Context(), bot.ID, strings.TrimSpace(c.Param("id")), req)
 	if err != nil {
 		return h.publicError("update", err)
 	}
 	if req.Metadata != nil {
-		h.runtimes.ResetBotAgent(agent.Runtime, botID, agent.ID)
+		h.runtimes.ResetBotAgent(botagents.SessionRuntime(agent.Runtime), bot.ID, agent.ID)
 	}
-	return c.JSON(http.StatusOK, h.withDependency(agent))
+	return c.JSON(http.StatusOK, h.present(agent, bot))
 }
 
 // Delete godoc
@@ -225,18 +228,23 @@ func (h *BotAgentsHandler) Delete(c echo.Context) error {
 }
 
 func (h *BotAgentsHandler) authorize(c echo.Context, permission string) (string, error) {
-	channelIdentityID, err := RequireChannelIdentityID(c)
+	bot, err := h.authorizeBot(c, permission)
 	if err != nil {
 		return "", err
 	}
+	return bot.ID, nil
+}
+
+func (h *BotAgentsHandler) authorizeBot(c echo.Context, permission string) (bots.Bot, error) {
+	channelIdentityID, err := RequireChannelIdentityID(c)
+	if err != nil {
+		return bots.Bot{}, err
+	}
 	botID := strings.TrimSpace(c.Param("bot_id"))
 	if botID == "" {
-		return "", apperror.New(apperror.CodeBotAgentNotFound, nil)
+		return bots.Bot{}, apperror.New(apperror.CodeBotAgentNotFound, nil)
 	}
-	if _, err := AuthorizeBotAccessWithPermission(c.Request().Context(), h.botService, h.accountService, channelIdentityID, botID, permission); err != nil {
-		return "", err
-	}
-	return botID, nil
+	return AuthorizeBotAccessWithPermission(c.Request().Context(), h.botService, h.accountService, channelIdentityID, botID, permission)
 }
 
 func (*BotAgentsHandler) publicError(operation string, err error) error {
@@ -268,22 +276,16 @@ func botAgentHTTPError(err error) error {
 	return nil
 }
 
-// withDependency projects the driver-declared workspace dependency onto the
-// agent so the web can run the install preflight before
-// enabling it. Direct agents share the runtimekind vocabulary with their
-// driver (botagents.RuntimeCodex == codex.RuntimeType), so the agent's
-// runtime is the lookup key; runtimes without a declaration leave it nil.
-func (h *BotAgentsHandler) withDependency(agent botagents.BotAgent) botagents.BotAgent {
+// present decorates a stored Agent with what clients read but the row does
+// not hold. The driver-declared workspace dependency lets the web run the
+// install preflight before enabling it: direct agents share the runtimekind
+// vocabulary with their driver (botagents.RuntimeCodex == codex.RuntimeType),
+// so the agent's runtime is the lookup key and runtimes without a declaration
+// leave it nil. An ACP instance that predates per-instance setups gets the
+// setup it currently launches with.
+func (h *BotAgentsHandler) present(agent botagents.BotAgent, bot bots.Bot) botagents.BotAgent {
 	agent.Dependency = dependencyFor(h.runtimes.RequiredDependencies(), agent.Runtime)
-	return agent
-}
-
-func (h *BotAgentsHandler) withDependencies(agents []botagents.BotAgent) []botagents.BotAgent {
-	requirements := h.runtimes.RequiredDependencies()
-	for i := range agents {
-		agents[i].Dependency = dependencyFor(requirements, agents[i].Runtime)
-	}
-	return agents
+	return botagents.WithACPSetup(agent, bot.Metadata)
 }
 
 func dependencyFor(requirements map[string]external.DependencyRequirement, runtime string) *botagents.DependencyRequirement {

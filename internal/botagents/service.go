@@ -126,6 +126,13 @@ func (s *Service) Create(ctx context.Context, botID string, req CreateRequest) (
 	if err != nil {
 		return BotAgent{}, err
 	}
+	if runtime == RuntimeACP {
+		// Without its own managed fields a new instance would read the bot's
+		// legacy profile slot and launch another instance's command.
+		if _, owns := metadata[acpprofile.InstanceManagedKey]; !owns {
+			metadata[acpprofile.InstanceManagedKey] = map[string]any{}
+		}
+	}
 	payload, err := json.Marshal(metadata)
 	if err != nil {
 		return BotAgent{}, fmt.Errorf("marshal bot agent metadata: %w", err)
@@ -224,6 +231,61 @@ func (s *Service) FindActiveByProvider(ctx context.Context, botID, provider stri
 		return BotAgent{}, err
 	}
 	return fromRow(row)
+}
+
+// ResolveACPSetup returns the setup an ACP session launches with. A session
+// bound before agents became instances names only the provider and runs as
+// the bot's oldest active instance of it; a bot with no instance at all still
+// reads the legacy profile slot on its own metadata.
+func (s *Service) ResolveACPSetup(ctx context.Context, botID, botAgentID, provider string, botMetadata map[string]any) (acpprofile.AgentSetup, error) {
+	var (
+		agent BotAgent
+		err   error
+	)
+	if strings.TrimSpace(botAgentID) != "" {
+		agent, err = s.Get(ctx, botID, botAgentID)
+	} else {
+		agent, err = s.FindActiveByProvider(ctx, botID, provider)
+		if errors.Is(err, ErrNotFound) {
+			return acpprofile.ParseAgentSetup(botMetadata, provider), nil
+		}
+	}
+	if err != nil {
+		return acpprofile.AgentSetup{}, err
+	}
+	return acpprofile.ParseInstanceSetup(botMetadata, agent.Metadata, provider), nil
+}
+
+// WithACPSetup fills in the managed fields an ACP instance launches with when
+// it does not carry its own yet, so clients read one shape for every instance
+// and saving it back is what gives a legacy instance its own setup.
+func WithACPSetup(agent BotAgent, botMetadata map[string]any) BotAgent {
+	if agent.Runtime != RuntimeACP {
+		return agent
+	}
+	if _, owns := agent.Metadata[acpprofile.InstanceManagedKey]; owns {
+		return agent
+	}
+	provider, _ := agent.Metadata[MetadataProviderKey].(string)
+	profile, ok := acpprofile.Lookup(provider)
+	if !ok {
+		return agent
+	}
+	setup := acpprofile.ParseAgentSetup(botMetadata, provider)
+	managed := make(map[string]any, len(profile.ManagedFields))
+	for _, field := range profile.ManagedFields {
+		id := acpprofile.NormalizeAgentID(field.ID)
+		if value := setup.Managed[id]; value != "" {
+			managed[id] = value
+		}
+	}
+	metadata := make(map[string]any, len(agent.Metadata)+1)
+	for key, value := range agent.Metadata {
+		metadata[key] = value
+	}
+	metadata[acpprofile.InstanceManagedKey] = managed
+	agent.Metadata = metadata
+	return agent
 }
 
 func (s *Service) Update(ctx context.Context, botID, id string, req UpdateRequest) (BotAgent, error) {
@@ -391,9 +453,9 @@ func AcceptsCredential(agent BotAgent, authKind string) bool {
 	}
 }
 
-// ValidateConfigurationWithStore validates the shared per-provider bot
-// metadata without consulting the legacy metadata enabled flag.
-// BotAgent.Enabled is the availability source of truth.
+// ValidateConfigurationWithStore validates the instance's configuration
+// without consulting the legacy metadata enabled flag. BotAgent.Enabled is the
+// availability source of truth.
 func ValidateConfigurationWithStore(agent BotAgent, botMetadata map[string]any, credentialAuthKind string) error {
 	descriptor, err := DescriptorFor(agent)
 	if err != nil {
@@ -405,7 +467,7 @@ func ValidateConfigurationWithStore(agent BotAgent, botMetadata map[string]any, 
 		if !ok {
 			return ErrInvalidMetadata
 		}
-		setup := acpprofile.ParseAgentSetup(botMetadata, descriptor.Provider)
+		setup := acpprofile.ParseInstanceSetup(botMetadata, agent.Metadata, descriptor.Provider)
 		if field, missing := acpprofile.MissingRequiredManagedFieldForPreflight(profile, setup); missing {
 			return &ConfigurationError{Field: field.ID}
 		}
@@ -466,6 +528,17 @@ func normalizeDescriptor(runtime string, metadata map[string]any) (string, map[s
 			normalized[key] = value
 		}
 		normalized[MetadataProviderKey] = provider
+		if value, exists := normalized[acpprofile.InstanceManagedKey]; exists {
+			managed, ok := value.(map[string]any)
+			if !ok {
+				return "", nil, ErrInvalidMetadata
+			}
+			for _, field := range managed {
+				if _, ok := field.(string); !ok {
+					return "", nil, ErrInvalidMetadata
+				}
+			}
+		}
 		return runtime, normalized, nil
 	case RuntimeCodex, RuntimeClaudeCode:
 		if runtime == RuntimeClaudeCode {
