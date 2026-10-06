@@ -311,6 +311,15 @@ func (s *Service) Update(ctx context.Context, botID, id string, req UpdateReques
 		if err != nil {
 			return BotAgent{}, err
 		}
+		if current.Runtime == RuntimeACP {
+			// Metadata is replaced whole, so an update that omits the managed
+			// fields would hand the instance back to the bot's legacy slot.
+			if _, sent := metadata[acpprofile.InstanceManagedKey]; !sent {
+				if managed, owns := current.Metadata[acpprofile.InstanceManagedKey]; owns {
+					metadata[acpprofile.InstanceManagedKey] = managed
+				}
+			}
+		}
 	}
 	metadataJSON, err := json.Marshal(metadata)
 	if err != nil {

@@ -157,6 +157,42 @@ func TestCreateGivesNewACPInstanceItsOwnSetup(t *testing.T) {
 	}
 }
 
+func TestUpdateKeepsAnInstanceItsOwnSetup(t *testing.T) {
+	storedManaged := func(t *testing.T, current sqlc.BotAgent, sent map[string]any) (any, bool) {
+		t.Helper()
+		queries := &fakeQueries{getRow: current, updateRow: current, transactions: true}
+		if _, err := NewService(slog.Default(), queries).Update(
+			context.Background(), testBotID, testAgentID, UpdateRequest{Metadata: sent},
+		); err != nil {
+			t.Fatalf("Update() error = %v", err)
+		}
+		var stored map[string]any
+		if err := json.Unmarshal(queries.updateParams.Metadata, &stored); err != nil {
+			t.Fatalf("decode stored metadata: %v", err)
+		}
+		managed, owns := stored["managed"]
+		return managed, owns
+	}
+
+	owned := acpInstanceRow(t, testAgentID, map[string]any{"provider": "acp", "managed": map[string]any{"command": "grok-acp"}})
+	managed, owns := storedManaged(t, owned, map[string]any{"provider": "acp"})
+	if !owns || managed.(map[string]any)["command"] != "grok-acp" {
+		t.Fatalf("stored managed = %#v, want the instance to keep its own setup", managed)
+	}
+
+	managed, _ = storedManaged(t, owned, map[string]any{"provider": "acp", "managed": map[string]any{}})
+	if len(managed.(map[string]any)) != 0 {
+		t.Fatalf("stored managed = %#v, want the explicitly cleared setup", managed)
+	}
+
+	// Nothing to carry over: a legacy instance keeps reading the bot's slot
+	// until it saves a setup of its own.
+	legacy := acpInstanceRow(t, testAgentID, map[string]any{"provider": "acp"})
+	if _, owns := storedManaged(t, legacy, map[string]any{"provider": "acp"}); owns {
+		t.Fatal("a legacy instance must not gain an empty setup from an unrelated update")
+	}
+}
+
 func TestWithACPSetupShowsLegacyInstanceItsCurrentSetup(t *testing.T) {
 	botMetadata := legacyBotMetadata("hermes-acp")
 	legacy := BotAgent{Runtime: RuntimeACP, Metadata: map[string]any{"provider": "acp"}}
