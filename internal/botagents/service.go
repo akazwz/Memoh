@@ -205,6 +205,24 @@ func (s *Service) GetActive(ctx context.Context, botID, id string) (BotAgent, er
 	return agent, nil
 }
 
+// GetActiveACP admits new work on an ACP instance of provider. ResolveACPSetup
+// cannot do it: it also serves established sessions, which outlive their
+// Agent being disabled or deleted.
+func (s *Service) GetActiveACP(ctx context.Context, botID, id, provider string) (BotAgent, error) {
+	agent, err := s.GetActive(ctx, botID, id)
+	if err != nil {
+		return BotAgent{}, err
+	}
+	descriptor, err := DescriptorFor(agent)
+	if err != nil {
+		return BotAgent{}, err
+	}
+	if descriptor.Runtime != RuntimeACP || descriptor.Provider != acpprofile.NormalizeAgentID(provider) {
+		return BotAgent{}, ErrInvalidRuntime
+	}
+	return agent, nil
+}
+
 func (s *Service) FindActiveByProvider(ctx context.Context, botID, provider string) (BotAgent, error) {
 	pgBotID, err := db.ParseUUID(botID)
 	if err != nil {

@@ -126,6 +126,16 @@ func (h *ACPRuntimeHandler) CreateRuntime(c echo.Context) error {
 		return apperror.New(apperror.CodeACPRequestInvalid, nil)
 	}
 	botAgentID := strings.TrimSpace(req.BotAgentID)
+	if botAgentID != "" && h.botAgents != nil {
+		// Only a session created on this instance can bind the runtime, so the
+		// prewarm admits what session creation admits.
+		if _, err := h.botAgents.GetActiveACP(c.Request().Context(), bot.ID, botAgentID, agentID); err != nil {
+			if publicErr := botAgentHTTPError(err); publicErr != nil {
+				return publicErr
+			}
+			return acpRuntimeHTTPError(err)
+		}
+	}
 	if err := acpAgentSetupError(c.Request().Context(), h.botAgents, bot, botAgentID, agentID); err != nil {
 		return acpRuntimeHTTPError(err)
 	}
