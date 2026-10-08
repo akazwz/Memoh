@@ -1311,7 +1311,7 @@ import { onAuthSessionCleared } from '@/lib/auth-session'
 import { useACPRuntime } from '@/composables/useACPRuntime'
 import { useAgentModelCatalog } from '@/composables/useAgentModelCatalog'
 import { useVirtualKeyboard } from '@/composables/useVirtualKeyboard'
-import { findMissingRequiredManagedField, readACPAgentConfig } from '@/utils/acp'
+import { isACPAgentConfigured } from '@/utils/acp'
 import { BOT_AGENT_RUNTIME_ACP, BOT_AGENT_RUNTIME_CLAUDE_CODE, BOT_AGENT_RUNTIME_CODEX, botAgentIcon, botAgentName, botAgentProvider, isDirectBotAgentConfigured, normalizeBotAgentRuntime } from '@/utils/bot-agent'
 import { UserFacingError, isApiErrorCode, parseMemohError, resolveApiErrorMessage } from '@/utils/api-error'
 import { hasBotPermission } from '@/utils/bot-permissions'
@@ -1689,7 +1689,6 @@ interface ForkSourceMeta {
 }
 
 const acpProfiles = computed<AcpprofilePublicProfile[]>(() => acpProfileData.value?.items ?? [])
-const currentBotMetadata = computed(() => currentBot.value?.metadata as Record<string, unknown> | undefined)
 const botAgents = computed<BotagentsBotAgent[]>(() => botAgentData.value?.items ?? [])
 const enabledBotAgents = computed(() => botAgents.value.filter(agent => agent.enabled !== false && !!agent.id))
 
@@ -2809,8 +2808,7 @@ const defaultExternalAgentAvailability = computed<DefaultExternalAgentAvailabili
     }
     const profile = acpProfiles.value.find(item => normalizeAgentID(item.id) === agentId)
     if (!profile) return { input: null, messageKey: 'chat.defaultAgentUnavailable', loading: false }
-    const config = readACPAgentConfig(currentBotMetadata.value, agentId)
-    if (config.setupModeSet && findMissingRequiredManagedField(profile, config.managed, config.setupMode)) {
+    if (!isACPAgentConfigured(agent, profile)) {
       return { input: null, messageKey: 'chat.defaultAgentNotConfigured', loading: false }
     }
   }

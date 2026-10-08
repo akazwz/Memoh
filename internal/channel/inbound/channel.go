@@ -4667,7 +4667,10 @@ func (p *ChannelInboundProcessor) validateACPNewSessionSpec(ctx context.Context,
 	if err != nil {
 		return err
 	}
-	setup := p.acpProfiles.ResolveACPSetupPreflight(profile.ID, metadata)
+	setup, err := p.acpProfiles.ResolveACPSetupPreflight(ctx, identity.BotID, spec.BotAgentID, profile.ID, metadata)
+	if err != nil {
+		return err
+	}
 	if strings.TrimSpace(spec.BotAgentID) == "" && !setup.Enabled {
 		return apperror.New(apperror.CodeACPAgentNotEnabled, nil)
 	}

@@ -43,7 +43,7 @@ func (testACPProfiles) ResolveACPProfile(agentID string) turn.ACPAgentProfile {
 	}
 }
 
-func (testACPProfiles) ResolveACPSetupPreflight(agentID string, metadata map[string]any) turn.ACPSetupPreflight {
+func (testACPProfiles) ResolveACPSetupPreflight(_ context.Context, _, _, agentID string, metadata map[string]any) (turn.ACPSetupPreflight, error) {
 	acp, _ := metadata["acp"].(map[string]any)
 	agents, _ := acp["agents"].(map[string]any)
 	config, _ := agents[strings.ToLower(strings.TrimSpace(agentID))].(map[string]any)
@@ -52,13 +52,13 @@ func (testACPProfiles) ResolveACPSetupPreflight(agentID string, metadata map[str
 	mode, modeSet := config["setup_mode"].(string)
 	mode = strings.ToLower(strings.TrimSpace(mode))
 	if !modeSet || mode == "" || mode == "self" {
-		return result
+		return result, nil
 	}
 	managed, _ := config["managed"].(map[string]any)
 	if value, _ := managed["api_key"].(string); strings.TrimSpace(value) == "" {
 		result.MissingManagedField = &turn.ACPManagedField{ID: "api_key", Label: "API key"}
 	}
-	return result
+	return result, nil
 }
 
 func resolveNewSessionTypeForTest(t *testing.T, text string, msg channel.InboundMessage) (string, error) {

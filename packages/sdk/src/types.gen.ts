@@ -2884,6 +2884,11 @@ export type HandlersWorkspaceDependencyTranslation = {
 
 export type HandlersAcpRuntimeCreateRequest = {
     acp_agent_id?: string;
+    /**
+     * BotAgentID names the Agent instance whose setup launches the runtime;
+     * only a session bound to the same instance can later adopt it.
+     */
+    bot_agent_id?: string;
     project_path?: string;
 };
 

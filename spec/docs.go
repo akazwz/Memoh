@@ -24368,6 +24368,10 @@ const docTemplate = `{
                 "acp_agent_id": {
                     "type": "string"
                 },
+                "bot_agent_id": {
+                    "description": "BotAgentID names the Agent instance whose setup launches the runtime;\nonly a session bound to the same instance can later adopt it.",
+                    "type": "string"
+                },
                 "project_path": {
                     "type": "string"
                 }

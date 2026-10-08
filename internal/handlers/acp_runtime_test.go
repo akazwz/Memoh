@@ -6,10 +6,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/labstack/echo/v4"
@@ -18,6 +20,7 @@ import (
 	acpclient "github.com/felinics/memoh/internal/agent/runtime/acp/client"
 	acpprofile "github.com/felinics/memoh/internal/agent/runtime/acp/profile"
 	"github.com/felinics/memoh/internal/apperror"
+	"github.com/felinics/memoh/internal/botagents"
 	"github.com/felinics/memoh/internal/bots"
 	session "github.com/felinics/memoh/internal/chat/thread"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
@@ -1205,5 +1208,94 @@ func testBotRow(botID string, metadata map[string]any) sqlc.GetBotByIDRow {
 		Metadata:  testJSON(metadata),
 		CreatedAt: pgtype.Timestamptz{Valid: true},
 		UpdatedAt: pgtype.Timestamptz{Valid: true},
+	}
+}
+
+type acpRuntimeInstanceQueries struct {
+	acpRuntimeQueries
+	agent sqlc.BotAgent
+}
+
+func (q acpRuntimeInstanceQueries) GetBotAgentByID(context.Context, sqlc.GetBotAgentByIDParams) (sqlc.BotAgent, error) {
+	return q.agent, nil
+}
+
+func TestACPRuntimeHandlerCreateRuntimeAdmitsOnlyActiveACPInstances(t *testing.T) {
+	t.Setenv("MEMOH_ACP_MCP_HTTP_BASE_URL", "http://example.com")
+
+	const (
+		botID      = "11111111-1111-1111-1111-111111111111"
+		botAgentID = "22222222-2222-2222-2222-222222222222"
+	)
+	instance := func(mutate func(*sqlc.BotAgent)) sqlc.BotAgent {
+		row := sqlc.BotAgent{
+			ID:       pgtype.UUID{Valid: true, Bytes: [16]byte{0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22}},
+			BotID:    pgtype.UUID{Valid: true, Bytes: [16]byte{0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11}},
+			Runtime:  botagents.RuntimeACP,
+			Enabled:  true,
+			Metadata: []byte(`{"provider":"acp","managed":{"command":"grok-acp"}}`),
+		}
+		if mutate != nil {
+			mutate(&row)
+		}
+		return row
+	}
+	tests := []struct {
+		name     string
+		agent    sqlc.BotAgent
+		wantCode apperror.Code
+	}{
+		{name: "active", agent: instance(nil)},
+		{name: "disabled", agent: instance(func(row *sqlc.BotAgent) { row.Enabled = false }), wantCode: apperror.CodeBotAgentUnavailable},
+		{name: "deleted", agent: instance(func(row *sqlc.BotAgent) {
+			row.DeletedAt = pgtype.Timestamptz{Time: time.Unix(1_700_000_000, 0), Valid: true}
+		}), wantCode: apperror.CodeBotAgentUnavailable},
+		{name: "another runtime", agent: instance(func(row *sqlc.BotAgent) {
+			row.Runtime = botagents.RuntimeCodex
+			row.Metadata = []byte(`{"provider":"codex","managed":{"command":"grok-acp"}}`)
+		}), wantCode: apperror.CodeBotAgentInvalidRuntime},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			queries := acpRuntimeInstanceQueries{
+				acpRuntimeQueries: acpRuntimeQueries{bot: testBotRow(botID, map[string]any{})},
+				agent:             tc.agent,
+			}
+			pool := &fakeACPRuntimePool{}
+			handler := newACPRuntimeHandler(
+				pool,
+				session.NewService(nil, queries, nil),
+				bots.NewService(nil, queries),
+				newTestAdminAccountService("admin"),
+			)
+			handler.SetBotAgents(botagents.NewService(slog.Default(), queries))
+
+			e := echo.New()
+			req := httptest.NewRequest(
+				http.MethodPost,
+				"/bots/"+botID+"/acp-runtimes",
+				bytes.NewBufferString(`{"acp_agent_id":"acp","bot_agent_id":"`+botAgentID+`"}`),
+			)
+			req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+			rec := httptest.NewRecorder()
+			ctx := testAuthContext(e, req, rec, "user-1")
+			ctx.SetPath("/bots/:bot_id/acp-runtimes")
+			ctx.SetParamNames("bot_id")
+			ctx.SetParamValues(botID)
+
+			err := handler.CreateRuntime(ctx)
+			if tc.wantCode == "" {
+				if err != nil || pool.createInput.BotAgentID != botAgentID {
+					t.Fatalf("CreateRuntime() error = %v, input = %#v, want the instance's runtime", err, pool.createInput)
+				}
+				return
+			}
+			if apperror.CodeOf(err) != tc.wantCode {
+				t.Fatalf("CreateRuntime() error = %v, want %s", err, tc.wantCode)
+			}
+			if pool.createInput.BotID != "" {
+				t.Fatalf("pool should not start a runtime for this instance: %#v", pool.createInput)
+			}
+		})
 	}
 }

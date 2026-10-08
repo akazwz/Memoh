@@ -308,7 +308,7 @@ func (h *SessionHandler) CreateSession(c echo.Context) error {
 		req.Metadata = session.ApplyACPMetadataDefaults(mergeSessionMetadata(req.Metadata, req.RuntimeMetadata))
 		req.RuntimeMetadata = session.ApplyACPMetadataDefaults(mergeSessionMetadata(req.RuntimeMetadata, req.Metadata))
 		if botAgentID == "" {
-			if err := validateACPCreate(bot, req.Metadata); err != nil {
+			if err := h.validateACPCreate(c.Request().Context(), bot, req.Metadata); err != nil {
 				return err
 			}
 		} else if sessionMetadataString(req.Metadata, "project_path") == "" {
@@ -988,7 +988,7 @@ func (h *SessionHandler) UpdateSession(c echo.Context) error {
 		switch {
 		case targetRuntime == session.RuntimeACPAgent:
 			if targetBotAgentID == "" {
-				if err := validateACPCreate(bot, targetMetadata); err != nil {
+				if err := h.validateACPCreate(c.Request().Context(), bot, targetMetadata); err != nil {
 					return err
 				}
 			}
@@ -1291,7 +1291,9 @@ func (h *SessionHandler) resolveCreateSessionWorkdir(ctx context.Context, botID,
 	return &bound, nil
 }
 
-func validateACPCreate(bot bots.Bot, metadata map[string]any) error {
+// validateACPCreate checks a session that names only the ACP provider, with
+// no Agent instance bound.
+func (h *SessionHandler) validateACPCreate(ctx context.Context, bot bots.Bot, metadata map[string]any) error {
 	agentID := sessionMetadataString(metadata, "acp_agent_id")
 	if agentID == "" {
 		return echo.NewHTTPError(http.StatusBadRequest, session.ErrACPAgentIDRequired.Error())
@@ -1299,7 +1301,7 @@ func validateACPCreate(bot bots.Bot, metadata map[string]any) error {
 	if sessionMetadataString(metadata, "project_path") == "" {
 		return echo.NewHTTPError(http.StatusBadRequest, session.ErrACPProjectPathMissing.Error())
 	}
-	if err := acpAgentSetupError(bot.Metadata, agentID); err != nil {
+	if err := acpAgentSetupError(ctx, h.botAgents, bot, "", agentID); err != nil {
 		return err
 	}
 	return nil

@@ -26,6 +26,7 @@ import (
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
 	"github.com/felinics/memoh/internal/agent/turn"
 	audiopkg "github.com/felinics/memoh/internal/audio"
+	"github.com/felinics/memoh/internal/botagents"
 	"github.com/felinics/memoh/internal/bots"
 	"github.com/felinics/memoh/internal/channel"
 	"github.com/felinics/memoh/internal/channel/adapters/dingtalk"
@@ -209,6 +210,7 @@ func provideChannelRouter(
 	cmdHandler inbound.CommandHandler,
 	queueHandler inbound.QueueCommandHandler,
 	skillResolver inbound.RequestedSkillResolver,
+	queries dbstore.Queries,
 ) *inbound.ChannelInboundProcessor {
 	adapter, ok := registry.Get(qq.Type)
 	if !ok {
@@ -238,7 +240,10 @@ func provideChannelRouter(
 	processor.SetIMDisplayOptions(&settingsIMDisplayOptions{settings: settingsService})
 	processor.SetDefaultChatRuntime(&settingsDefaultChatRuntime{settings: settingsService})
 	processor.SetACPAgentSetupReader(&botACPAgentSetupReader{bots: botService})
-	processor.SetACPProfileResolver(acpprofileadapter.NewCatalog())
+	// The standalone Channel process has no Server-owned Agent service; setup
+	// resolution only reads Agent rows, so a local instance over the shared
+	// queries is enough.
+	processor.SetACPProfileResolver(acpprofileadapter.NewCatalog(botagents.NewService(log, queries)))
 	processor.SetBotPermissionChecker(&botPermissionCheckerAdapter{bots: botService, accounts: accountService})
 	processor.SetCommandHandler(cmdHandler)
 	processor.SetQueueCommandHandler(queueHandler)
