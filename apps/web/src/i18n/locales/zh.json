@@ -684,25 +684,80 @@
     },
     "keyboard": {
       "title": "快捷键",
-      "intro": "点击任意一行右侧的「编辑」，然后按下新的组合键。Cmd/Ctrl + W、Q、T、N 为浏览器和系统保留，不可绑定。",
+      "intro": "点击任意一行右侧的「编辑」，然后按下新的组合键。Cmd/Ctrl + W、Q、T、N 为浏览器和系统保留，不可绑定。工作区默认快捷键在 macOS 上使用 ⌘⌥，按美式键盘的按键位置识别；在 Windows 和 Linux 上使用 Alt+Shift。如果你用 Alt+Shift 切换输入法，请在这里改用其他组合。",
       "resetAll": "全部重置",
       "scopes": {
+        "workspace": "工作区",
         "global": "全局",
         "mediaLightbox": "媒体灯箱"
       },
       "row": {
-        "reset": "恢复默认"
+        "reset": "恢复默认",
+        "ignored": "已保存的 {combo} 在这里不可用，已改用默认快捷键。",
+        "shadowed": "{combo} 已分配给“{command}”，这条快捷键暂不生效，请另选组合。"
       },
       "dialog": {
         "title": "修改快捷键",
         "prompt": "请按下新的组合键…",
         "resetDefault": "恢复默认",
-        "reservedError": "该组合键已被浏览器或操作系统占用。",
-        "noModifierError": "全局快捷键必须包含 Cmd/Ctrl 或 Alt 修饰键，否则会在普通输入时被触发。",
-        "sameScopeError": "已被 {command} 占用。",
+        "reservedError": "该组合键已被浏览器、操作系统或应用菜单占用。",
+        "editingError": "该组合键用于文本编辑（复制、粘贴、撤销等）。",
+        "menuPauseFailed": "无法暂停应用菜单快捷键，录制时它们仍可能被触发。",
+        "menuRestoreFailed": "无法恢复应用菜单快捷键，如果它们不再响应，请重新加载窗口。",
+        "noModifierError": "该快捷键必须包含 Cmd/Ctrl 或 Alt 修饰键，否则会在普通输入时被触发。",
+        "typingError": "在 macOS 上，Option 加字母或符号会输入字符，请加上 Command。",
+        "sameScopeError": "这个组合已用于“{command}”。",
         "crossScopeWarn": "也被 {command} 使用（仅在其作用域内生效）。"
       },
       "commands": {
+        "newChatSession": {
+          "label": "新建会话",
+          "description": "在当前分组打开或聚焦一个新会话。"
+        },
+        "focusChatInput": {
+          "label": "聚焦聊天输入",
+          "description": "切换到聊天面板并聚焦消息输入框。"
+        },
+        "showSessions": {
+          "label": "显示对话",
+          "description": "打开对话侧栏和会话列表。"
+        },
+        "showFiles": {
+          "label": "显示文件",
+          "description": "打开工作区文件侧栏。"
+        },
+        "showSchedule": {
+          "label": "显示日程",
+          "description": "打开日程侧栏。"
+        },
+        "showSupermarket": {
+          "label": "显示市场",
+          "description": "打开市场侧栏。"
+        },
+        "nextWorkspaceTab": {
+          "label": "下一个标签",
+          "description": "聚焦当前分组的下一个标签。"
+        },
+        "previousWorkspaceTab": {
+          "label": "上一个标签",
+          "description": "聚焦当前分组的上一个标签。"
+        },
+        "splitWorkspaceRight": {
+          "label": "向右分屏",
+          "description": "在当前面板右侧创建分屏。"
+        },
+        "splitWorkspaceBelow": {
+          "label": "向下分屏",
+          "description": "在当前面板下方创建分屏。"
+        },
+        "newTerminal": {
+          "label": "新建终端",
+          "description": "在当前分组打开终端。"
+        },
+        "newBrowser": {
+          "label": "新建浏览器",
+          "description": "在当前分组打开工作区浏览器。"
+        },
         "closeCurrentWorkspaceTab": {
           "label": "关闭当前工作区标签页",
           "description": "关闭工作区面板内激活的标签页（退回到系统的关闭行为）。"
