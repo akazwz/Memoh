@@ -303,6 +303,9 @@
     "history": {
       "delete_failed": "The conversation history could not be deleted. Please try again."
     },
+    "hook": {
+      "user_message_failed": "The message could not be accepted by the message hook. Check the Hook configuration and try again."
+    },
     "context_lifecycle": {
       "request_invalid": "The context lifecycle request is invalid.",
       "authentication_required": "Sign in to view context lifecycle diagnostics.",

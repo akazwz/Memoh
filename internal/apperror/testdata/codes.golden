@@ -77,6 +77,7 @@ external_runtime.auth_required	409
 external_runtime.session_resume_failed	502
 external_runtime.unavailable	503
 history.delete_failed	500
+hook.user_message_failed	400
 native_history_lost	503
 profile.request_invalid	400
 profile.title_model_invalid	400

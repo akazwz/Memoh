@@ -303,6 +303,9 @@
     "history": {
       "delete_failed": "会话历史删除失败，请重试。"
     },
+    "hook": {
+      "user_message_failed": "消息未能通过消息 Hook，请检查 Hook 配置后重试。"
+    },
     "context_lifecycle": {
       "request_invalid": "上下文生命周期请求无效，请检查后重试。",
       "authentication_required": "请登录后查看上下文生命周期诊断信息。",

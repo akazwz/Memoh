@@ -300,6 +300,9 @@
     "history": {
       "delete_failed": "会話履歴を削除できませんでした。もう一度お試しください。"
     },
+    "hook": {
+      "user_message_failed": "メッセージ Hook で受け付けられませんでした。Hook の設定を確認して、もう一度お試しください。"
+    },
     "context_lifecycle": {
       "request_invalid": "コンテキストライフサイクルのリクエストが無効です。内容を確認してもう一度お試しください。",
       "authentication_required": "コンテキストライフサイクルの診断情報を表示するにはサインインしてください。",

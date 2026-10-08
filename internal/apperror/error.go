@@ -131,6 +131,7 @@ const (
 	CodeSessionResetUnavailable                  Code = "session_runtime.reset_unavailable"
 	CodeSessionResetConflict                     Code = "session_runtime.reset_conflict"
 	CodeHistoryDeleteFailed                      Code = "history.delete_failed"
+	CodeHookUserMessageFailed                    Code = "hook.user_message_failed"
 	CodeSessionPublishFailed                     Code = "session_runtime.publish_failed"
 	CodeSessionAbortFailed                       Code = "session_runtime.abort_failed"
 	CodeAgentResponseTimeout                     Code = "agent.response_timeout"
@@ -785,6 +786,13 @@ var catalog = map[Code]Definition{
 	CodeSessionHistoryInconsistent: {
 		HTTPStatus: http.StatusInternalServerError,
 		Detail:     "The conversation could not be saved. Refresh and try again.",
+	},
+	// The user-message hook failed before the input was accepted by the agent.
+	// The underlying hook/configuration error remains private; the stable code
+	// lets the client preserve the failed input and retry through the hook.
+	CodeHookUserMessageFailed: {
+		HTTPStatus: http.StatusBadRequest,
+		Detail:     "The message could not be accepted by the message hook. Check the Hook configuration and try again.",
 	},
 	// The client named a turn that is no longer the latest visible turn (or
 	// was never persisted). Reloading the conversation resolves it.

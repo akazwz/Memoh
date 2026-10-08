@@ -88,6 +88,54 @@ func wsFailureCode(req ChatRequest, outcome *outcomeRecorder) apperror.Code {
 	return code
 }
 
+func classifyUserMessageHookError(err error) error {
+	if err == nil || apperror.CodeOf(err) == apperror.CodeHookUserMessageFailed {
+		return err
+	}
+	return apperror.Wrap(apperror.CodeHookUserMessageFailed, err, nil)
+}
+
+// persistPreflightFailureTurn gives an admitted Web send a durable target even
+// when the user-message hook rejects it before resolve() can create a runtime
+// context. The user row is visible for the UI, while both rows carry the
+// origin marker so normal model history can exclude the rejected input.
+func (s *Service) persistPreflightFailureTurn(ctx context.Context, req ChatRequest, code apperror.Code) error {
+	if code == "" || s == nil || s.messageService == nil || req.SkipHistoryTurn ||
+		req.UserMessagePersisted || req.ReusePersistedUserMessage ||
+		strings.TrimSpace(req.TurnID) == "" || req.TurnPosition == nil {
+		return nil
+	}
+	if strings.TrimSpace(req.Query) == "" && req.UserMessageKind != UserMessageKindSkillActivation {
+		return nil
+	}
+
+	output := []ModelMessage{{
+		Role:    "assistant",
+		Content: newTextContent(""),
+	}}
+	round := prependTurnUserMessage(req, output)
+	if len(round) != 2 {
+		return nil
+	}
+	userMetadata := map[string]any{
+		messagepkg.HistoryFailureOriginMetadataKey: messagepkg.HistoryFailureOriginUserMessageHook,
+	}
+	assistantMetadata := map[string]any{
+		messagepkg.AgentStepInterruptedMetadataKey: true,
+		messagepkg.HistoryErrorCodeMetadataKey:     string(code),
+		messagepkg.HistoryFailureOriginMetadataKey: messagepkg.HistoryFailureOriginUserMessageHook,
+	}
+	_, err := s.storeRoundWithOptionsResult(context.WithoutCancel(ctx), req, round, "", storeRoundOptions{
+		AllowEmptyAssistantText: true,
+		MessageMetadataByIndex: map[int]map[string]any{
+			0: userMetadata,
+			1: assistantMetadata,
+		},
+		RequireCompletePersist: true,
+	})
+	return err
+}
+
 func shouldForwardAfterIdleFailure(event native.StreamEvent, failureEventForwarded bool) bool {
 	if !failureEventForwarded {
 		return true
@@ -622,6 +670,20 @@ func (s *Service) streamChatWSResultWithHooks(
 	if !req.UserMessagePersisted && !req.ReusePersistedUserMessage {
 		req, err = s.applyUserMessageHook(ctx, req)
 		if err != nil {
+			// A caller abort or request deadline is not a Hook rejection. Let the
+			// normal cancellation/timeout path classify it instead of creating a
+			// failed user turn that the user never intentionally submitted.
+			if ctx.Err() != nil {
+				return nil, RunOutcome{}, err
+			}
+			err = classifyUserMessageHookError(err)
+			if persistErr := s.persistPreflightFailureTurn(ctx, req, apperror.CodeOf(err)); persistErr != nil && s.logger != nil {
+				// Keep the Hook error as the run's public outcome. The persistence
+				// failure is private and is logged here; replacing the
+				// actionable Hook code with a generic save error would hide the
+				// reason the input was rejected.
+				s.logger.ErrorContext(ctx, "persist preflight failure turn failed", slog.Any("error", persistErr))
+			}
 			return nil, RunOutcome{}, err
 		}
 	}
