@@ -2164,6 +2164,7 @@ export type HandlersGetContainerResponse = {
     image?: string;
     legacy?: boolean;
     namespace?: string;
+    removal?: HandlersWorkspaceRemovalResponse;
     runtime_backend?: string;
     status?: string;
     task_running?: boolean;
@@ -2887,6 +2888,12 @@ export type HandlersWorkspaceDependencyStreamEvent = {
 export type HandlersWorkspaceDependencyTranslation = {
     description?: string;
     name?: string;
+};
+
+export type HandlersWorkspaceRemovalResponse = {
+    preserve_data?: boolean;
+    state?: 'removing' | 'failed';
+    updated_at?: string;
 };
 
 export type HandlersAcpRuntimeCreateRequest = {
@@ -7256,9 +7263,9 @@ export type DeleteBotsByBotIdContainerError = DeleteBotsByBotIdContainerErrors[k
 
 export type DeleteBotsByBotIdContainerResponses = {
     /**
-     * No Content
+     * Accepted
      */
-    204: unknown;
+    202: unknown;
 };
 
 export type GetBotsByBotIdContainerData = {
@@ -8249,6 +8256,34 @@ export type PutBotsByBotIdContainerMetricsResponses = {
 };
 
 export type PutBotsByBotIdContainerMetricsResponse = PutBotsByBotIdContainerMetricsResponses[keyof PutBotsByBotIdContainerMetricsResponses];
+
+export type PostBotsByBotIdContainerRemovalCancelData = {
+    body?: never;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+    };
+    query?: never;
+    url: '/bots/{bot_id}/container/removal/cancel';
+};
+
+export type PostBotsByBotIdContainerRemovalCancelErrors = {
+    /**
+     * Internal Server Error
+     */
+    500: ServerProblem;
+};
+
+export type PostBotsByBotIdContainerRemovalCancelError = PostBotsByBotIdContainerRemovalCancelErrors[keyof PostBotsByBotIdContainerRemovalCancelErrors];
+
+export type PostBotsByBotIdContainerRemovalCancelResponses = {
+    /**
+     * No Content
+     */
+    204: unknown;
+};
 
 export type DeleteBotsByBotIdContainerSkillsData = {
     /**
