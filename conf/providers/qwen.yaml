@@ -177,6 +177,8 @@ models:
     config:
       compatibilities: [vision, tool-call, reasoning]
       context_window: 262144
+      thinking_mode: toggle
+      reasoning_efforts: [low, medium, high]
 
   - model_id: qwen3.5-27b
     name: Qwen3.5-27B
@@ -184,6 +186,8 @@ models:
     config:
       compatibilities: [vision, tool-call, reasoning]
       context_window: 262144
+      thinking_mode: toggle
+      reasoning_efforts: [low, medium, high]
 
   - model_id: qwen3.5-35b-a3b
     name: Qwen3.5-35B-A3B
@@ -191,6 +195,8 @@ models:
     config:
       compatibilities: [vision, tool-call, reasoning]
       context_window: 262144
+      thinking_mode: toggle
+      reasoning_efforts: [low, medium, high]
 
   - model_id: qwen3-235b-a22b-thinking-2507
     name: Qwen3 235B A22B Thinking 2507
